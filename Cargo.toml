@@ -1,0 +1,40 @@
+[package]
+name = "bevy_simple_text_input"
+version = "0.11.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Bevy plugin for a simple single-line text input widget."
+repository = "https://github.com/rparrett/bevy_simple_text_input"
+homepage = "https://github.com/rparrett/bevy_simple_text_input"
+documentation = "https://docs.rs/bevy_simple_text_input"
+keywords = ["bevy", "gamedev"]
+categories = ["game-development"]
+readme = "README.md"
+exclude = [".github"]
+
+[features]
+default = ["std", "clipboard"]
+std = ["bevy/std"]
+libm = ["bevy/libm"]
+clipboard = ["dep:copypwasmta", "dep:futures-lite"]
+
+[dependencies]
+once_cell = "1.19.0"
+copypwasmta = { git = "https://github.com/robtfm/copypwasmta", optional = true }
+futures-lite = { version = "2", optional = true }
+
+[dependencies.bevy]
+version = "0.16.0"
+default-features = false
+features = ["bevy_ui", "bevy_asset", "bevy_text", "bevy_window", "bevy_log"]
+
+[dev-dependencies.bevy]
+version = "0.16.0"
+default-features = true
+
+[lints.rust]
+warnings = { level = "allow", priority = -1 }
+missing_docs = "warn"
+
+[lints.clippy]
+type_complexity = "allow"
