@@ -1,0 +1,81 @@
+[package]
+name = "bevy_atmosphere"
+description = "A procedural sky plugin for bevy"
+version = "0.13.0"
+edition = "2021"
+authors = ["JonahPlusPlus <33059163+JonahPlusPlus@users.noreply.github.com>"]
+license = "MIT OR Apache-2.0"
+documentation = "https://docs.rs/bevy_atmosphere"
+homepage = "https://github.com/JonahPlusPlus/bevy_atmosphere"
+repository = "https://github.com/JonahPlusPlus/bevy_atmosphere"
+include = ["/src", "/examples/*.rs", "/LICENSE*"]
+
+[dependencies]
+bevy = { version = "0.16", default-features = false, features = [
+  "bevy_asset",
+  "bevy_render",
+  "bevy_pbr",
+  "bevy_log",
+  "png",         # Enable temporary due to 0.15 bug: https://github.com/bevyengine/bevy/issues/16563
+] }
+bevy_atmosphere_macros = { path = "macros", version = "0.8" }
+cfg-if = "1.0"
+
+[dev-dependencies]
+bevy_spectator = "0.8"
+bevy = { version = "0.16", features = ["bevy_core_pipeline", "x11"] }
+
+[features]
+default = ["basic", "all_models"]
+basic = ["detection", "dithering", "procedural"] # enables basic features
+detection = []                                   # enables camera detection (disable to add skyboxes manually)
+dithering = []                                   # enables dithering (disable for banding)
+# enables the automatic addition of `AtmospherePipelinePlugin` from `AtmospherePlugin` (disable to edit the sky texture manually)
+procedural = []
+# models
+all_models = ["gradient", "nishita"] # enables all models
+gradient = []                        # enables the gradient model
+nishita = []                         # enables the nishita model
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+required-features = ["default"]
+
+[[example]]
+name = "cycle"
+path = "examples/cycle.rs"
+required-features = ["default"]
+
+[[example]]
+name = "detection"
+path = "examples/detection.rs"
+required-features = ["default"]
+
+[[example]]
+name = "gradient"
+path = "examples/gradient.rs"
+required-features = ["default"]
+
+[[example]]
+name = "models"
+path = "examples/models.rs"
+required-features = ["default"]
+
+[[example]]
+name = "nishita"
+path = "examples/nishita.rs"
+required-features = ["default"]
+
+[[example]]
+name = "settings"
+path = "examples/settings.rs"
+required-features = ["default"]
+
+[[example]]
+name = "splitscreen"
+path = "examples/splitscreen.rs"
+required-features = ["default"]
+
+[lints.rust]
+warnings = "allow"
