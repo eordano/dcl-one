@@ -1,0 +1,33 @@
+[workspace]
+members = [
+    "crates/parry2d",
+    "crates/parry3d",
+    "crates/parry2d-f64",
+    "crates/parry3d-f64",
+]
+resolver = "2"
+
+[workspace.lints]
+rust.warnings = { level = "allow", priority = -1 }
+rust.unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("dim2", "dim3", "f32", "f64"))',
+    # "wavefront" is only used for 3D crates.
+    'cfg(feature, values("wavefront"))',
+    # "encase" is only used in f32 crates.
+    'cfg(feature, values("encase"))'
+] }
+
+[workspace.lints.clippy]
+alloc_instead_of_core = "warn"
+std_instead_of_alloc = "warn"
+std_instead_of_core = "warn"
+
+[patch.crates-io]
+parry2d = { path = "crates/parry2d" }
+parry3d = { path = "crates/parry3d" }
+parry2d-f64 = { path = "crates/parry2d-f64" }
+parry3d-f64 = { path = "crates/parry3d-f64" }
+
+#simba = { path = "../simba" }
+#simba = { git = "https://github.com/dimforge/simba", rev = "45a5266eb36ed9d25907e9bf9130cd4ac846a748" }
+#nalgebra = { git = "https://github.com/dimforge/nalgebra", rev = "0cf79aef0e6155befc3279a3145f1940822b8377" }
