@@ -1,0 +1,582 @@
+// Copyright 2023 LiveKit, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package auth
+
+import (
+	"reflect"
+	"strconv"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/livekit/protocol/livekit"
+)
+
+func TestGrants(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clone default grant", func(t *testing.T) {
+		grants := &ClaimGrants{}
+		clone := grants.Clone()
+		require.NotSame(t, grants, clone)
+		require.Same(t, grants.Video, clone.Video)
+		require.Same(t, grants.Agent, clone.Agent)
+		require.Same(t, grants.Inference, clone.Inference)
+		require.Same(t, grants.SIP, clone.SIP)
+		require.Same(t, grants.AgentEndpoint, clone.AgentEndpoint)
+		require.Same(t, grants.AgentThread, clone.AgentThread)
+		require.True(t, reflect.DeepEqual(grants, clone))
+		require.True(t, reflect.DeepEqual(grants.Video, clone.Video))
+	})
+
+	t.Run("clone nil video", func(t *testing.T) {
+		grants := &ClaimGrants{
+			Identity: "identity",
+			Name:     "name",
+			Sha256:   "sha256",
+			Metadata: "metadata",
+		}
+		clone := grants.Clone()
+		require.NotSame(t, grants, clone)
+		require.Same(t, grants.Video, clone.Video)
+		require.True(t, reflect.DeepEqual(grants, clone))
+		require.True(t, reflect.DeepEqual(grants.Video, clone.Video))
+
+		// require SIP
+		require.Same(t, grants.SIP, clone.SIP)
+		require.True(t, reflect.DeepEqual(grants.SIP, clone.SIP))
+		// require Agent
+		require.Same(t, grants.Agent, clone.Agent)
+		require.True(t, reflect.DeepEqual(grants.Agent, clone.Agent))
+		// require Inference
+		require.Same(t, grants.Inference, clone.Inference)
+		require.True(t, reflect.DeepEqual(grants.Inference, clone.Inference))
+		// require AgentEndpoint
+		require.Same(t, grants.AgentEndpoint, clone.AgentEndpoint)
+		require.True(t, reflect.DeepEqual(grants.AgentEndpoint, clone.AgentEndpoint))
+		// require AgentThread
+		require.Same(t, grants.AgentThread, clone.AgentThread)
+		require.True(t, reflect.DeepEqual(grants.AgentThread, clone.AgentThread))
+	})
+
+	t.Run("clone with video", func(t *testing.T) {
+		tr := true
+		fa := false
+		video := &VideoGrant{
+			RoomCreate:          true,
+			RoomList:            false,
+			RoomRecord:          true,
+			RoomAdmin:           false,
+			RoomJoin:            true,
+			Room:                "room",
+			CanPublish:          &tr,
+			CanSubscribe:        &fa,
+			CanPublishData:      nil,
+			Hidden:              true,
+			Recorder:            false,
+			CanSubscribeMetrics: &tr,
+		}
+		grants := &ClaimGrants{
+			Identity: "identity",
+			Name:     "name",
+			Kind:     "kind",
+			Video:    video,
+			Sha256:   "sha256",
+			Metadata: "metadata",
+		}
+		clone := grants.Clone()
+		require.NotSame(t, grants, clone)
+		require.NotSame(t, grants.Video, clone.Video)
+		require.NotSame(t, grants.Video.CanPublish, clone.Video.CanPublish)
+		require.NotSame(t, grants.Video.CanSubscribe, clone.Video.CanSubscribe)
+		require.Same(t, grants.Video.CanPublishData, clone.Video.CanPublishData)
+		require.True(t, reflect.DeepEqual(grants, clone))
+		require.True(t, reflect.DeepEqual(grants.Video, clone.Video))
+	})
+
+	t.Run("clone with SIP", func(t *testing.T) {
+		sip := &SIPGrant{
+			Admin: true,
+		}
+		grants := &ClaimGrants{
+			Identity: "identity",
+			Name:     "name",
+			Kind:     "kind",
+			SIP:      sip,
+			Sha256:   "sha256",
+			Metadata: "metadata",
+		}
+		clone := grants.Clone()
+		require.NotSame(t, grants, clone)
+		require.NotSame(t, grants.SIP, clone.SIP)
+		require.Equal(t, grants.SIP.Admin, clone.SIP.Admin)
+		require.True(t, reflect.DeepEqual(grants, clone))
+		require.True(t, reflect.DeepEqual(grants.SIP, clone.SIP))
+	})
+
+	t.Run("clone with Agent", func(t *testing.T) {
+		agent := &AgentGrant{
+			Admin:         true,
+			DispatchAdmin: true,
+		}
+		grants := &ClaimGrants{
+			Identity: "identity",
+			Name:     "name",
+			Kind:     "kind",
+			Agent:    agent,
+			Sha256:   "sha256",
+			Metadata: "metadata",
+		}
+		clone := grants.Clone()
+		require.NotSame(t, grants, clone)
+		require.NotSame(t, grants.Agent, clone.Agent)
+		require.Equal(t, grants.Agent.Admin, clone.Agent.Admin)
+		require.True(t, reflect.DeepEqual(grants, clone))
+		require.True(t, reflect.DeepEqual(grants.Agent, clone.Agent))
+	})
+
+	t.Run("clone with Inference", func(t *testing.T) {
+		inference := &InferenceGrant{
+			Perform: true,
+		}
+		grants := &ClaimGrants{
+			Identity:  "identity",
+			Name:      "name",
+			Kind:      "kind",
+			Inference: inference,
+			Sha256:    "sha256",
+			Metadata:  "metadata",
+		}
+		clone := grants.Clone()
+		require.NotSame(t, grants, clone)
+		require.NotSame(t, grants.Inference, clone.Inference)
+		require.Equal(t, grants.Inference.Perform, clone.Inference.Perform)
+		require.True(t, reflect.DeepEqual(grants, clone))
+		require.True(t, reflect.DeepEqual(grants.Inference, clone.Inference))
+	})
+}
+
+func TestParticipantKind(t *testing.T) {
+	const kindMin, kindMax = livekit.ParticipantInfo_STANDARD, livekit.ParticipantInfo_AGENT
+	for k := kindMin; k <= kindMax; k++ {
+		k := k
+		t.Run(k.String(), func(t *testing.T) {
+			require.Equal(t, k, kindToProto(kindFromProto(k)))
+		})
+	}
+	const kindNext = kindMax + 1
+	if _, err := strconv.Atoi(kindNext.String()); err != nil {
+		t.Errorf("Please update kindMax to match protobuf. Missing value: %s", kindNext)
+	}
+}
+
+func TestParticipantKindDetail(t *testing.T) {
+	const detailMin, detailMax = livekit.ParticipantInfo_CLOUD_AGENT, livekit.ParticipantInfo_CONNECTOR_TWILIO
+	var details []livekit.ParticipantInfo_KindDetail
+	for k := detailMin; k <= detailMax; k++ {
+		details = append(details, k)
+	}
+
+	require.EqualValues(t, details, kindDetailsToProto(kindDetailsFromProto(details)))
+}
+
+func TestRoomConfiguration_CheckCredentials(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil egress returns nil", func(t *testing.T) {
+		config := &RoomConfiguration{}
+		require.NoError(t, config.CheckCredentials())
+	})
+
+	t.Run("empty egress returns nil", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{},
+		}
+		require.NoError(t, config.CheckCredentials())
+	})
+
+	t.Run("participant file output with S3 secret fails", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Participant: &livekit.AutoParticipantEgress{
+					FileOutputs: []*livekit.EncodedFileOutput{
+						{
+							Output: &livekit.EncodedFileOutput_S3{
+								S3: &livekit.S3Upload{
+									AccessKey: "access",
+									Secret:    "secret", // This should trigger error
+									Bucket:    "bucket",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.ErrorIs(t, config.CheckCredentials(), ErrSensitiveCredentials)
+	})
+
+	t.Run("participant file output with S3 but no secret passes", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Participant: &livekit.AutoParticipantEgress{
+					FileOutputs: []*livekit.EncodedFileOutput{
+						{
+							Output: &livekit.EncodedFileOutput_S3{
+								S3: &livekit.S3Upload{
+									AccessKey: "access",
+									Secret:    "", // No secret
+									Bucket:    "bucket",
+									Region:    "us-west-2",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, config.CheckCredentials())
+	})
+
+	t.Run("participant segment output with GCP credentials fails", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Participant: &livekit.AutoParticipantEgress{
+					SegmentOutputs: []*livekit.SegmentedFileOutput{
+						{
+							Output: &livekit.SegmentedFileOutput_Gcp{
+								Gcp: &livekit.GCPUpload{
+									Credentials: "credentials", // This should trigger error
+									Bucket:      "bucket",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.ErrorIs(t, config.CheckCredentials(), ErrSensitiveCredentials)
+	})
+
+	t.Run("participant segment output with GCP but no credentials passes", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Participant: &livekit.AutoParticipantEgress{
+					SegmentOutputs: []*livekit.SegmentedFileOutput{
+						{
+							Output: &livekit.SegmentedFileOutput_Gcp{
+								Gcp: &livekit.GCPUpload{
+									Credentials: "", // No credentials
+									Bucket:      "bucket",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, config.CheckCredentials())
+	})
+
+	t.Run("room file output with Azure account key fails", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Room: &livekit.RoomCompositeEgressRequest{
+					FileOutputs: []*livekit.EncodedFileOutput{
+						{
+							Output: &livekit.EncodedFileOutput_Azure{
+								Azure: &livekit.AzureBlobUpload{
+									AccountName:   "account",
+									AccountKey:    "key", // This should trigger error
+									ContainerName: "container",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.ErrorIs(t, config.CheckCredentials(), ErrSensitiveCredentials)
+	})
+
+	t.Run("room segment output with AliOSS secret fails", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Room: &livekit.RoomCompositeEgressRequest{
+					SegmentOutputs: []*livekit.SegmentedFileOutput{
+						{
+							Output: &livekit.SegmentedFileOutput_AliOSS{
+								AliOSS: &livekit.AliOSSUpload{
+									AccessKey: "access",
+									Secret:    "secret", // This should trigger error
+									Bucket:    "bucket",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.ErrorIs(t, config.CheckCredentials(), ErrSensitiveCredentials)
+	})
+
+	t.Run("room image output with valid config passes", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Room: &livekit.RoomCompositeEgressRequest{
+					ImageOutputs: []*livekit.ImageOutput{
+						{
+							CaptureInterval: 5,
+							Width:           1920,
+							Height:          1080,
+							Output: &livekit.ImageOutput_S3{
+								S3: &livekit.S3Upload{
+									AccessKey: "access",
+									Secret:    "", // No secret
+									Bucket:    "bucket",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, config.CheckCredentials())
+	})
+
+	t.Run("room stream outputs always fail", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Room: &livekit.RoomCompositeEgressRequest{
+					StreamOutputs: []*livekit.StreamOutput{
+						{
+							Protocol: livekit.StreamProtocol_RTMP,
+							Urls:     []string{"rtmp://example.com/live"},
+						},
+					},
+				},
+			},
+		}
+		require.ErrorIs(t, config.CheckCredentials(), ErrSensitiveCredentials)
+	})
+
+	t.Run("tracks output with S3 secret fails", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Tracks: &livekit.AutoTrackEgress{
+					Filepath: "output.mp4",
+					Output: &livekit.AutoTrackEgress_S3{
+						S3: &livekit.S3Upload{
+							AccessKey: "access",
+							Secret:    "secret", // This should trigger error
+							Bucket:    "bucket",
+						},
+					},
+				},
+			},
+		}
+		require.ErrorIs(t, config.CheckCredentials(), ErrSensitiveCredentials)
+	})
+
+	t.Run("tracks output without credentials passes", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Tracks: &livekit.AutoTrackEgress{
+					Filepath: "output.mp4",
+					Output: &livekit.AutoTrackEgress_Gcp{
+						Gcp: &livekit.GCPUpload{
+							Credentials: "", // No credentials
+							Bucket:      "bucket",
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, config.CheckCredentials())
+	})
+
+	t.Run("multiple outputs with mixed credentials", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Participant: &livekit.AutoParticipantEgress{
+					FileOutputs: []*livekit.EncodedFileOutput{
+						{
+							Output: &livekit.EncodedFileOutput_S3{
+								S3: &livekit.S3Upload{
+									AccessKey: "access",
+									Secret:    "", // No secret - OK
+									Bucket:    "bucket1",
+								},
+							},
+						},
+						{
+							Output: &livekit.EncodedFileOutput_Gcp{
+								Gcp: &livekit.GCPUpload{
+									Credentials: "credentials", // Has credentials - should fail
+									Bucket:      "bucket2",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.ErrorIs(t, config.CheckCredentials(), ErrSensitiveCredentials)
+	})
+
+	t.Run("all cloud providers without credentials pass", func(t *testing.T) {
+		config := &RoomConfiguration{
+			Egress: &livekit.RoomEgress{
+				Room: &livekit.RoomCompositeEgressRequest{
+					FileOutputs: []*livekit.EncodedFileOutput{
+						{
+							Output: &livekit.EncodedFileOutput_S3{
+								S3: &livekit.S3Upload{
+									AccessKey: "access",
+									Secret:    "", // No secret
+									Bucket:    "s3bucket",
+								},
+							},
+						},
+						{
+							Output: &livekit.EncodedFileOutput_Gcp{
+								Gcp: &livekit.GCPUpload{
+									Credentials: "", // No credentials
+									Bucket:      "gcpbucket",
+								},
+							},
+						},
+						{
+							Output: &livekit.EncodedFileOutput_Azure{
+								Azure: &livekit.AzureBlobUpload{
+									AccountName:   "account",
+									AccountKey:    "", // No key
+									ContainerName: "container",
+								},
+							},
+						},
+						{
+							Output: &livekit.EncodedFileOutput_AliOSS{
+								AliOSS: &livekit.AliOSSUpload{
+									AccessKey: "access",
+									Secret:    "", // No secret
+									Bucket:    "alibucket",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, config.CheckCredentials())
+	})
+}
+
+func TestAgentEndpointGrantAllows(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		grant      *AgentEndpointGrant
+		agentName  string
+		deployment string
+		want       bool
+	}{
+		{"nil grant", nil, "a", "prod", false},
+		{"call unset with scope", &AgentEndpointGrant{AgentName: "a", Deployment: "prod"}, "a", "prod", false},
+		{"wildcard", &AgentEndpointGrant{Call: true}, "a", "prod", true},
+		{"agent match", &AgentEndpointGrant{Call: true, AgentName: "a"}, "a", "prod", true},
+		{"agent mismatch", &AgentEndpointGrant{Call: true, AgentName: "a"}, "b", "prod", false},
+		{"deployment match", &AgentEndpointGrant{Call: true, Deployment: "prod"}, "a", "prod", true},
+		{"deployment mismatch", &AgentEndpointGrant{Call: true, Deployment: "prod"}, "a", "staging", false},
+		{"both match", &AgentEndpointGrant{Call: true, AgentName: "a", Deployment: "prod"}, "a", "prod", true},
+		{"both set, deployment differs", &AgentEndpointGrant{Call: true, AgentName: "a", Deployment: "prod"}, "a", "staging", false},
+		{"agent case differs", &AgentEndpointGrant{Call: true, AgentName: "Agent"}, "agent", "prod", false},
+		{"deployment case differs", &AgentEndpointGrant{Call: true, Deployment: "Prod"}, "a", "prod", false},
+		{"empty deployment is wildcard", &AgentEndpointGrant{Call: true}, "a", "production", true},
+		{"default pinned by literal", &AgentEndpointGrant{Call: true, Deployment: "default"}, "a", "default", true},
+		{"default pin rejects others", &AgentEndpointGrant{Call: true, Deployment: "default"}, "a", "prod", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.want, c.grant.Allows(c.agentName, c.deployment))
+		})
+	}
+}
+
+func TestAgentEndpointGrantCloneIndependent(t *testing.T) {
+	t.Parallel()
+
+	grants := &ClaimGrants{AgentEndpoint: &AgentEndpointGrant{Call: true, AgentName: "a", Deployment: "prod"}}
+	clone := grants.Clone()
+	require.NotSame(t, grants.AgentEndpoint, clone.AgentEndpoint)
+
+	clone.AgentEndpoint.Call = false
+	clone.AgentEndpoint.AgentName = "b"
+	require.True(t, grants.AgentEndpoint.Call)
+	require.Equal(t, "a", grants.AgentEndpoint.AgentName)
+}
+
+func TestAgentThreadGrantChecks(t *testing.T) {
+	t.Parallel()
+
+	// Scope covers list and create only; read, write and delete need the id.
+	g := &AgentThreadGrant{Scope: "u1", ThreadIDs: []string{"AT_1"}, List: true, Create: true, Read: true}
+	require.True(t, g.CanRead("AT_1"))
+	require.False(t, g.CanRead("AT_2"))
+	require.False(t, g.CanRead(""))
+	require.False(t, g.CanWrite("AT_1"))
+	require.False(t, g.CanDelete("AT_1"))
+	require.True(t, g.CanList("u1"))
+	require.False(t, g.CanList("u2"))
+	require.False(t, g.CanList(""))
+	require.True(t, g.CanCreate("u1"))
+	require.False(t, g.CanCreate("u2"))
+	require.False(t, g.CanUpdate())
+
+	idsOnly := &AgentThreadGrant{ThreadIDs: []string{"AT_4"}, Create: true, Write: true}
+	require.True(t, idsOnly.CanWrite("AT_4"))
+	require.False(t, idsOnly.CanCreate(""))
+
+	// All covers every thread and scope, still gated by the action flags.
+	all := &AgentThreadGrant{All: true, Read: true, List: true}
+	require.True(t, all.CanRead("AT_9"))
+	require.True(t, all.CanList("any"))
+	require.False(t, all.CanRead(""))
+	require.False(t, all.CanDelete("AT_9"))
+	require.False(t, all.CanCreate("any"))
+	require.False(t, all.CanUpdate())
+	require.True(t, (&AgentThreadGrant{All: true, Write: true}).CanUpdate())
+
+	var none *AgentThreadGrant
+	require.False(t, none.CanRead("AT_1"))
+	require.False(t, none.CanCreate("u1"))
+	require.False(t, none.CanUpdate())
+}
+
+func TestAgentThreadGrantCloneIndependent(t *testing.T) {
+	t.Parallel()
+
+	grants := &ClaimGrants{AgentThread: &AgentThreadGrant{Scope: "u1", ThreadIDs: []string{"AT_1"}, Write: true}}
+	clone := grants.Clone()
+	require.NotSame(t, grants.AgentThread, clone.AgentThread)
+	require.True(t, reflect.DeepEqual(grants.AgentThread, clone.AgentThread))
+
+	clone.AgentThread.Write = false
+	clone.AgentThread.ThreadIDs[0] = "AT_2"
+	clone.AgentThread.ThreadIDs = append(clone.AgentThread.ThreadIDs, "AT_3")
+	require.True(t, grants.AgentThread.Write)
+	require.Equal(t, []string{"AT_1"}, grants.AgentThread.ThreadIDs)
+}
