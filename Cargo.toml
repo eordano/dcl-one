@@ -1,0 +1,72 @@
+[package]
+name = "bevy_ecss"
+version = "0.7.0"
+edition = "2021"
+categories = ["game-development", "gui", "web-programming"]
+description = "Allows using a subset of CSS to interact with Bevy ECS"
+exclude = [".github/","book"]
+keywords = ["css", "bevy", "style", "theme", "ui"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/afonsolage/bevy_ecss"
+
+[dependencies]
+
+bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.16-dcl", default-features = false, features = [
+    "std",
+    "bevy_log",
+    "bevy_ui",
+    "bevy_asset",
+    "bevy_text",
+    "bevy_render",
+] }
+cssparser = "0.33"
+cssparser-color = "0.1"
+smallvec = { version = "1.11", features = ["serde", "union", "const_generics"] }
+thiserror = "1.0.50"
+ahash = "*"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.16-dcl", default-features = false, features = [
+    "std",
+    "bevy_log",
+    "bevy_ui",
+    "bevy_asset",
+    "bevy_text",
+    "bevy_render",
+    "bevy_window",
+    "bevy_winit",
+    "multi_threaded",
+    "file_watcher",
+    "png",
+] }
+
+[[example]]
+name = "simple_ui"
+path = "examples/simple_ui.rs"
+
+[[example]]
+name = "hot_reload"
+path = "examples/hot_reload.rs"
+
+[[example]]
+name = "stress_test"
+path = "examples/stress_test.rs"
+
+[[example]]
+name = "theme"
+path = "examples/theme.rs"
+
+[[example]]
+name = "alpha"
+path = "examples/alpha.rs"
+
+[[example]]
+name = "interactive"
+path = "examples/interactive.rs"
+
+# [patch."https://github.com/robtfm/bevy"]
+# bevy = { path = "../bevy" }
+
+[lints.rust]
+warnings = "allow"
