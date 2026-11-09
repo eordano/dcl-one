@@ -42,7 +42,7 @@ jobs:
   changes:
     name: Changes
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 10
     outputs:
       macos: ${{ steps.plan.outputs.macos }}
@@ -64,7 +64,10 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON((needs.changes.outputs.macos != 'false' || contains(github.event.pull_request.labels.*.name, 'ci:macos')) && '["ubuntu-26.04", "macos-26"]' || '["ubuntu-26.04"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ contains(matrix.os, 'windows') && (vars.RUNNER_WINDOWS || matrix.os)
+      || contains(matrix.os, 'macos') && (vars.RUNNER_MACOS || matrix.os)
+      || endsWith(matrix.os, '-arm') && (vars.RUNNER_LINUX_ARM || matrix.os)
+      || vars.RUNNER_LINUX || matrix.os }}
     timeout-minutes: 100
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -135,7 +138,10 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-26"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ contains(matrix.os, 'windows') && (vars.RUNNER_WINDOWS || matrix.os)
+      || contains(matrix.os, 'macos') && (vars.RUNNER_MACOS || matrix.os)
+      || endsWith(matrix.os, '-arm') && (vars.RUNNER_LINUX_ARM || matrix.os)
+      || vars.RUNNER_LINUX || matrix.os }}
     timeout-minutes: 100
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -248,7 +254,7 @@ jobs:
     name: Web tests and contracts
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -321,7 +327,7 @@ jobs:
     name: CI gate
     needs: [changes, rust, web]
     if: ${{ always() }}
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 5
     steps:
       - name: Require the Rust and web jobs to pass or be skipped

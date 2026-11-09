@@ -14,7 +14,7 @@ concurrency:
 jobs:
   cleanup:
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 5
     permissions:
       actions: write

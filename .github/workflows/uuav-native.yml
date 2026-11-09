@@ -36,14 +36,14 @@ jobs:
       || (github.event.action == 'labeled' && github.event.label.name == 'ci:uuav-native')
       || (github.event.action != 'labeled' && github.event.action != 'unlabeled'
           && contains(github.event.pull_request.labels.*.name, 'ci:uuav-native'))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     steps:
       - run: 'true'
 
   macos:
     name: Build macos-universal
     needs: gate
-    runs-on: macos-15
+    runs-on: ${{ vars.RUNNER_MACOS || 'macos-15' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,7 +160,7 @@ jobs:
   windows:
     name: Build windows-x86_64
     needs: gate
-    runs-on: windows-2025
+    runs-on: ${{ vars.RUNNER_WINDOWS || 'windows-2025' }}
     timeout-minutes: 90
     defaults:
       run:
@@ -253,7 +253,7 @@ jobs:
   linux:
     name: Build linux-x86_64
     needs: gate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -362,7 +362,7 @@ jobs:
   publish:
     name: Publish manifest
     needs: [macos, windows, linux]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

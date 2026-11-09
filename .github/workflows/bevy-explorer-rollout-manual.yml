@@ -21,7 +21,7 @@ name: Bevy Explorer / Manual CDN rollout
         default: '100'
 jobs:
   set-manual-by-path-rollout:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     steps:
     - name: Set Rollout
       uses: decentraland/set-rollout-action@26ead404b6944fd0ce0d087cc59fd817607454d6 # v2

@@ -36,7 +36,7 @@ permissions:
   contents: read
 jobs:
   social-voice-release:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 100
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'

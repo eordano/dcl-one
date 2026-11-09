@@ -35,7 +35,7 @@ jobs:
     # Dispatch main explicitly so its caches
     # are accessible and the actual tested revision belongs to main.
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       actions: write
@@ -47,7 +47,7 @@ jobs:
         run: gh api --method POST "repos/$GH_REPO/actions/workflows/bevy-explorer-scenes.yml/dispatches" -f ref=main
   changes:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       scenes: ${{ steps.plan.outputs.scenes }}
@@ -66,7 +66,7 @@ jobs:
     needs:
       - changes
     if: ${{ needs.changes.outputs.scenes == 'true' && github.actor != 'dependabot[bot]' }}
-    runs-on: ubuntu-22.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-22.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

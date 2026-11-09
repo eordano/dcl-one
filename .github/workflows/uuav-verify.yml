@@ -31,7 +31,7 @@ env:
 jobs:
   verify:
     name: Verify committed binaries against the lock
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +100,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ contains(matrix.os, 'windows') && (vars.RUNNER_WINDOWS || matrix.os)
+      || contains(matrix.os, 'macos') && (vars.RUNNER_MACOS || matrix.os)
+      || endsWith(matrix.os, '-arm') && (vars.RUNNER_LINUX_ARM || matrix.os)
+      || vars.RUNNER_LINUX || matrix.os }}
     timeout-minutes: 30
     defaults:
       run:

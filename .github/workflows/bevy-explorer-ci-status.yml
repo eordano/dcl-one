@@ -21,7 +21,7 @@ permissions: {}
 jobs:
   resolve:
     name: Resolve
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     # The `requested` probe waits for *Changes*, which runs after the integration guards.
     timeout-minutes: 15
     permissions:
@@ -65,7 +65,7 @@ jobs:
     name: Pending
     needs: resolve
     if: github.event.action == 'requested' && needs.resolve.outputs.pr != '' && needs.resolve.outputs.selected == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -103,7 +103,7 @@ jobs:
     name: Report
     needs: resolve
     if: github.event.action == 'completed' && needs.resolve.outputs.pr != '' && needs.resolve.outputs.selected == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read

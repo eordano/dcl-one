@@ -12,6 +12,6 @@ permissions:
 jobs:
   label:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     steps:
       - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0

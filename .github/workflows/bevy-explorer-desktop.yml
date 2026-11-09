@@ -28,7 +28,10 @@ jobs:
       # truthy `'1'` has to be the selected branch.
       BEVY_SEGMENT_WRITE_KEY: ${{ vars.BEVY_SEGMENT_WRITE_KEY }}
       BEVY_ANALYTICS_DEV: ${{ (github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')) && '1' || '' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ contains(matrix.os, 'windows') && (vars.RUNNER_WINDOWS || matrix.os)
+      || contains(matrix.os, 'macos') && (vars.RUNNER_MACOS || matrix.os)
+      || endsWith(matrix.os, '-arm') && (vars.RUNNER_LINUX_ARM || matrix.os)
+      || vars.RUNNER_LINUX || matrix.os }}
     steps:
       - name: Clone repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -279,7 +282,7 @@ jobs:
   release:
     needs: build
     if: inputs.publish && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     permissions:
       contents: write
     steps:
