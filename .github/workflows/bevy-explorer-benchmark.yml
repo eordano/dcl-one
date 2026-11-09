@@ -60,7 +60,7 @@ jobs:
       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -98,7 +98,7 @@ jobs:
     name: Notice
     needs: setup
     if: needs.setup.outputs.run == 'false' && needs.setup.outputs.notes != ''
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -125,7 +125,7 @@ jobs:
     name: Running
     needs: setup
     if: needs.setup.outputs.run == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -167,7 +167,7 @@ jobs:
     name: Queue watchdog
     needs: setup
     if: needs.setup.outputs.run == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     permissions:
       contents: read
       actions: write
@@ -262,7 +262,7 @@ jobs:
     # !cancelled() still reports failed legs, but not a cancelled run (the watchdog, or a newer CI
     # run of the PR): a report without data there would replace what the newer run wrote.
     if: ${{ !cancelled() && needs.setup.outputs.run == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       actions: read
@@ -318,7 +318,7 @@ jobs:
     needs: [setup, gather]
     # Not after a cancelled run, as for the report job.
     if: ${{ !cancelled() && needs.gather.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 5
     permissions:
       contents: read

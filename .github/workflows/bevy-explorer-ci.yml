@@ -87,7 +87,7 @@ jobs:
     # Every build job needs this one, so a closed PR runs only preview-cleanup.
     if: github.event.action != 'closed'
     name: Integration guards
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Reject a custom dist-tag from main
@@ -108,7 +108,7 @@ jobs:
         run: python3 rendering/bevy-explorer/source/vendor/basisu/verify.py
   changes:
     name: Changes
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     permissions:
       contents: read
       actions: read
@@ -150,7 +150,9 @@ jobs:
       matrix:
         os: ${{ (needs.changes.outputs.native-matrix == 'true' && github.actor != 'dependabot[bot]') && fromJSON('["windows-2025",
           "ubuntu-24.04", "macos-15"]') || fromJSON('["ubuntu-24.04"]') }}
-    runs-on: ${{ matrix.os == 'windows-2025' && 'windows-2025-16core' || matrix.os == 'ubuntu-24.04' && 'ubuntu-24.04-16core' || matrix.os == 'macos-15' && 'macos-15-xlarge' || matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-2025' && (vars.RUNNER_WINDOWS || 'windows-2025-16core')
+      || matrix.os == 'ubuntu-24.04' && (vars.RUNNER_LINUX || 'ubuntu-24.04-16core')
+      || matrix.os == 'macos-15' && (vars.RUNNER_MACOS || 'macos-15-xlarge') || matrix.os }}
     concurrency:
       group: ${{ github.workflow }}-test-${{ matrix.os }}-${{ github.ref }}
       cancel-in-progress: true
@@ -352,7 +354,7 @@ jobs:
   headless-smoke:
     if: needs.changes.outputs.headless == 'true'
     name: Headless Smoke
-    runs-on: ubuntu-22.04-16core
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-22.04-16core' }}
     concurrency:
       group: ${{ github.workflow }}-headless-${{ github.ref }}
       cancel-in-progress: true
@@ -475,7 +477,7 @@ jobs:
       - changes
   fmt:
     name: Rustfmt
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
@@ -494,7 +496,7 @@ jobs:
   clippy:
     if: needs.changes.outputs.clippy == 'true'
     name: Clippy
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Reserve disk space on the hosted Linux runner
@@ -539,7 +541,7 @@ jobs:
       - source
       - changes
   toml:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -562,7 +564,7 @@ jobs:
   build-deploy-web:
     if: needs.changes.outputs.web == 'true'
     name: Web engine, HUD and bridge scene
-    runs-on: ubuntu-24.04-16core
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04-16core' }}
     concurrency:
       group: ${{ github.workflow }}-deploy-web-${{ github.ref }}
     env:
@@ -770,7 +772,7 @@ jobs:
   preview-cleanup:
     if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     name: Remove the PR preview tag
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     permissions:
       id-token: write
     steps:

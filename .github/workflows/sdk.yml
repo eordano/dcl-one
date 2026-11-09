@@ -23,7 +23,7 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -44,7 +44,7 @@ jobs:
         run: make lint-packages
   build-test:
     name: Build, test, pack
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 60
     defaults:
       run:

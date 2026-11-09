@@ -90,3 +90,12 @@ Development run: it waits, replacing any run already waiting, so each completed
 run tests every earlier commit and a macOS-only failure in source shows up
 there. A PR labelled `ci:macos` runs both on macOS (label, then push or reopen;
 re-running a job does not pick up a new label).
+
+## CI runners
+
+Every workflow job picks its runner through the repository variables `RUNNER_LINUX`,
+`RUNNER_WINDOWS`, `RUNNER_MACOS` and `RUNNER_LINUX_ARM`. Unset, a job runs on the
+GitHub-hosted label written in the workflow (`ubuntu-24.04`, `windows-2025`, `macos-15`
+and their 16core/xlarge variants). A fork that sets a variable to one of its own runner
+labels runs that class of job there with the same workflow files. `BEVY_E2E_WINDOWS_RUNNER`
+stays the separate switch for the GPU scenarios job.

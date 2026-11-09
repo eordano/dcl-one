@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   structure:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,7 +52,7 @@ jobs:
           node --test lib/*.test.mts
   # Advisory until its default-branch run history supports required-check promotion.
   social-service-contracts:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

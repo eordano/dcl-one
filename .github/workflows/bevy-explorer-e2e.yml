@@ -83,7 +83,7 @@ jobs:
   checks:
     name: Suite checks
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -128,7 +128,7 @@ jobs:
         run: python3 -m unittest discover -s tooling/tests -p 'test_bevy_*.py'
   inputs:
     name: Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     # A pull request's job waits for the commit's Bevy Explorer / CI run, which builds the web app.
     timeout-minutes: 100
     permissions:
@@ -169,7 +169,7 @@ jobs:
     name: dcl-scene-cli (Windows)
     needs: inputs
     if: needs.inputs.outputs.run == 'true' && vars.BEVY_E2E_WINDOWS_RUNNER != '' && (github.event.inputs.group || 'both') != 'inworld'
-    runs-on: windows-2025
+    runs-on: ${{ vars.RUNNER_WINDOWS || 'windows-2025' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -379,7 +379,7 @@ jobs:
     name: Status comment
     needs: [inputs, scenarios]
     if: always() && needs.inputs.outputs.run == 'true' && needs.inputs.outputs.pr != '' && needs.scenarios.result != 'skipped'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read
