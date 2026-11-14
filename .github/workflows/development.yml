@@ -66,12 +66,12 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-26"]') }}
-        # Each shard compiles the tests and runs every third test executable.
-        shard: [1, 2, 3]
+        # Each shard compiles the tests and runs every fifth test executable.
+        shard: [1, 2, 3, 4, 5]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     env:
-      CATALYST_TEST_SHARD: ${{ matrix.shard }}/3
+      CATALYST_TEST_SHARD: ${{ matrix.shard }}/5
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
       FOUNDATION_DEV_STARTUP_TIMEOUT: '120'
