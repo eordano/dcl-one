@@ -123,6 +123,9 @@ jobs:
           cache-on-failure: true
       - name: Run backend tests with PostgreSQL and isolated NATS
         run: nix develop .#ci --command bash tooling/dev-test.sh rust
+      - name: Report the free disk space after the build
+        if: always()
+        run: df -h / "$GITHUB_WORKSPACE" || true
       - name: Preserve database logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -204,6 +207,9 @@ jobs:
       - name: Run Sites end-to-end tests against the development stack
         timeout-minutes: 75
         run: nix develop --command bash tooling/dev-test.sh e2e
+      - name: Report the free disk space after the build
+        if: always()
+        run: df -h / "$GITHUB_WORKSPACE" || true
       - name: Show the service logs
         if: failure()
         run: |
