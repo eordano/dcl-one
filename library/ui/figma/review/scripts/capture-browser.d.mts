@@ -22,5 +22,9 @@ export declare class NavigationInterrupted extends Error {}
 export declare function findBrowser(candidates: (string | undefined)[]): Promise<string>
 export declare function openSession(
   executable: string,
-  options?: { signal?: AbortSignal }
+  options?: {
+    signal?: AbortSignal
+    /** How long to wait for a running browser to publish its DevTools port, in ms (10 s by default). */
+    startTimeout?: number
+  }
 ): Promise<CaptureSession>

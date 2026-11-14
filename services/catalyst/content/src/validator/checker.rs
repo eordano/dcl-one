@@ -1103,18 +1103,32 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    /// The CPU time the calling thread has used. Unlike a wall clock, it
+    /// leaves out the time the thread waits for a core.
+    #[cfg(unix)]
+    fn thread_cpu_time() -> std::time::Duration {
+        // SAFETY: timespec holds only integers, so all zeroes is a value of it.
+        let mut spec: libc::timespec = unsafe { std::mem::zeroed() };
+        // SAFETY: clock_gettime writes one timespec into `spec`.
+        let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut spec) };
+        assert_eq!(status, 0, "{}", std::io::Error::last_os_error());
+        std::time::Duration::new(spec.tv_sec as u64, spec.tv_nsec as u32)
+    }
+
+    // One thread runs the whole check, so its CPU time is the cost of the check.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
     async fn a_huge_pointer_list_is_refused_in_linear_time() {
         let pointers: Vec<String> = (0..200_000)
             .map(|i| format!("urn:decentraland:off-chain:base-avatars:item_{i}"))
             .collect();
         let refs: Vec<&str> = pointers.iter().map(String::as_str).collect();
-        let started = std::time::Instant::now();
+        let started = thread_cpu_time();
         let errors = item_access_errors(EntityType::Wearable, &refs).await;
+        let used = thread_cpu_time() - started;
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
-            "took {:?}",
-            started.elapsed()
+            used < std::time::Duration::from_secs(10),
+            "used {used:?} of CPU time"
         );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].starts_with(

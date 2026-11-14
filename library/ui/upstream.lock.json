@@ -909,22 +909,24 @@
           "deviation": "evidence-removed"
         },
         "library/ui/figma/review/scripts/capture-browser.d.mts": {
-          "sha256": "7c4987cd1e15d89a19498e40fbcc6818ff74def3fd5531c3f62022695ff79024",
+          "sha256": "20e81ef2819ccd5568d27bd401dcd4853d6b9f017f61b1575cbb0de813d6abfb",
           "fds": null,
           "deviation": [
             "capture-removed",
-            "navigation-settle"
+            "navigation-settle",
+            "startup-limit"
           ]
         },
         "library/ui/figma/review/scripts/capture-browser.mjs": {
-          "sha256": "b5f086bec0b58006cf822c536d8dbe405110a30132f061d8fa33f74eea1f8d1f",
+          "sha256": "5ab4a16020bae5e44d5c7eeab4e52e1a4f2aa3f5900bc4b63dbf696578910e2a",
           "fds": null,
           "deviation": [
             "bot-review-279-b",
             "evidence-removed",
             "navigation-settle",
             "request-scope-hardening",
-            "startup-diagnostics"
+            "startup-diagnostics",
+            "startup-limit"
           ]
         },
         "library/ui/figma/review/scripts/capture-teardown.mjs": {
@@ -2242,12 +2244,13 @@
           }
         },
         "library/ui/figma/review/test/capture-browser.test.ts": {
-          "sha256": "58ac63387e0f9a016fbbe777eaea7af91358abc2c846f0046c544a4b555cf317",
+          "sha256": "635a84c2a3776689241c7577702079ebb4a982cfd4d3fc3b1f1a6ad5262fa1e2",
           "fds": null,
           "deviation": [
             "dcl-one-only",
             "bot-review-279-b",
-            "startup-diagnostics"
+            "startup-diagnostics",
+            "startup-limit"
           ]
         },
         "library/ui/figma/review/test/capture-teardown.test.ts": {
@@ -4457,6 +4460,7 @@
         "single-component-module-pin": "The public component table pins components/generation.json once: output origins name the source and transform and do not repeat the generator module list, and the policy checks every module in that record against the source lock and the index. A table that still carries a per-output module map is refused.",
         "skill-kit-followups": "Consumer skill and kit follow-ups: the skill's plugin script reads boolean and text component properties, skips text layers of nested instances, collects only visible text (a TEXT property only when a visible layer shows it), drops a name two visible texts disagree on and reports it and refuses a node without a main component; design text goes in single quotes, never double quotes; the mapping-only scope and the preflight's expected exit 1 are stated. The kit refuses every conflict (foreign or unreadable skill, newer or unordered version, symlinked .claude or .claude/skills) before it writes, orders versions by semver, hashes paths with / and CRLF as LF with framed entries, and check names install --force for a newer install. resolve --batch reads a relative path from the directory the package's figma script was run in. Figma BOOLEAN properties travel apart from variants as booleanProperties (batch, MCP, --boolean): one the mapping does not read is an unmapped-figma-property warning, one it reads as a variant does not fit, an unread variant still refuses a name match, and usageFor and propTranslation report the booleans given. check reports an install hashed by an earlier kit as stale, not as edited; an unreadable manifest or one from another library's kit is refused without --force.",
         "startup-diagnostics": "Local capture startup diagnostics retain bounded sanitized stderr, executable basename and available version, pre-cleanup process status and port-file observations. The existing polling budget, launch flags, abort behavior and primary failure are unchanged. After collection, the drained stderr stream is unreferenced so inherited helper writers cannot pin the caller event loop; the pipe remains open for browser writes.",
+        "startup-limit": "openSession takes startTimeout, how long the caller waits for a running browser to publish its DevTools port. The default stays 10 s and no other caller passes it. The Sites header geometry test passes a longer limit because it starts the browser while the other test files of the run use every core. An exit, a spawn error and an abort still end the wait at once.",
         "verified-install": "Verified installation binds lock bytes before cache verification and compares them after every verification and source initialization. Tests reject invalid cache reads through a bypass App, preserve ignored target files and retain both errors and the previous tree when rollback fails."
       }
     }

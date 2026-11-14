@@ -11,8 +11,12 @@ use axum::extract::Path as AxumPath;
 use super::super::reprocess::{Converter, NO_SCENES_MESSAGE};
 use super::*;
 
+/// The tag of an entity the stand-in abgen refuses. It holds letters outside
+/// the hex alphabet, so the random part of an entity id never matches it.
+const REFUSED: &str = "refused";
+
 /// A stand-in abgen: records each manifest path it is asked for and answers
-/// 500 for an entity id that contains `bad`, 200 otherwise.
+/// 500 for an entity id that contains [`REFUSED`], 200 otherwise.
 struct FakeAbgen {
     base: String,
     asked: Arc<Mutex<Vec<String>>>,
@@ -27,7 +31,7 @@ async fn fake_abgen() -> FakeAbgen {
             let seen = seen.clone();
             async move {
                 seen.lock().unwrap().push(file.clone());
-                if file.contains("bad") {
+                if file.contains(REFUSED) {
                     StatusCode::INTERNAL_SERVER_ERROR
                 } else {
                     StatusCode::OK
@@ -138,7 +142,7 @@ async fn every_scene_of_the_named_worlds_goes_to_the_converter() {
     );
     let world = world_name();
     let other = world_name();
-    let (good, bad, elsewhere) = (entity("good"), entity("bad"), entity("other"));
+    let (good, bad, elsewhere) = (entity("good"), entity(REFUSED), entity("other"));
     let chain = r#"[{"type":"SIGNER","payload":"0xowner","signature":""}]"#;
     seed_scene(&f.pool, &world, &good, chain).await;
     seed_scene(&f.pool, &world, &bad, "[]").await;

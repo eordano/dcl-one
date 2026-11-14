@@ -1,5 +1,6 @@
 import { setTimeout, clearTimeout } from 'node:timers'
 const { fetch, WebSocket, AbortSignal } = globalThis
+import { performance } from 'node:perf_hooks'
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, readFile, mkdtemp } from 'node:fs/promises'
@@ -96,7 +97,10 @@ function startupOutput(redactStartup) {
   }
 }
 
-async function openSession(executable, { signal } = {}) {
+// A browser that has not exited is still starting. How long that takes depends on the load of the machine, which
+// only the caller knows: startTimeout is how long the caller waits for the DevTools port. A value that is not a
+// number ends the wait at the first missing port file.
+async function openSession(executable, { signal, startTimeout = 10_000 } = {}) {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'dcl-visual-'))
   const redactStartup = startupRedactor()
   const output = startupOutput(redactStartup)
@@ -131,7 +135,8 @@ async function openSession(executable, { signal } = {}) {
   }
   try {
     let port
-    for (let i = 0; i < 100; i++) {
+    const startDeadline = performance.now() + startTimeout
+    for (;;) {
       signal?.throwIfAborted()
       if (startupError) throw startupError
       if (browser.exitCode !== null || browser.signalCode !== null)
@@ -154,6 +159,7 @@ async function openSession(executable, { signal } = {}) {
       } catch (error) {
         lastFsError = error?.code ?? 'UNKNOWN'
         portState = error?.code === 'ENOENT' ? 'missing' : 'unreadable'
+        if (!(performance.now() < startDeadline)) break
         await delay(100)
       }
     }

@@ -763,6 +763,11 @@ mod tests {
         );
     }
 
+    fn lock_timed_out(error: &anyhow::Error) -> bool {
+        matches!(error.downcast_ref::<sqlx::Error>(), Some(sqlx::Error::Database(db))
+            if db.code().as_deref() == Some("55P03"))
+    }
+
     #[tokio::test]
     async fn equal_time_endings_page_and_concurrent_scans_deduplicate() {
         let _guard = TEST_LOCK.lock().await;
@@ -787,7 +792,22 @@ mod tests {
         }
         let end = now + Duration::hours(1);
         let (one, two) = tokio::join!(run_once(&pool, end), run_once(&pool, end));
-        assert_eq!(one.unwrap() + two.unwrap(), 101);
+        // The activation row serializes scans. The scan that waits for the row
+        // records the last ending. If the first scan holds the row for longer
+        // than the lock timeout, the waiting scan records nothing and the next
+        // scan records that ending.
+        let mut recorded = Vec::new();
+        for scan in [one, two] {
+            match scan {
+                Ok(count) => recorded.push(count),
+                Err(error) => assert!(lock_timed_out(&error), "{error:#}"),
+            }
+        }
+        if recorded.len() == 1 {
+            recorded.push(run_once(&pool, end).await.unwrap());
+        }
+        recorded.sort_unstable();
+        assert_eq!(recorded, [1, PAGE as u64]);
         assert_eq!(run_once(&pool, end).await.unwrap(), 0);
         let facts: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM social.event_ended_occurrences WHERE community_id IS NULL",

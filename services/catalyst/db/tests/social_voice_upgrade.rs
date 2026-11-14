@@ -687,7 +687,9 @@ async fn the_release_guard_counts_sessions_of_roles_it_cannot_inspect() {
         hidden, 1,
         "the writer's session type is hidden from the migrator"
     );
-    db.pool.close().await;
+    // The harness pool stays open: closing it returns before its server
+    // sessions end, so they are counted, not raced. The migrator cannot
+    // inspect them either.
     match schema_migrate::migrate_with_release(
         &migrating,
         SCHEMA_SQL,
@@ -696,7 +698,9 @@ async fn the_release_guard_counts_sessions_of_roles_it_cannot_inspect() {
     )
     .await
     {
-        Err(schema_migrate::MigrateError::SessionsConnected { count, .. }) => assert_eq!(count, 1),
+        Err(schema_migrate::MigrateError::SessionsConnected { count, .. }) => {
+            assert_eq!(count, 1 + db.pool.size() as usize)
+        }
         other => panic!("{other:?}"),
     }
     drop(session);

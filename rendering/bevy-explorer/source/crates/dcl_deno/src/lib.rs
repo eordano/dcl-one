@@ -45,6 +45,21 @@ pub fn init_runtime() {
     let _ = deno_core::v8::Platform::new(1, false);
 }
 
+/// The test harness runs each test on its own thread. V8's default platform lets an isolate run
+/// only on the thread that started V8 and on that thread's children, so on a host with memory
+/// protection keys the second test that builds a runtime stops the process. The tests start V8
+/// with the unprotected platform, which has no such rule.
+#[cfg(test)]
+pub(crate) fn test_platform() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        deno_core::JsRuntime::init_platform(
+            Some(deno_core::v8::new_unprotected_default_platform(0, false).make_shared()),
+            false,
+        );
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_scene(
     initial_crdt_store: CrdtStore,

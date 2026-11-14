@@ -15,6 +15,12 @@ const css = [
 ]
   .map((file) => readFileSync(fileURLToPath(new URL(file, root)), "utf8"))
   .join("\n");
+// This file starts the browser while the other test files of the run use every core, so the browser can need
+// longer than the helper's default start limit to publish its DevTools port.
+const BROWSER_START_MS = 40_000;
+// Longer than the start limit plus the helper's endpoint and socket limits (10 s each), so that a slow start
+// that fails in one of those steps ends with the helper's diagnostics and not with a hook timeout.
+const FIXTURE_MS = BROWSER_START_MS + 20_000;
 let session: Awaited<ReturnType<typeof openSession>>;
 let startup: ReturnType<typeof openSession> | undefined;
 const startupController = new AbortController();
@@ -29,10 +35,10 @@ beforeAll(async () => {
         "/usr/bin/google-chrome",
         "/usr/bin/chromium",
       ]),
-      { signal: startupController.signal },
+      { signal: startupController.signal, startTimeout: BROWSER_START_MS },
     ))();
   session = await startup;
-}, 40_000);
+}, FIXTURE_MS);
 afterAll(async () => {
   startupController.abort(new Error("Header geometry fixture disposed"));
   const opened = await startup?.catch(() => undefined);

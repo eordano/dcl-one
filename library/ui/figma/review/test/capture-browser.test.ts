@@ -143,6 +143,20 @@ describe('when startup diagnostics explain a failed browser launch', () => {
     assert.equal(diagnostic.signal, null)
   })
 
+  it('should stop waiting for the port at the start limit of the caller while the browser is alive', async (t) => {
+    const log = t.mock.method(console, 'error', () => {})
+    const { file } = await script('setInterval(()=>{},1000)')
+    const started = performance.now()
+    await assert.rejects(openSession(file, { startTimeout: 300 }), /did not start/)
+    assert.ok(
+      performance.now() - started < 8000,
+      'the default 10 s limit applied instead of the given one'
+    )
+    const diagnostic = report(log.mock.calls)
+    assert.equal(diagnostic.port.state, 'missing')
+    assert.equal(diagnostic.exitCode, null)
+  })
+
   it('should sanitize split stderr lines and omit overlong lines before bounding the report', async (t) => {
     const log = t.mock.method(console, 'error', () => {})
     const key = 'capture-test-key'
