@@ -9,3 +9,4 @@ export const asset = (path: string): string => {
   if (url.startsWith("/") || url.startsWith("http") || typeof document === "undefined") return url;
   return new URL(url, document.baseURI).href;
 };
+// CI timing probe.
