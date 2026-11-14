@@ -441,7 +441,7 @@ class SelectionTest(unittest.TestCase):
         jobs = dict(re.findall(r'(?ms)^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)', workflow.split('\njobs:\n', 1)[1]))
         larger = {name for name, body in jobs.items() if re.search(r'runs-on: .*(16core|xlarge)', body)}
         conditions = {'test': 'test', 'headless-smoke': 'headless', 'build-deploy-web': 'web'}
-        self.assertEqual(larger, set(conditions))
+        self.assertEqual(larger, set())  # lab: this repository maps the larger runners to standard ones
         self.assertEqual(set(conditions.values()), set(ci.HELD_ON_DRAFT))
         for name, lane in conditions.items():
             self.assertRegex(jobs[name], rf"if: .*needs\.changes\.outputs\.{lane} == 'true'")
