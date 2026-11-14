@@ -82,8 +82,7 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends ninja-build
       - name: Export CEF distribution
         run: |-
-          cargo install export-cef-dir --version "139.8.0+139.0.40"
-          export-cef-dir --force "$HOME/.local/share/cef"
+          python "$GITHUB_WORKSPACE/apps/bevy-explorer/install-cef.py" "$HOME/.local/share/cef"
           # GITHUB_ENV reaches native processes verbatim: on windows the git-bash $HOME
           # (/c/Users/...) would resolve as C:\c\Users\... — write a windows path there.
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -176,7 +175,7 @@ jobs:
           cp ${{ env.CARGO_BUILD_DIR }}/dcl_deno_ipc.exe package/dcl_deno_ipc.exe
           cp ${{ env.CARGO_BUILD_DIR }}/decentra-bevy-cef.exe package/decentra-bevy-cef.exe
           cp -r assets package/assets
-          # CEF runtime next to the exe (standard layout). export-cef-dir FLATTENS the
+          # CEF runtime next to the exe (standard layout). install-cef.py FLATTENS the
           # distribution: dlls, snapshots, paks and locales all live at the root of the
           # export dir — there is no Release/ or Resources/ subdir.
           $cef = "$env:USERPROFILE\.local\share\cef"
@@ -196,7 +195,7 @@ jobs:
           cp ${{ env.CARGO_BUILD_DIR }}/dcl_deno_ipc package/dcl_deno_ipc
           cp ${{ env.CARGO_BUILD_DIR }}/decentra-bevy-cef package/decentra-bevy-cef
           cp -r assets package/assets
-          # CEF runtime next to the exe (standard layout). export-cef-dir FLATTENS the
+          # CEF runtime next to the exe (standard layout). install-cef.py FLATTENS the
           # distribution: .so, snapshots, paks and locales all live at the root of the
           # export dir — there is no Release/ or Resources/ subdir.
           # NOTE (best-effort): unless cef-dll-sys sets an $ORIGIN rpath, linux users may
@@ -220,7 +219,7 @@ jobs:
           # rpaths. The runtime resources (paks, icudtl, snapshots, locales) are not
           # library dependencies, so copy them next to where libcef.so will land, and
           # the subprocess helper is found as a sibling of the main binary (usr/bin).
-          # export-cef-dir FLATTENS the distribution: everything is at the export root.
+          # install-cef.py FLATTENS the distribution: everything is at the export root.
           cef="$HOME/.local/share/cef"
           cp ../../target/release/decentra-bevy-cef BevyExplorer.AppDir/usr/bin
           # HUD page + bridge-scene resolve assets/ against the exe dir (native_hud_roots)

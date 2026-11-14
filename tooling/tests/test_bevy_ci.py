@@ -588,6 +588,7 @@ class SelectionTest(unittest.TestCase):
             '.github/workflows/bevy-explorer-images.yml': {'web', 'headless'},
             'apps/bevy-explorer/prepare-native-cache.py': {'clippy', 'test', 'headless', 'native-matrix', 'scenes'},
             'apps/bevy-explorer/install-linux-deps.py': {*ci.LANES, 'scenes'},
+            'apps/bevy-explorer/install-cef.py': {'test', 'native-matrix', 'scenes'},
             'apps/bevy-explorer/install-web-tools.py': {'web'},
             ci.SCENES_WORKFLOW: {'scenes'},
             ci.WORKFLOW: {*ci.LANES, 'native-matrix'},

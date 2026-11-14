@@ -170,7 +170,6 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       SCCACHE_GHA_ENABLED: 'true'
       SCCACHE_GHA_VERSION: dcl-bevy-windows-v1
-      CEF_EXPORT_VERSION: 139.8.0+139.0.40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Reserve disk space on the hosted Linux runner
@@ -253,13 +252,12 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.local/share/cef
-          key: bevy-cef-${{ runner.os }}-${{ runner.arch }}-${{ env.CEF_EXPORT_VERSION }}
+          key: bevy-cef-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/bevy-explorer/install-cef.py') }}
       - name: Export CEF distribution
         shell: bash
         run: |
           if [ "${{ steps.cef.outputs.cache-hit }}" != true ]; then
-            cargo install export-cef-dir --version "$CEF_EXPORT_VERSION"
-            export-cef-dir --force "$HOME/.local/share/cef"
+            python3 "$GITHUB_WORKSPACE/apps/bevy-explorer/install-cef.py" "$HOME/.local/share/cef"
           fi
           # GITHUB_ENV/GITHUB_PATH reach native processes verbatim: on windows the git-bash
           # $HOME (/c/Users/...) would resolve as C:\c\Users\... — write windows paths there.

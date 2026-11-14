@@ -95,6 +95,8 @@ APP_INPUTS = {
     'install-web-tools.py': ('web',),
     'build-headless.py': ('headless',),
     'install-linux-deps.py': (*LANES, 'scenes'),
+    # The Test Suite on each platform and the graphical scenes link CEF.
+    'install-cef.py': ('test', 'native-matrix', 'scenes'),
     'install-tools.sh': (*LANES, 'native-matrix'),
     'prepare-native-cache.py': ('clippy', 'test', 'headless', 'native-matrix', 'scenes'),
     'scene-tests.txt': ('scenes',),
