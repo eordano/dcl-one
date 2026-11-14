@@ -104,8 +104,7 @@ jobs:
         uses: ./.github/actions/bevy-explorer-clang
       - name: Export CEF distribution
         run: |
-          cargo install export-cef-dir --version "139.8.0+139.0.40"
-          export-cef-dir --force "$HOME/.local/share/cef"
+          python3 "$GITHUB_WORKSPACE/apps/bevy-explorer/install-cef.py" "$HOME/.local/share/cef"
           echo "CEF_PATH=$HOME/.local/share/cef" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$HOME/.local/share/cef:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
       - name: install xvfb, llvmpipe and lavapipe

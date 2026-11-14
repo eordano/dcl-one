@@ -36,6 +36,23 @@ class WorkflowTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(any(fnmatch.fnmatchcase(path.lstrip('/'), pattern) for pattern in ci.IMAGES_INPUTS))
 
+    def test_the_windows_ffmpeg_archive_is_accepted_only_with_its_pinned_digest(self):
+        # The desktop package ships the libraries of this archive, and a release tag can get a new file.
+        pins = set()
+        for name in ('bevy-explorer-ci.yml', 'bevy-explorer-desktop.yml'):
+            workflow = (ci.ROOT / '.github/workflows' / name).read_text()
+            step = workflow.split('$ffUrl = ', 1)[1].split('shell: pwsh', 1)[0]
+            with self.subTest(workflow=name):
+                self.assertEqual(workflow.count('$ffUrl = '), 1)
+                pin = re.search(r'\$ffSha256 = "([0-9a-f]{64})"\n', step)
+                self.assertIsNotNone(pin)
+                pins.add(pin.group(1))
+                check = step.index('if ($ffActual -ne $ffSha256) { throw ')
+                self.assertLess(step.index('Invoke-WebRequest $ffUrl'), step.index('Get-FileHash ffmpeg-6.0-full_build-shared.7z -Algorithm SHA256'))
+                self.assertLess(step.index('Get-FileHash ffmpeg-6.0-full_build-shared.7z -Algorithm SHA256'), check)
+                self.assertLess(check, step.index('7z x ffmpeg-6.0-full_build-shared.7z'))
+        self.assertEqual(len(pins), 1)
+
     def test_shared_reader_and_fixture_changes_schedule_both_workflow_events(self):
         workflow = (ci.ROOT / ci.WORKFLOW).read_text()
         for event, end in (('push', 'pull_request'), ('pull_request', 'workflow_dispatch')):
@@ -415,10 +432,10 @@ class SelectionTest(unittest.TestCase):
         self.git('merge', '-q', '--no-ff', '-m', f'Merge {pr} into {tip}', pr)
         return tip, pr, self.git('rev-parse', 'HEAD')
 
-    def run_main(self, command, head, base, pr_head):
+    def run_main(self, command, head, base, pr_head, **pull_request):
         with tempfile.TemporaryDirectory() as temporary:
             output, event = Path(temporary) / 'output', Path(temporary) / 'event.json'
-            event.write_text(json.dumps({'pull_request': {'head': {'sha': pr_head}}}))
+            event.write_text(json.dumps({'pull_request': {'head': {'sha': pr_head}, **pull_request}}))
             env = {'GITHUB_EVENT_NAME': 'pull_request', 'GITHUB_EVENT_PATH': str(event), 'BASE_SHA': base,
                    'GH_REPO': '', 'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': ''}
             with patch.dict(os.environ, env), patch('sys.argv', ['bevy-ci.py', command, '--head', head]), \
@@ -442,6 +459,40 @@ class SelectionTest(unittest.TestCase):
         _, pr, merge = self.pr_merge('apps/sites/main-only.ts', 'rendering/bevy-explorer/source/src/lib.rs')
         values = self.run_main('plan', merge, self.base, pr)
         self.assertEqual((values['test'], values['web']), ('true', 'true'))
+
+    def test_a_draft_holds_the_jobs_on_larger_runners_until_ready_or_labelled(self):
+        _, pr, merge = self.pr_merge('apps/sites/main-only.ts', 'rendering/bevy-explorer/source/src/lib.rs')
+        held = self.run_main('plan', merge, self.base, pr, draft=True, labels=[{'name': 'ci:macos'}])
+        self.assertEqual([held[lane] for lane in ('clippy', 'test', 'headless', 'web', 'native-matrix')],
+                         ['true', 'false', 'false', 'false', 'false'])
+        self.assertEqual(held['held'], 'true')
+        self.assertIn('draft: test, headless, web wait until it is ready for review', held['reason'])
+        for pull_request in ({'draft': False}, {'draft': True, 'labels': [{'name': 'ci:engine'}]}, {},
+                             {'draft': 'true'}, {'draft': True, 'labels': 'ci:engine'}):
+            values = self.run_main('plan', merge, self.base, pr, **pull_request)
+            self.assertEqual([values[lane] for lane in ('clippy', 'test', 'headless', 'web')], ['true'] * 4, pull_request)
+            self.assertNotIn('held', values)
+
+    def test_a_draft_with_no_held_job_selected_reports_nothing(self):
+        _, pr, merge = self.pr_merge('apps/sites/main-only.ts', 'docs/only-docs.md')
+        values = self.run_main('plan', merge, self.base, pr, draft=True)
+        self.assertNotIn('held', values)
+        self.assertNotIn('draft', values['reason'])
+
+    def test_the_draft_hold_names_every_job_on_a_larger_runner(self):
+        workflow = (Path(__file__).parents[2] / ci.WORKFLOW).read_text(encoding='utf-8')
+        jobs = dict(re.findall(r'(?ms)^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)', workflow.split('\njobs:\n', 1)[1]))
+        larger = {name for name, body in jobs.items() if re.search(r'runs-on: .*(16core|xlarge)', body)}
+        conditions = {'test': 'test', 'headless-smoke': 'headless', 'build-deploy-web': 'web'}
+        self.assertEqual(larger, set(conditions))
+        self.assertEqual(set(conditions.values()), set(ci.HELD_ON_DRAFT))
+        for name, lane in conditions.items():
+            self.assertRegex(jobs[name], rf"if: .*needs\.changes\.outputs\.{lane} == 'true'")
+        # Marking a draft ready starts the run that the hold skipped.
+        self.assertIn('    types: [opened, synchronize, reopened, ready_for_review, closed]\n', workflow)
+        # The images read the web job's output, so they wait with it.
+        self.assertIn("      held: ${{ steps.plan.outputs.held }}\n", jobs['changes'])
+        self.assertIn("needs.changes.outputs.held != 'true' &&", jobs['images'])
 
     def test_pr_base_falls_back_unless_github_merged_the_pr_head(self):
         self.write('rendering/bevy-explorer/source/src/lib.rs', 'changed')
@@ -681,6 +732,7 @@ class SelectionTest(unittest.TestCase):
             '.github/workflows/bevy-explorer-images.yml': {'web', 'headless'},
             'apps/bevy-explorer/prepare-native-cache.py': {'clippy', 'test', 'headless', 'native-matrix', 'scenes'},
             'apps/bevy-explorer/install-linux-deps.py': {*ci.LANES, 'scenes'},
+            'apps/bevy-explorer/install-cef.py': {'test', 'native-matrix', 'scenes'},
             'apps/bevy-explorer/install-web-tools.py': {'web'},
             ci.SCENES_WORKFLOW: {'scenes'},
             ci.WORKFLOW: {*ci.LANES, 'native-matrix'},

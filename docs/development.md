@@ -150,4 +150,10 @@ the Rust job goes on that list in the change that adds it; pushes to `main`
 always run the Rust tests. Two more labels work the same way:
 `ci:desktop` builds the Creator Hub desktop app on a PR and attaches its test
 builds, and `ci:preview` publishes the Explorer web preview that the CI status
-comment links.
+comment links. A draft PR does not run the Explorer jobs that use larger runners
+(the test suite, the headless smoke test and the web build); they start when
+the PR is marked ready for review, or on the next push with the `ci:engine`
+label (`tooling/bevy-ci.py`). The smoke job restores the newest `main` build of the
+API and gives each unchanged file the time it had in that build
+(`tooling/cargo-mtimes.py`), so Cargo compiles only the crates that a changed
+file reaches.

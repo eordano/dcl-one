@@ -40,7 +40,8 @@
       - tooling/tests/test_image_publish.py
       - .github/workflows/apis-sites-images.yml
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    # ready_for_review starts the jobs on larger runners that a draft holds (tooling/bevy-ci.py).
+    types: [opened, synchronize, reopened, ready_for_review, closed]
     paths:
       - .cargo/**
       - rust-toolchain*
@@ -133,6 +134,7 @@ jobs:
       web: ${{ steps.plan.outputs.web }}
       native-matrix: ${{ steps.plan.outputs.native-matrix == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:macos') }}
       images: ${{ steps.consumers.outputs.images }}
+      held: ${{ steps.plan.outputs.held }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select engine builds from their inputs
@@ -170,7 +172,6 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
       SCCACHE_GHA_ENABLED: 'true'
       SCCACHE_GHA_VERSION: dcl-bevy-windows-v1
-      CEF_EXPORT_VERSION: 139.8.0+139.0.40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Reserve disk space on the hosted Linux runner
@@ -238,6 +239,10 @@ jobs:
             try { Invoke-WebRequest $ffUrl -OutFile ffmpeg-6.0-full_build-shared.7z; break }
             catch { if ($i -eq 3) { throw }; Write-Host "ffmpeg download failed (attempt $i), retrying..."; Start-Sleep -Seconds 5 }
           }
+          # The release tag can get a different file. Accept only the archive with this digest.
+          $ffSha256 = "a852648944cdf4ce3aeebf16d750a036fe67ab657b82eb43f9f7fdcc7bef3af7"
+          $ffActual = (Get-FileHash ffmpeg-6.0-full_build-shared.7z -Algorithm SHA256).Hash.ToLower()
+          if ($ffActual -ne $ffSha256) { throw "ffmpeg archive has SHA-256 $ffActual, expected $ffSha256" }
           7z x ffmpeg-6.0-full_build-shared.7z
           mkdir ffmpeg
           mv ffmpeg-*/* ffmpeg/
@@ -253,13 +258,12 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.local/share/cef
-          key: bevy-cef-${{ runner.os }}-${{ runner.arch }}-${{ env.CEF_EXPORT_VERSION }}
+          key: bevy-cef-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/bevy-explorer/install-cef.py') }}
       - name: Export CEF distribution
         shell: bash
         run: |
           if [ "${{ steps.cef.outputs.cache-hit }}" != true ]; then
-            cargo install export-cef-dir --version "$CEF_EXPORT_VERSION"
-            export-cef-dir --force "$HOME/.local/share/cef"
+            python3 "$GITHUB_WORKSPACE/apps/bevy-explorer/install-cef.py" "$HOME/.local/share/cef"
           fi
           # GITHUB_ENV/GITHUB_PATH reach native processes verbatim: on windows the git-bash
           # $HOME (/c/Users/...) would resolve as C:\c\Users\... — write windows paths there.
@@ -921,6 +925,7 @@ jobs:
     if: >-
       !cancelled() && needs.source.result == 'success' && needs.changes.result == 'success' &&
       needs.changes.outputs.images == 'true' &&
+      needs.changes.outputs.held != 'true' &&
       (needs.build-deploy-web.result == 'success' || needs.build-deploy-web.result == 'skipped')
     permissions:
       contents: read
