@@ -161,7 +161,7 @@ jobs:
       matrix:
         os: ${{ (needs.changes.outputs.native-matrix == 'true' && github.actor != 'dependabot[bot]') && fromJSON('["windows-2025",
           "ubuntu-24.04", "macos-15"]') || fromJSON('["ubuntu-24.04"]') }}
-    runs-on: ${{ matrix.os == 'windows-2025' && 'windows-2025-16core' || matrix.os == 'ubuntu-24.04' && 'ubuntu-24.04-16core' || matrix.os == 'macos-15' && 'macos-15-xlarge' || matrix.os }}
+    runs-on: ${{ matrix.os }}
     concurrency:
       group: ${{ github.workflow }}-test-${{ matrix.os }}-${{ github.ref }}
       cancel-in-progress: true
@@ -392,7 +392,7 @@ jobs:
   headless-smoke:
     if: needs.changes.outputs.headless == 'true'
     name: Headless Smoke
-    runs-on: ubuntu-22.04-16core
+    runs-on: ubuntu-22.04
     concurrency:
       group: ${{ github.workflow }}-headless-${{ github.ref }}
       cancel-in-progress: true
@@ -602,7 +602,7 @@ jobs:
   build-deploy-web:
     if: needs.changes.outputs.web == 'true'
     name: Web engine, HUD and bridge scene
-    runs-on: ubuntu-24.04-16core
+    runs-on: ubuntu-24.04
     env:
       # The Segment source the engine reports to (crates/analytics); unset, the shared key. Part
       # of the compiled engine's cache key (tooling/play-artifact.py engine-cache-key).
