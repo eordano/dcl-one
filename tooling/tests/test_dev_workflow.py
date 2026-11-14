@@ -28,8 +28,8 @@ class DevelopmentWorkflowTest(unittest.TestCase):
             # Both platforms on main; PRs add macOS with the ci:macos label.
             self.assertRegex(job, r'os: (\[ubuntu-26\.04, macos-26\]|.*"ubuntu-26\.04", "macos-26")')
         # The shards cover every test executable: the matrix lists 1 to n and the script gets i/n.
-        self.assertIn('        shard: [1, 2, 3]\n', rust)
-        self.assertIn('      CATALYST_TEST_SHARD: ${{ matrix.shard }}/3\n', rust)
+        self.assertIn('        shard: [1, 2, 3, 4, 5]\n', rust)
+        self.assertIn('      CATALYST_TEST_SHARD: ${{ matrix.shard }}/5\n', rust)
         # The target cache keeps the workspace crates; file times come back before Cargo runs.
         self.assertNotIn('Swatinem/rust-cache@', rust)
         cache = re.search(r'(?ms)^      - name: Restore the compiled tests and workspace crates\n(.*?)(?=^      - |\Z)', rust).group(1)
