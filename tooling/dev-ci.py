@@ -2,8 +2,8 @@
 """Plan the Development environment and select frontend unit coverage, failing open to full coverage.
 
 Whether a pull request changed anything it tests (the workflow's push.paths, so the jobs skip on the rest
-and "CI gate" still reports), and the Rust test platforms: macOS for build, toolchain and dev-stack inputs;
-platform-neutral source runs on Linux on PRs and on macOS on main.
+and "CI gate" still reports), and whether it changed a macOS input (build, toolchain, dev stack). PRs run the
+Rust tests on Linux; a PR with a macOS input gets a notice to add the ci:macos label, and main runs macOS.
 
   python3 tooling/dev-ci.py plan                     in a pull_request run (compares the merge commit's parents)
   python3 tooling/dev-ci.py plan --base origin/main  locally (compares HEAD with its merge base)
@@ -73,7 +73,7 @@ def plan(event, base, head):
         macos, reason = needs_macos(changed, ci)
         return macos, reason, run
     except Exception as exc:
-        return True, f'Comparison unavailable, running macOS: {exc}', True
+        return True, f'Comparison unavailable: {exc}', True
 
 
 # Explicit backend implementation boundaries, not every file under catalyst.
@@ -206,9 +206,11 @@ def platform_main():
         parser.error('--base is required outside GitHub Actions')
     macos, reason, run = plan(event, args.base or 'HEAD^1', args.head)
     print(f'run={str(run).lower()} macos={str(macos).lower()}: {reason}')
+    if macos and run and event == 'pull_request':
+        print(f'::notice::{reason}. Add the ci:macos label to run the Rust tests on macOS before the merge.')
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-            summary.write(f'Tests run: {str(run).lower()}. Rust tests on macOS: {str(macos).lower()} ({reason}).\n')
+            summary.write(f'Tests run: {str(run).lower()}. macOS input changed: {str(macos).lower()} ({reason}).\n')
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write(f'macos={str(macos).lower()}\nrun={str(run).lower()}\n')

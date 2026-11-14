@@ -75,6 +75,20 @@ IMAGES_INPUTS = (
     'tooling/tests/test_image_publish.py',
     '.github/workflows/apis-sites-images.yml',
 )
+# How the images are built and published, and what the fixed dependency hashes in infra/packages
+# follow (manifests, lockfiles, toolchain). A PR builds the images only for these; main builds
+# them for every input above. The architecture choice in apis-sites-images.yml reads a subset.
+IMAGES_PACKAGING = (
+    'flake.*', 'rust-toolchain*', 'infra/packages/**', 'infra/containers/**', '.cargo/**',
+    'services/catalyst/rust-toolchain*', 'services/catalyst/Cargo.*', 'services/catalyst/**/Cargo.toml',
+    'library/**/Cargo.toml', 'apps/dcl-scene-cli/Cargo.toml',
+    'apps/sites/package.json', 'apps/sites/pnpm-lock.yaml', 'apps/sites/pnpm-workspace.yaml', 'apps/sites/.npmrc',
+    'tooling/image-*', 'tooling/ci-publication.py', 'tooling/ci_paths.py', 'tooling/bevy-ci.py',
+    'tooling/fetch-play.py', 'tooling/play-artifact.py', 'tooling/hud_shared_inputs.py',
+    'tooling/tests/check_hud_manifest_nix.py',
+    'tooling/tests/test_ci_publication.py', 'tooling/tests/test_image_publish.py',
+    '.github/workflows/bevy-explorer-ci.yml', '.github/workflows/apis-sites-images.yml',
+)
 IMAGES_JOBS = {'APIs + Sites / build (amd64, ubuntu-26.04)',
                'APIs + Sites / build (arm64, ubuntu-26.04-arm)'}
 HEADLESS_JOBS = {
@@ -463,7 +477,7 @@ def consumer_plan(event, base, head, repo):
             raise ValueError('Unknown image selection event')
         ensure_commit(base)
         ensure_commit(head)
-        changed = changed_inputs(base, head, IMAGES_INPUTS)
+        changed = changed_inputs(base, head, IMAGES_INPUTS if event == 'push' else IMAGES_PACKAGING)
         return {'images': bool(changed), 'reason': 'Image consumer inputs changed' if changed else 'Image consumer inputs unchanged'}
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         print(f'Conservative image build: {exc}')

@@ -1,6 +1,7 @@
 """Engine selection uses committed inputs; publication requires explicit producers."""
 import importlib.util
 import fnmatch
+import shlex
 import re
 import json
 import os
@@ -444,7 +445,8 @@ class SelectionTest(unittest.TestCase):
     def test_image_only_change_selects_consumer_without_engine(self):
         self.write('apps/sites/server.ts', 'changed')
         head = self.commit()
-        self.assertTrue(ci.consumer_plan('pull_request', self.base, head, '')['images'])
+        self.assertTrue(ci.consumer_changed(self.base, head, 'images'))
+        self.assertFalse(ci.consumer_plan('pull_request', self.base, head, '')['images'])
         self.assertFalse(any(ci.select(self.base, head)[lane] for lane in ci.LANES))
 
     def test_docs_only_change_skips_image_consumer(self):
@@ -459,7 +461,9 @@ class SelectionTest(unittest.TestCase):
         result = ci.select(self.base, head)
         self.assertFalse(any(result[lane] for lane in (*ci.LANES, 'native-matrix', 'scenes')))
         self.write('services/catalyst/explore/src/lib.rs', 'source')
-        self.assertTrue(ci.consumer_plan('pull_request', self.base, self.commit(), '')['images'])
+        head = self.commit()
+        self.assertTrue(ci.consumer_changed(self.base, head, 'images'))
+        self.assertFalse(ci.consumer_plan('pull_request', self.base, head, '')['images'])
 
     def test_docs_source_embedded_data_and_published_content_rebuild_images(self):
         for name in ('apps/sites/src/features/docs/DocsPage.tsx',
@@ -474,7 +478,8 @@ class SelectionTest(unittest.TestCase):
                 self.write(name, 'changed')
                 head = self.commit()
                 self.assertTrue(ci.consumer_changed(before, head, 'images'))
-                self.assertTrue(ci.consumer_plan('pull_request', before, head, '')['images'])
+                self.assertEqual(ci.consumer_plan('pull_request', before, head, '')['images'],
+                                 any(fnmatch.fnmatchcase(name, pattern) for pattern in ci.IMAGES_PACKAGING))
                 with patch.object(ci, 'api', return_value={'workflow_runs': [{'head_sha': before, 'id': 1}]}), \
                         patch.object(ci, 'trusted_run', return_value=True), \
                         patch.object(ci, 'run_jobs', return_value=[]), \
@@ -482,6 +487,31 @@ class SelectionTest(unittest.TestCase):
                     result = ci.consumer_plan('push', before, head, 'example/project')
                 self.assertTrue(result['images'])
                 self.assertEqual(result['reason'], 'Image consumer inputs changed')
+
+    def test_a_pull_request_builds_images_for_packaging_only(self):
+        for name, built in (('services/catalyst/src/new.rs', False), ('apps/sites/src/new.ts', False),
+                            ('infra/containers/new.nix', True), ('tooling/image-new.py', True),
+                            ('services/catalyst/Cargo.lock', True), ('services/catalyst/new/Cargo.toml', True),
+                            ('services/catalyst/rust-toolchain.toml', True), ('.cargo/config.toml', True),
+                            ('library/new/Cargo.toml', True), ('apps/sites/pnpm-lock.yaml', True),
+                            ('apps/sites/package.json', True), ('apps/sites/.npmrc', True)):
+            with self.subTest(path=name):
+                before = self.git('rev-parse', 'HEAD')
+                self.write(name, 'changed')
+                head = self.commit()
+                self.assertEqual(ci.consumer_plan('pull_request', before, head, '')['images'], built)
+                self.assertTrue(ci.consumer_changed(before, head, 'images'))
+
+    def test_the_architecture_choice_reads_packaging_inputs_only(self):
+        workflow = (Path(__file__).parents[2] / '.github/workflows/apis-sites-images.yml').read_text()
+        listed = workflow.split('git diff --quiet HEAD^1 HEAD -- \\\n', 1)[1].split('; then', 1)[0]
+        specs = shlex.split(listed.replace('\\\n', ' '))
+        self.assertIn('apps/sites/pnpm-lock.yaml', specs)
+        for spec in specs:
+            sample = spec.replace('*', 'a')
+            with self.subTest(spec=spec):
+                self.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in ci.IMAGES_PACKAGING
+                                    for path in (sample, sample + '/a')))
 
     def test_source_renamed_to_documentation_still_selects_builds(self):
         (self.root / 'rendering/bevy-explorer/source/src/lib.rs').rename(

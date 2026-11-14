@@ -45,7 +45,6 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
-      macos: ${{ steps.plan.outputs.macos }}
       run: ${{ steps.plan.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,27 +57,22 @@ jobs:
     name: Rust tests
     needs: changes
     # Runs whatever the plan's outcome unless it found nothing to test; without a plan (other events, a failed
-    # plan job) it runs, and includes macOS.
+    # plan job) it runs. PRs run on Linux; main and the ci:macos label add macOS.
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((needs.changes.outputs.macos != 'false' || contains(github.event.pull_request.labels.*.name, 'ci:macos')) && '["ubuntu-26.04", "macos-26"]' || '["ubuntu-26.04"]') }}
+        os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-26"]') }}
+        # Each shard compiles the tests and runs every third test executable.
+        shard: [1, 2, 3]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     env:
+      CATALYST_TEST_SHARD: ${{ matrix.shard }}/3
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
       FOUNDATION_DEV_STARTUP_TIMEOUT: '120'
     steps:
-      - name: Reserve disk space for the Rust test build
-        if: runner.os == 'Linux'
-        run: |
-          # The catalyst test build, the Nix store and the pnpm store outgrow the hosted runner's
-          # free space (the end-to-end step died with "No space left on device"); its SDKs are unused.
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
-          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provision kernel descriptors for the macOS test workload
         if: runner.os == 'macOS' && runner.environment == 'github-hosted'
@@ -90,7 +84,7 @@ jobs:
         with:
           primary-key: nix-store-${{ runner.os }}-${{ runner.arch }}-ci-${{ hashFiles('flake.nix', 'flake.lock', 'services/catalyst/rust-toolchain.toml', 'infra/dev/**', 'infra/packages/**') }}
           restore-prefixes-first-match: nix-store-${{ runner.os }}-${{ runner.arch }}-ci-
-          save: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
+          save: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' && matrix.shard == 1 }}
           gc-max-store-size: 0
       - name: Root the shell and the flake inputs
         run: |
@@ -122,7 +116,7 @@ jobs:
           # entry as the newest one, and the sweep keeps the newest.
           workspaces: services/catalyst
           shared-key: dev-tests-${{ hashFiles('flake.lock') }}
-          save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' && matrix.shard == 1 }}
           cache-on-failure: true
       - name: Run backend tests with PostgreSQL and isolated NATS
         run: nix develop .#ci --command bash tooling/dev-test.sh rust
@@ -130,7 +124,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: development-rust-logs-${{ runner.os }}-${{ runner.arch }}
+          name: development-rust-logs-${{ runner.os }}-${{ runner.arch }}-${{ matrix.shard }}
           path: .cache/dev/*.log
           retention-days: 7
   smoke:
@@ -149,14 +143,6 @@ jobs:
       FOUNDATION_PLAY_WAIT_SECONDS: '5400'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Reserve disk space for the Rust test build
-        if: runner.os == 'Linux'
-        run: |
-          # The catalyst test build, the Nix store and the pnpm store outgrow the hosted runner's
-          # free space (the end-to-end step died with "No space left on device"); its SDKs are unused.
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
-          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provision kernel descriptors for the macOS test workload
         if: runner.os == 'macOS' && runner.environment == 'github-hosted'
@@ -329,19 +315,21 @@ jobs:
   # out: it also fails on hosted-runner limits that are not the change's.
   gate:
     name: CI gate
-    needs: [changes, rust, web]
+    # Smoke is needed for its workflow tests: they check that the Rust shards cover every test.
+    needs: [changes, rust, smoke, web]
     if: ${{ always() }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
-      - name: Require the Rust and web jobs to pass or be skipped
+      - name: Require the Rust, smoke and web jobs to pass or be skipped
         env:
           CHANGES: ${{ needs.changes.result }}
           RUST: ${{ needs.rust.result }}
+          SMOKE: ${{ needs.smoke.result }}
           WEB: ${{ needs.web.result }}
         run: |
-          echo "changes=$CHANGES rust=$RUST web=$WEB"
-          for result in "$CHANGES" "$RUST" "$WEB"; do
+          echo "changes=$CHANGES rust=$RUST smoke=$SMOKE web=$WEB"
+          for result in "$CHANGES" "$RUST" "$SMOKE" "$WEB"; do
             case "$result" in
               success|skipped) ;;
               *) echo "::error::A required job ended as '$result'"; exit 1 ;;

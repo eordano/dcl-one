@@ -136,7 +136,7 @@ class OnlineProvenanceTests(unittest.TestCase):
                     workflow.replace("  rust:\n", "  native:\n"),
                     workflow.replace("'[\"ubuntu-26.04\"]'", "'[]'"),
                     workflow.replace('"ubuntu-26.04", "macos-26"', '"macos-26"'),
-                    workflow.replace(" || '[\"ubuntu-26.04\"]') }}", "\n          || '[\"macos-26\"]') }}"),
+                    workflow.replace(" && '[\"ubuntu-26.04\"]' || ", "\n          && '[\"macos-26\"]' || "),
                     workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n", ""),
                     workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n", "    if: ${{ success() }}\n"),
                     workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n", "    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n    continue-on-error: true\n"),
