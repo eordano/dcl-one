@@ -17,6 +17,10 @@ SCENE_SUITE = 'apps/bevy-explorer/scene-tests.txt'
 SNAPSHOT_SCENES = ('52,-62', '52,-64', '52,-66')
 PRODUCERS = {'web': 'Web engine, HUD and bridge scene', 'headless': 'Headless Smoke'}
 LANES = ('clippy', 'test', 'headless', 'web')
+# On a draft these jobs on larger runners wait for ready for review or this label. The web job is on a
+# larger runner too, but it is not held: the development smoke job and the images need its output.
+HELD_ON_DRAFT = ('test', 'headless')
+ENGINE_LABEL = 'ci:engine'
 NATIVE_JOBS = {'Test Suite (ubuntu-24.04)', 'Test Suite (windows-2025)', 'Test Suite (macos-15)'}
 GATEWAY_HUD_INPUTS = ('apps/ui3/src/play/lib/baseDomain.ts',
                       'library/explorer-core/engine/generated/serviceTable.ts')
@@ -109,6 +113,8 @@ APP_INPUTS = {
     'install-web-tools.py': ('web',),
     'build-headless.py': ('headless',),
     'install-linux-deps.py': (*LANES, 'scenes'),
+    # The Test Suite on each platform and the graphical scenes link CEF.
+    'install-cef.py': ('test', 'native-matrix', 'scenes'),
     'install-tools.sh': (*LANES, 'native-matrix'),
     'prepare-native-cache.py': ('clippy', 'test', 'headless', 'native-matrix', 'scenes'),
     'scene-tests.txt': ('scenes',),
@@ -130,11 +136,38 @@ def tested_base(merge, pr_head, fallback):
     return parents[0] if len(parents) == 2 and parents[1] == pr_head else fallback
 
 
+def event_pull_request():
+    try:
+        pull_request = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())['pull_request']
+        return pull_request if isinstance(pull_request, dict) else {}
+    except (KeyError, OSError, TypeError, ValueError):
+        return {}
+
+
 def event_pr_head():
     try:
-        return json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())['pull_request']['head']['sha']
-    except (KeyError, OSError, TypeError, ValueError):
+        return event_pull_request()['head']['sha']
+    except (KeyError, TypeError):
         return None
+
+
+def hold_for_draft(result, pull_request):
+    """A draft does not run the held jobs; they wait until it is ready for review or labelled.
+
+    An unreadable event holds nothing.
+    """
+    try:
+        draft = pull_request.get('draft') is True
+        labelled = any(label.get('name') == ENGINE_LABEL for label in pull_request.get('labels') or [])
+    except (AttributeError, TypeError):
+        return result
+    held = [lane for lane in HELD_ON_DRAFT if result.get(lane) is True]
+    if not draft or labelled or not held:
+        return result
+    print(f'::notice::This draft does not run these engine jobs on larger runners: {", ".join(held)}. '
+          f'Mark it ready for review, or add the {ENGINE_LABEL} label and push, to run them.')
+    return {**result, **dict.fromkeys((*HELD_ON_DRAFT, 'native-matrix'), False),
+            'reason': result['reason'] + '; draft: ' + ', '.join(held) + ' wait until it is ready for review'}
 
 
 def api(path):
@@ -542,6 +575,8 @@ def main():
             return
         result = (scenes_plan(event, base, head) if args.command == 'scenes-plan' else
                   plan(event, base, head, os.environ.get('GH_REPO', '')))
+        if args.command == 'plan' and event == 'pull_request':
+            result = hold_for_draft(result, event_pull_request())
         write_outputs(result)
     else:
         repo, run_id = os.environ['GH_REPO'], os.environ['SOURCE_RUN']

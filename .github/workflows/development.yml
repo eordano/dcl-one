@@ -208,6 +208,10 @@ jobs:
           restore-keys: |
             foundation-dev-v2-smoke-${{ github.repository }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'services/catalyst/rust-toolchain.toml') }}-${{ hashFiles('services/catalyst/Cargo.lock') }}-
             foundation-dev-v2-smoke-${{ github.repository }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'services/catalyst/rust-toolchain.toml') }}-
+      - name: Give unchanged sources the file times of the snapshot
+        # Cargo compares file times, and a checkout gives every file the current time. Without this
+        # step Cargo compiles every workspace crate again although the snapshot holds them.
+        run: python3 tooling/cargo-mtimes.py restore services/catalyst/target
       - name: Restore the pnpm store
         id: pnpm-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -252,6 +256,9 @@ jobs:
         with:
           path: ${{ env.PNPM_STORE }}
           key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
+      - name: Record the source file times in the snapshot
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
+        run: python3 tooling/cargo-mtimes.py record services/catalyst/target
       - name: Save successful smoke build snapshot
         # PR smoke jobs restore main's snapshots without creating multi-GB copies.
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rust-cache.outputs.cache-hit != 'true'
