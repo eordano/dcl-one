@@ -40,7 +40,8 @@
       - tooling/tests/test_image_publish.py
       - .github/workflows/apis-sites-images.yml
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    # ready_for_review starts the jobs on larger runners that a draft holds (tooling/bevy-ci.py).
+    types: [opened, synchronize, reopened, ready_for_review, closed]
     paths:
       - .cargo/**
       - rust-toolchain*
@@ -132,6 +133,7 @@ jobs:
       web: ${{ steps.plan.outputs.web }}
       native-matrix: ${{ steps.plan.outputs.native-matrix == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:macos') }}
       images: ${{ steps.consumers.outputs.images }}
+      held: ${{ steps.plan.outputs.held }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select engine builds from their inputs
@@ -896,6 +898,7 @@ jobs:
     if: >-
       !cancelled() && needs.source.result == 'success' && needs.changes.result == 'success' &&
       needs.changes.outputs.images == 'true' &&
+      needs.changes.outputs.held != 'true' &&
       (needs.build-deploy-web.result == 'success' || needs.build-deploy-web.result == 'skipped')
     permissions:
       contents: read
