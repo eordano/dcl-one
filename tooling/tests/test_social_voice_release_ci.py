@@ -147,7 +147,7 @@ sys.exit(29)
         self.assertNotIn('secrets.', workflow)
         self.assertIn('permissions:\n  contents: read\n', workflow)
 
-    def test_workflow_isolates_release_cache_and_reserves_disk_before_nix(self):
+    def test_workflow_isolates_release_cache_and_deletes_no_runner_software(self):
         workflow = WORKFLOW.read_text()
         self.assertIn('CARGO_TARGET_DIR: ${{ github.workspace }}/services/catalyst/target-social-voice-release', workflow)
         # Dependencies only, in the exact directory Cargo receives, under a key family of its own.
@@ -161,13 +161,11 @@ sys.exit(29)
         self.assertIn('          RUSTUP_HOME: /dev/null\n', workflow)
         for family in ('foundation-dev-', 'shared-key: dev-tests', 'social-voice-release-nodebug'):
             self.assertNotIn(family, workflow, 'no sharing with another cache family')
-        reserve = workflow.index('      - name: Reserve disk space')
-        self.assertLess(reserve, workflow.index('uses: cachix/install-nix-action@'))
-        self.assertLess(reserve, workflow.index('uses: Swatinem/rust-cache@'))
+        # The hosted runner has room for this one suite; deleting its SDKs took half of the job time.
+        self.assertNotIn('Reserve disk space', workflow)
+        self.assertNotIn('sudo rm -rf', workflow)
         self.assertLess(workflow.index('Put the Nix Rust toolchain on PATH'), workflow.index('uses: Swatinem/rust-cache@'))
         self.assertLess(workflow.index('uses: Swatinem/rust-cache@'), workflow.index('bash tooling/social-voice-release-test.sh'))
-        self.assertIn("        if: runner.os == 'Linux'\n", workflow)
-        self.assertIn('sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup', workflow)
 
 
 if __name__ == '__main__':

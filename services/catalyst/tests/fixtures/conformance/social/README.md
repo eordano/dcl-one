@@ -78,9 +78,11 @@ node tooling/social-capture-check.cjs
 python3 tooling/owners.py --check
 ```
 
-The `Social source captures` workflow runs these checks on pull requests and
-main with Node 26.12.0. It validates the complete script-to-fixture mapping,
-repository-contained paths, source/runtime metadata and frozen JSON digests,
+The `Social source captures` workflow runs these checks with Node 26.12.0 on
+pull requests and main pushes that change a file the checks read; a test
+fails when the workflow's path lists miss one. It validates the complete
+script-to-fixture mapping, repository-contained paths, source/runtime
+metadata and frozen JSON digests,
 and syntax-checks capture, helper and test scripts. Negative tests exercise
 checkout/runtime/database preflight and request-failure cleanup. This consumes
 the catalog independently of service runtime activation.

@@ -130,13 +130,24 @@ start and the build tools, without the web and media tools.
 Run both in a fresh checkout. `python3 tooling/ci-local.py install` adds hooks
 that run the matching workflows' checks (images need Linux or
 `CI_LOCAL_IMAGES=1`); `ci-local.py run [REV]` runs them without pushing.
-On PRs, macOS runs the Rust tests only for build and dev-stack inputs: Cargo
-manifests and lockfiles, build scripts, toolchain files, `.cargo`,
-`library/vendor/rusty_enet`, Nix, `infra/dev`, the Makefile, the dev tooling and
-`.github/workflows/development.yml` (`tooling/dev-ci.py`). Catalyst, library and
-schema source, the web apps and other Python tooling stay on Linux. On `main`,
+The Rust tests run in three jobs that each compile the tests and run a third of
+the test executables; on PRs they run on Linux (`CATALYST_TEST_SHARD=i/n` for
+`tooling/catalyst-test.sh`). A PR that changes a build or dev-stack input gets a
+notice to add the `ci:macos` label: Cargo manifests and lockfiles, build
+scripts, toolchain files, `.cargo`, `library/vendor/rusty_enet`, Nix,
+`infra/dev`, the Makefile, the dev tooling and
+`.github/workflows/development.yml` (`tooling/dev-ci.py`). On `main`,
 the Rust tests and smoke run on macOS, and a new push does not cancel a running
 Development run: it waits, replacing any run already waiting, so each completed
-run tests every earlier commit and a macOS-only failure in source shows up
+run tests every earlier commit and a macOS-only failure shows up
 there. A PR labelled `ci:macos` runs both on macOS (label, then push or reopen;
-re-running a job does not pick up a new label).
+re-running a job does not pick up a new label). A PR runs the Rust tests only
+when it changes an input of the Rust job: a file on the `RUST_INPUTS` list in
+`tooling/dev-ci.py` (the backend and scene CLI crates, the library crates they
+compile, the schema, the protocol, the API contract, the toolchain, the dev
+shell and the test tooling) or a path that a Rust source names. A new input of
+the Rust job goes on that list in the change that adds it; pushes to `main`
+always run the Rust tests. Two more labels work the same way:
+`ci:desktop` builds the Creator Hub desktop app on a PR and attaches its test
+builds, and `ci:preview` publishes the Explorer web preview that the CI status
+comment links.

@@ -6,6 +6,9 @@ name: Creator Hub / CI
 # Pull requests run it whatever they change, so its one required check, `Creator Hub CI`, always
 # reports: `changes` skips every job when nothing Creator Hub changed, and a path filter would
 # leave the check pending forever on the pull requests it filtered out.
+#
+# Pull requests build the desktop app (macOS and Windows) only with the `ci:desktop` label: add the
+# label, then push or reopen. Main and manual runs always build it.
 on:
   workflow_dispatch:
   push:
@@ -45,12 +48,16 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          DESKTOP: ${{ contains(github.event.pull_request.labels.*.name, 'ci:desktop') }}
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
             echo "creator-hub=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "$BASE...$HEAD" \
               | grep -qE '^(apps/creator-hub/|\.github/workflows/creator-hub-|\.github/actions/creator-hub-)'; then
             echo "creator-hub=true" >> "$GITHUB_OUTPUT"
+            if [ "$DESKTOP" != true ]; then
+              echo "::notice::The desktop builds run on main. Add the ci:desktop label to build the desktop app on this pull request."
+            fi
           else
             echo "creator-hub=false" >> "$GITHUB_OUTPUT"
           fi
@@ -108,6 +115,8 @@ jobs:
       asset_packs_changed: ${{ needs.asset-packs.outputs.changed == 'true' }}
   creator-hub:
     needs: [ inspector ]
+    # The macOS and Windows builds, and the test builds they attach to a pull request.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop')
     uses: ./.github/workflows/creator-hub-desktop.yml
     secrets:
       CREATOR_HUB_RELEASES_APP_PRIVATE_KEY: ${{ secrets.CREATOR_HUB_RELEASES_APP_PRIVATE_KEY }}
@@ -148,7 +157,8 @@ jobs:
   # The one required check. It stands for lint, typecheck, unit tests, both e2e suites and the
   # macOS and Windows builds (the checks decentraland/creator-hub required), plus the package jobs
   # those builds wait on: it fails if any of them failed or was cancelled, and passes when they
-  # passed or `changes` skipped them all.
+  # passed or were skipped (`changes` skips them all; a pull request without the `ci:desktop`
+  # label skips the builds and the prune that needs them).
   result:
     name: Creator Hub CI
     if: always()

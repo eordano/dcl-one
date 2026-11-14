@@ -100,6 +100,10 @@ manual Explorer dispatch select all engine checks. Image-only edits reuse a matc
 web producer and do not select native compilation. On main, non-Linux headless packages build
 alongside Headless Smoke; its stripped, tested Linux binaries also supply the Linux npm package.
 
+The build jobs (*Test Suite*, *Headless Smoke*, *Clippy*, the web build) start beside *Integration guards* and the
+format checks. When one of those checks fails on a pull request from this repository, the *Stop the build jobs*
+job cancels the run; a pull request from a fork runs to the end, because its token cannot cancel a run.
+
 Image builds use `needs` to start after the selected web producer completes. GitHub holds the
 job without allocating a runner; imports and publication receipts use `--wait 0`. This moves
 API compilation after the web producer too, so mixed backend/engine edits need elapsed-time
@@ -114,7 +118,7 @@ per writer:
 
 | Section | Written by | Holds |
 | --- | --- | --- |
-| *Build* | `bevy-explorer-ci-status.yml` | The web app and the headless engine with their artifacts, the web app's PR preview on the zone services, and the `benchmark` runner per platform |
+| *Build* | `bevy-explorer-ci-status.yml` | The web app and the headless engine with their artifacts, the web app's PR preview on the zone services (published only for a PR with the `ci:preview` label; label, then push or reopen), and the `benchmark` runner per platform |
 | *Tests* | `bevy-explorer-ci-status.yml` | *Test Suite* per platform and *Headless Smoke*, with job times |
 | *Performance* | `bevy-explorer-benchmark.yml` | After each passed CI run that built the web app: running, not run and why, cancelled, or the report with a badge from its *Overall* line |
 

@@ -94,7 +94,7 @@ concurrency:
 name: Bevy Explorer / CI
 jobs:
   source:
-    # Every build job needs this one, so a closed PR runs only preview-cleanup.
+    # A closed PR runs only preview-cleanup: this job, the format jobs and Changes skip it, and every build job needs Changes.
     if: github.event.action != 'closed'
     name: Integration guards
     runs-on: ubuntu-24.04
@@ -118,6 +118,9 @@ jobs:
       - name: Verify the vendored texture decoder bytes and patch replay
         run: python3 rendering/bevy-explorer/source/vendor/basisu/verify.py
   changes:
+    # It reads nothing from the guards, so it runs beside them. The build jobs need only this job; stop-builds ends
+    # them when a guard or a format check fails.
+    if: github.event.action != 'closed'
     name: Changes
     runs-on: ubuntu-24.04
     permissions:
@@ -148,12 +151,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 tooling/bevy-ci.py consumer-plan
     timeout-minutes: 10
-    needs:
-      - source
   test:
     name: Test Suite
     needs:
-      - source
       - changes
     if: ${{ needs.changes.outputs.test == 'true' && (needs.changes.outputs.native-matrix == 'true' || github.actor != 'dependabot[bot]') }}
     strategy:
@@ -437,7 +437,7 @@ jobs:
           set -o pipefail
           ../../../apps/bevy-explorer/dist/headless/native/headless \
             --realm https://decentraland.github.io/scene-explorer-tests/scene-explorer-tests \
-            --location 52,-52 --server-mode --preview --timeout 90 2>&1 | tee smoke.log
+            --location 52,-52 --server-mode --preview --timeout 30 2>&1 | tee smoke.log
       - name: Assert scenes ticked
         run: |
           if ! grep -q "first tick reached" smoke.log; then
@@ -509,9 +509,9 @@ jobs:
         shell: bash
     timeout-minutes: 100
     needs:
-      - source
       - changes
   fmt:
+    if: github.event.action != 'closed'
     name: Rustfmt
     runs-on: ubuntu-24.04
     steps:
@@ -527,8 +527,20 @@ jobs:
         working-directory: rendering/bevy-explorer/source
         shell: bash
     timeout-minutes: 100
-    needs:
-      - source
+  stop-builds:
+    # A failed guard or format check means the commit needs a new push, so the build jobs of this run would only use
+    # runner time. The token of a PR from a fork cannot cancel a run; those runs finish.
+    if: failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    name: Stop the build jobs after a failed guard or format check
+    needs: [source, fmt, toml]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}"
   clippy:
     if: needs.changes.outputs.clippy == 'true'
     name: Clippy
@@ -574,9 +586,9 @@ jobs:
         shell: bash
     timeout-minutes: 100
     needs:
-      - source
       - changes
   toml:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     steps:
@@ -595,8 +607,6 @@ jobs:
       run:
         working-directory: rendering/bevy-explorer/source
         shell: bash
-    needs:
-      - source
   build-deploy-web:
     if: needs.changes.outputs.web == 'true'
     name: Web engine, HUD and bridge scene
@@ -608,10 +618,11 @@ jobs:
       # Bevy Explorer / Benchmark refuses unoptimized web apps; while its fleet is off ('none'),
       # nothing measures a PR's, so PR builds skip wasm-opt.
       BEVY_WEB_OPT: ${{ github.event_name == 'pull_request' && vars.BENCHMARK_ENABLED_RUNNERS == 'none' && 'unoptimized' || 'optimized' }}
-      # Same-repo PRs publish under the pr-<n> dist-tag as a preview, which the CI status comment
-      # links; fork PRs have no secrets. oddish tags a main/master branch next whatever custom-tag
-      # says, so a PR from one never publishes.
-      BEVY_WEB_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish-tag != '') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'main' && github.head_ref != 'master') }}
+      # A same-repo PR with the ci:preview label publishes under the pr-<n> dist-tag as a preview,
+      # which the CI status comment links (label, then push or reopen); no PR job reads the
+      # publication. Fork PRs have no secrets. oddish tags a main/master branch next whatever
+      # custom-tag says, so a PR from one never publishes.
+      BEVY_WEB_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish-tag != '') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'main' && github.head_ref != 'master' && contains(github.event.pull_request.labels.*.name, 'ci:preview')) }}
     outputs:
       publish: ${{ env.BEVY_WEB_PUBLISH }}
     permissions:
@@ -759,6 +770,9 @@ jobs:
         working-directory: rendering/bevy-explorer/source/react-web/bridge-scene
       # Publishing waits minutes for the registry; publish-web does it on a standard runner so
       # APIs + Sites starts as soon as the web app is tested.
+      - name: Say how to get a preview
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.BEVY_WEB_PUBLISH != 'true'
+        run: echo '::notice::This pull request has no web preview. Add the ci:preview label, then push or reopen, to publish one.'
       - name: Upload the stamped package for publication
         if: env.BEVY_WEB_PUBLISH == 'true'
         continue-on-error: ${{ github.event_name == 'pull_request' }}
@@ -774,7 +788,6 @@ jobs:
         shell: bash
     timeout-minutes: 100
     needs:
-      - source
       - changes
   publish-web:
     if: needs.build-deploy-web.outputs.publish == 'true'

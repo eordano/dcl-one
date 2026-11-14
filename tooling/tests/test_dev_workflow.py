@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 WORKFLOW = Path(__file__).parents[2] / '.github/workflows/development.yml'
 CLEANUP = WORKFLOW.with_name('closed-pr-cache.yml')
+CREATOR_HUB = WORKFLOW.with_name('creator-hub-ci.yml')
 
 
 def jobs():
@@ -26,12 +27,15 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         for job in (rust, smoke):
             # Both platforms on main; PRs add macOS with the ci:macos label.
             self.assertRegex(job, r'os: (\[ubuntu-26\.04, macos-26\]|.*"ubuntu-26\.04", "macos-26")')
+        # The shards cover every test executable: the matrix lists 1 to n and the script gets i/n.
+        self.assertIn('        shard: [1, 2, 3]\n', rust)
+        self.assertIn('      CATALYST_TEST_SHARD: ${{ matrix.shard }}/3\n', rust)
         # The dependency cache: the action prunes workspace output before saving, main writes, PRs read.
         self.assertNotIn('actions/cache', rust)
         cache = re.search(r'(?ms)^      - name: Restore the Rust dependency cache\n(.*?)(?=^      - |\Z)', rust).group(1)
         self.assertIn('uses: Swatinem/rust-cache@', cache)
         self.assertIn('workspaces: services/catalyst', cache)
-        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}", cache)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' && matrix.shard == 1 }}", cache)
         self.assertIn('cache-on-failure: true', cache)
         self.assertLess(rust.index('Put the Nix Rust toolchain on PATH'), rust.index('Swatinem/rust-cache@'))
         self.assertLess(rust.index('Swatinem/rust-cache@'), rust.index('bash tooling/dev-test.sh rust'))
@@ -67,7 +71,9 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                     self.assertTrue(snapshot.startswith('uses: nix-community/cache-nix-action@'), name)
                     self.assertIn('primary-key: ' + key + "${{ hashFiles('flake.nix', 'flake.lock', ", snapshot)
                     self.assertIn('restore-prefixes-first-match: ' + key + '\n', snapshot)
-                    self.assertIn("save: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}", snapshot)
+                    # One Rust test shard saves; the other jobs save from every main run.
+                    self.assertIn("save: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1'"
+                                  + (' && matrix.shard == 1 }}' if 'shard: [' in job else ' }}'), snapshot)
                     self.assertIn('gc-max-store-size: 0', snapshot)
                     self.assertIn('mkdir -p .cache/nix-roots\n', roots)
                     self.assertIn('nix develop ' + ('.#ci ' if shell == 'ci' else '') + '--profile .cache/nix-roots/env --command true', roots)
@@ -227,6 +233,22 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                     current = fingerprint()
                     self.assertNotEqual(previous, current)
                     previous = current
+
+    def test_creator_hub_desktop_builds_need_the_label_on_pull_requests(self):
+        source = CREATOR_HUB.read_text().split('jobs:\n', 1)[1]
+        found = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)', source))
+        label = "contains(github.event.pull_request.labels.*.name, 'ci:desktop')"
+        # main always builds; a skipped build is not a failure for the required check.
+        self.assertIn(f"    if: github.event_name != 'pull_request' || {label}\n", found['creator-hub'])
+        self.assertIn('    needs: [ creator-hub ]\n', found['prune_pre_releases'])
+        self.assertIn('creator-hub, prune_pre_releases ]', found['result'])
+        self.assertIn('any(.value.result == "failure" or .value.result == "cancelled")', found['result'])
+        # No other job reads the label: the checks every pull request needs stay unconditional.
+        conditions = {name: re.findall(r'(?m)^    if: (.*)$', job) for name, job in found.items()}
+        self.assertEqual([name for name, lines in conditions.items() if any('ci:desktop' in line for line in lines)],
+                         ['creator-hub'])
+        self.assertIn(f'          DESKTOP: ${{{{ {label} }}}}\n', found['changes'])
+        self.assertIn('Add the ci:desktop label', found['changes'])
 
     def test_only_unit_suites_are_gated_by_web_selection(self):
         web = jobs()['web']

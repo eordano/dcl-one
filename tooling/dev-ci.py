@@ -2,8 +2,10 @@
 """Plan the Development environment and select frontend unit coverage, failing open to full coverage.
 
 Whether a pull request changed anything it tests (the workflow's push.paths, so the jobs skip on the rest
-and "CI gate" still reports), and the Rust test platforms: macOS for build, toolchain and dev-stack inputs;
-platform-neutral source runs on Linux on PRs and on macOS on main.
+and "CI gate" still reports), and whether it changed a macOS input (build, toolchain, dev stack). PRs run the
+Rust tests on Linux; a PR with a macOS input gets a notice to add the ci:macos label, and main runs macOS.
+A PR runs the Rust tests only when it changes an input of the Rust job (RUST_INPUTS) or a path that a Rust
+source names; pushes to main always run them.
 
   python3 tooling/dev-ci.py plan                     in a pull_request run (compares the merge commit's parents)
   python3 tooling/dev-ci.py plan --base origin/main  locally (compares HEAD with its merge base)
@@ -31,6 +33,24 @@ MACOS = ('tooling/dev*', 'tooling/catalyst-test*.sh', 'tooling/tests/test_cataly
 # source whose compiled code is the same on both platforms. Main pushes still run them on macOS.
 LINUX_ONLY = ('apps/sites/**', 'apps/ui3/**',
               'tooling/*.py', 'tooling/tests/**', 'services/catalyst/**', 'library/**', 'schemas/**')
+# What the Rust job reads besides the paths its Rust sources name: the crates it compiles, the SQL, protocol
+# and API contract they embed, the toolchain, the dev shell and stack, and the scripts and tests
+# dev-test.sh runs. A pull request runs the Rust tests only when it changes one of these or a named path.
+RUST_INPUTS = ('services/catalyst/**', 'apps/dcl-scene-cli/**', 'library/dcl-*/**', 'library/vendor/rusty_enet/**',
+               'schemas/**', 'library/protocol/**', 'library/catalyst-api/**', 'docs/openapi.json', 'docs/ui/**',
+               '.cargo/**', '**/rust-toolchain*', 'flake.nix', 'flake.lock', 'Makefile',
+               'infra/dev/**', 'infra/packages/**',
+               'tooling/dev*', 'tooling/catalyst-test*', 'tooling/ci-local.py', 'tooling/ci_paths.py',
+               'tooling/archipelago-fixtures.py', 'tooling/enet-provenance.py',
+               'tooling/tests/test_catalyst_test_resources.py', 'tooling/tests/test_dev_regressions.py',
+               'tooling/tests/test_archipelago_fixtures.py', 'tooling/tests/test_enet_provenance.py',
+               '.github/workflows/development.yml')
+# Not listed: the engine workspace's manifests, which the ENet pin check reads. The engine's Test Suite
+# runs the same check (dev-regressions.py --bevy-artifacts) on a pull request that changes them.
+RUST_ROOTS = ('services/catalyst', 'library', 'apps/dcl-scene-cli', 'schemas')
+# Paths the scene CLI writes inside a scene project. They are not this repository's folders.
+SCENE_PROJECT = ('.claude/',)
+PATH_NAME = '[A-Za-z0-9_.@+-]'
 
 
 def load_ci_local():
@@ -50,6 +70,59 @@ def needs_macos(changed, ci):
     return False, 'Only Linux-covered inputs changed' if relevant else 'No watched inputs changed'
 
 
+def rust_source_references(head):
+    """The repository paths that Rust sources name, comments included. A path covers the files below it.
+
+    Two plain names in running text are prose (`apps/ui3`): they count when they end a string or a path is
+    built on them. One name alone is a word (`"docs"`): it counts only when a format string builds on it.
+    """
+    top = subprocess.run(['git', 'ls-tree', '--name-only', '-z', head], cwd=ROOT, capture_output=True, text=True,
+                         timeout=60, check=True).stdout.split('\0')
+    names = '|'.join(re.escape(name) for name in top if name)
+    if not names:
+        raise ValueError('Rust source scan failed')
+    found = subprocess.run(['git', 'grep', '-I', '-h', '-o', '-E',
+                            f'(^|[^{PATH_NAME[1:]})({names})(/{PATH_NAME}+)*(/?["\'`]|/[{{]|/)?', head, '--',
+                            *(f':(glob){root}/**/*.rs' for root in RUST_ROOTS)],
+                           cwd=ROOT, capture_output=True, text=True, timeout=120)
+    if found.returncode not in (0, 1):
+        raise ValueError('Rust source scan failed')
+    token = re.compile(f'(?:{names})(?:/{PATH_NAME}+)*')
+    references = set()
+    for line in found.stdout.splitlines():
+        match = token.search(line)
+        if not match:
+            raise ValueError('Rust source scan failed')
+        path, rest = match.group(), line[match.end():]
+        parts = path.split('/')
+        if path.startswith(SCENE_PROJECT):
+            continue
+        if rest == '/{' or len(parts) > 2 or (len(parts) == 2 and (rest or '.' in parts[1])):
+            references.update((path, path.rstrip('.')))
+    return references
+
+
+def needs_rust(changed, head, ci):
+    """(Rust, reason): True when a changed file is an input of the Rust tests or a Rust source names it.
+
+    It reads every changed file, documentation included: Rust sources name documents too.
+    """
+    changed = [path for path in changed if path]
+    if not changed:
+        return True, 'No changed files to compare'
+    inputs = ci.matching_paths(changed, RUST_INPUTS)
+    if inputs:
+        return True, f'Rust test input changed: {inputs[0]}'
+    try:
+        references = rust_source_references(head)
+    except Exception as exc:
+        return True, f'Rust source scan unavailable: {exc}'
+    for path in changed:
+        if any(path == reference or path.startswith(reference + '/') for reference in references):
+            return True, f'A Rust source names a changed file: {path}'
+    return False, 'No changed file is an input of the Rust tests'
+
+
 def watched_changes(changed, ci):
     """The changed paths the workflow tests: its push.paths, which pull requests no longer filter on."""
     changed = ci.non_documentation(changed)
@@ -58,9 +131,13 @@ def watched_changes(changed, ci):
 
 
 def plan(event, base, head):
-    """(macOS, reason, run): run is False only when a comparison succeeded and found nothing the workflow tests."""
+    """(macOS, reason, run, Rust, Rust reason).
+
+    run is False only when a comparison succeeded and found nothing the workflow tests; Rust is False only
+    when it found no input of the Rust tests.
+    """
     if event not in ('pull_request', 'local'):
-        return True, f'{event} event runs every platform', True
+        return True, f'{event} event runs every platform', True, True, f'{event} event runs the Rust tests'
     try:
         if event == 'local':
             base = subprocess.check_output(['git', 'merge-base', base, head], cwd=ROOT, text=True,
@@ -69,11 +146,12 @@ def plan(event, base, head):
                                           cwd=ROOT, text=True, stderr=subprocess.PIPE, timeout=60).split('\0')
         changed = [path for path in changed if path]
         ci = load_ci_local()
-        run = bool(watched_changes(changed, ci))
+        relevant = watched_changes(changed, ci)
         macos, reason = needs_macos(changed, ci)
-        return macos, reason, run
+        rust, rust_reason = needs_rust(changed, head, ci)
+        return macos, reason, bool(relevant), rust, rust_reason
     except Exception as exc:
-        return True, f'Comparison unavailable, running macOS: {exc}', True
+        return True, f'Comparison unavailable: {exc}', True, True, 'Comparison unavailable'
 
 
 # Explicit backend implementation boundaries, not every file under catalyst.
@@ -204,14 +282,19 @@ def platform_main():
     event = os.environ.get('GITHUB_EVENT_NAME', 'local')
     if args.base is None and event == 'local':
         parser.error('--base is required outside GitHub Actions')
-    macos, reason, run = plan(event, args.base or 'HEAD^1', args.head)
+    macos, reason, run, rust, rust_reason = plan(event, args.base or 'HEAD^1', args.head)
     print(f'run={str(run).lower()} macos={str(macos).lower()}: {reason}')
+    print(f'rust={str(rust).lower()}: {rust_reason}')
+    # The label already adds macOS, and a pull request without Rust tests has none to add.
+    if macos and run and rust and event == 'pull_request' and os.environ.get('CI_MACOS_LABEL') != 'true':
+        print(f'::notice::{reason}. Add the ci:macos label to run the Rust tests on macOS before the merge.')
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-            summary.write(f'Tests run: {str(run).lower()}. Rust tests on macOS: {str(macos).lower()} ({reason}).\n')
+            summary.write(f'Tests run: {str(run).lower()}. macOS input changed: {str(macos).lower()} ({reason}).\n')
+            summary.write(f'Rust tests run: {str(run and rust).lower()} ({rust_reason}).\n')
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-            output.write(f'macos={str(macos).lower()}\nrun={str(run).lower()}\n')
+            output.write(f'run={str(run).lower()}\nrust={str(rust).lower()}\n')
 
 
 def web_main():

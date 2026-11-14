@@ -352,7 +352,7 @@ Handles desktop application builds:
 - **Code Signing** - Automatic code signing for both platforms
 - **Notarization** - macOS notarization
 - **Artifact Distribution** - Uploads to S3 and GitHub releases
-- **PR Testing** - Provides download links for PR testing
+- **PR Testing** - Provides download links for PR testing; a pull request builds the desktop app only with the `ci:desktop` label (label, then push or reopen)
 
 ## 🏗️ Architecture
 

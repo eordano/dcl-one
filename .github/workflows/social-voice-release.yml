@@ -45,13 +45,6 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/services/catalyst/target-social-voice-release
       RUST_TEST_THREADS: '2'
     steps:
-      - name: Reserve disk space for the Rust test build
-        if: runner.os == 'Linux'
-        run: |
-          # Leave room for the Nix store and expanded Rust cache on hosted runners.
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
-          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
