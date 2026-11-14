@@ -782,3 +782,4 @@ async fn run(
         }
     }
 }
+// CI timing probe.
