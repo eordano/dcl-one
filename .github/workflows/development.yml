@@ -361,3 +361,4 @@ jobs:
               *) echo "::error::A required job ended as '$result'"; exit 1 ;;
             esac
           done
+# lab probe
