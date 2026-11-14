@@ -180,7 +180,15 @@ always run the Rust tests. Two more labels work the same way:
 builds, and `ci:preview` publishes the Explorer web preview that the CI status
 comment links. `release:creator-hub` is read after the merge: the push to
 `main` publishes the Creator Hub installers as a pre-release only when its PR
-has the label.
+has the label. A draft PR does not run the Explorer test suite and the headless
+smoke test; they start when the PR is marked ready for review, or on the next
+push with the `ci:engine` label (`tooling/bevy-ci.py`). A draft still builds
+the web engine, because the smoke job and the images need it. The run that
+starts when a draft is marked ready waits for a run of the same PR that is
+still in progress, because the smoke job reads that run's web build. The smoke job
+restores the newest `main` build of the API and gives each unchanged file the
+time it had in that build (`tooling/cargo-mtimes.py`), so Cargo compiles only
+the crates that a changed file reaches.
 
 Linux jobs run on `ubuntu-26.04` unless they compile the explorer or uuav natively or
 test what they compiled. Those run on `ubuntu-24.04`, the image the uuav binaries lock

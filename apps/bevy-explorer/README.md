@@ -62,8 +62,11 @@ A download outage therefore falls back to direct compilation without skipping te
 CI caches WASM outputs in `.cache/bevy-engine`; a restore that fails its identity, inventory or
 checksum check fails the build. Native CI uses Rust 1.99.1 and `protoc` 36.2: Linux takes it from the
 flake's `bevy-tools` package (`install-tools.sh` checks the major), Windows and macOS install the
-release archive `install-protoc.py` pins. See the current measurement evidence in the task report
-before claiming time savings.
+release archive `install-protoc.py` pins. The Test Suite, the graphical scenes and the desktop
+packages take CEF from `install-cef.py`, which downloads the archive of the pinned build by name and
+checks its SHA-256; a new `cef` crate version needs the new build and digests there, and the same
+build in `infra/packages/bevy-explorer.nix`. See the current
+measurement evidence in the task report before claiming time savings.
 
 Analytics: every environment reports to one Segment source, keyed by `BEVY_SEGMENT_WRITE_KEY` (a
 repository variable; unset, the engine keeps the key it shared with the mobile client). Every event

@@ -12,7 +12,8 @@
 # (*Headless Smoke*), with their artifacts' download links, and the `benchmark` runners the
 # *Test Suite* uploads. The tests section covers *Test Suite* on each platform and
 # *Headless Smoke*. A job *Changes* did not select (`skipped`) is reported as not selected; a
-# section none of whose jobs ran says its inputs are unchanged.
+# section none of whose jobs ran says its inputs are unchanged; the tests section adds that a draft
+# holds its tests, because the job list does not tell the two apart.
 #
 # Usage: REPO=o/r PR_NUMBER=10 RUN_ID=1 RUN_URL=... HEAD_SHA=... RUN_FILE=run.json \
 #          JOBS_FILE=jobs.json ARTIFACTS_FILE=artifacts.json bash explorer-ci-sections.sh
@@ -268,7 +269,7 @@ case "$state" in
   passed) badge="Tests-Passed!-3fb950"; headline="All explorer tests passed ✅" ;;
   failed) badge="Tests-Failed!-ff0000"; headline="Some explorer tests failed ❌ Check the [run]($RUN_URL) for the failing tests." ;;
   cancelled) badge="Tests-Cancelled-lightgrey"; headline="The run was cancelled. Push a new commit or re-run the workflow to refresh this section." ;;
-  *) badge="Tests-Not%20selected-lightgrey"; headline="No test job was selected: the test inputs are unchanged." ;;
+  *) badge="Tests-Not%20selected-lightgrey"; headline="No test job was selected: the test inputs are unchanged, or the pull request is a draft and the tests wait until it is ready for review." ;;
 esac
 {
   echo "[![Tests](https://img.shields.io/badge/$badge?logo=rust&$BADGE_STYLE)]($RUN_URL)"
