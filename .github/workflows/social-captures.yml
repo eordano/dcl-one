@@ -1,8 +1,30 @@
 name: Social source captures
+# The job reads only the files below, so a change to any other file does not start it. The
+# catalogue test fails when the catalogue or the checker names a file outside these lists.
 on:
   push:
     branches: [main]
+    paths:
+      - '.github/CODEOWNERS'
+      - '.github/workflows/social-captures.yml'
+      - 'library/async/**'
+      - 'library/dcl-http/tests/fixtures/social-analytics-source-cases.json'
+      - 'ownership.json'
+      - 'services/catalyst/tests/fixtures/conformance/social/**'
+      - 'tooling/owners.py'
+      - 'tooling/social-*'
+      - 'tooling/tests/social-*'
   pull_request:
+    paths:
+      - '.github/CODEOWNERS'
+      - '.github/workflows/social-captures.yml'
+      - 'library/async/**'
+      - 'library/dcl-http/tests/fixtures/social-analytics-source-cases.json'
+      - 'ownership.json'
+      - 'services/catalyst/tests/fixtures/conformance/social/**'
+      - 'tooling/owners.py'
+      - 'tooling/social-*'
+      - 'tooling/tests/social-*'
 permissions:
   contents: read
 jobs:

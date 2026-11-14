@@ -81,6 +81,20 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("  cancel-in-progress: ${{ github.event_name == 'pull_request' || "
                       "github.ref != 'refs/heads/main' }}\n", block)
 
+    def test_the_plan_runs_beside_the_guards_and_every_build_needs_both(self):
+        workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
+        jobs = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)', workflow.split('\njobs:\n', 1)[1]))
+        closed = "    if: github.event.action != 'closed'\n"
+        self.assertIn(closed, jobs['source'])
+        self.assertIn(closed, jobs['changes'])
+        self.assertNotIn('needs:', jobs['changes'])
+        readers = [name for name, job in jobs.items() if 'needs.changes.' in job]
+        self.assertGreaterEqual(len(readers), 6)
+        for name in readers:
+            needs = re.search(r'(?m)^    needs:(?: \[([^\]]*)\]|((?:\n      - \S+)+))', jobs[name])
+            listed = re.findall(r'[\w-]+', needs.group(1) or needs.group(2))
+            self.assertLessEqual({'source', 'changes'}, set(listed), name)
+
     def test_a_pull_request_publishes_a_preview_only_with_the_label(self):
         workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
         job = workflow.split('\n  build-deploy-web:\n', 1)[1].split('\n  headless-packages:\n', 1)[0]

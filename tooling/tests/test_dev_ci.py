@@ -22,7 +22,7 @@ class DevCiTest(unittest.TestCase):
         environment = patch.dict(os.environ)
         environment.start()
         self.addCleanup(environment.stop)
-        for key in ('GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY'):
+        for key in ('GITHUB_EVENT_NAME', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'CI_MACOS_LABEL'):
             os.environ.pop(key, None)
         self.dev = dev.load_ci_local()
 
@@ -233,9 +233,37 @@ class DevCiTest(unittest.TestCase):
             with patch.object(dev, 'plan', return_value=(False, 'Only Linux-covered inputs changed', True, False, 'Only web')), \
                     patch('sys.argv', ['dev-ci.py', 'plan']), contextlib.redirect_stdout(printed):
                 dev.main()
-            self.assertEqual(output.read_text(), 'macos=false\nrun=true\nrust=false\n')
+            self.assertEqual(output.read_text(), 'run=true\nrust=false\n')
             self.assertIn('Rust tests run: false (Only web).', summary.read_text())
             self.assertIn('rust=false: Only web', printed.getvalue())
+
+    def notice(self, answer, event='pull_request', label=None):
+        os.environ.update(GITHUB_EVENT_NAME=event)
+        if label is not None:
+            os.environ.update(CI_MACOS_LABEL=label)
+        printed = io.StringIO()
+        with patch.object(dev, 'plan', return_value=answer), patch('sys.argv', ['dev-ci.py', 'plan']), \
+                contextlib.redirect_stdout(printed):
+            dev.main()
+        return [line for line in printed.getvalue().splitlines() if line.startswith('::notice::')]
+
+    def test_the_macos_notice_names_the_label_only_when_the_label_would_add_tests(self):
+        changed = (True, 'A Cargo manifest changed', True, True, '')
+        self.assertEqual(self.notice(changed), ['::notice::A Cargo manifest changed. Add the ci:macos label to run '
+                                                'the Rust tests on macOS before the merge.'])
+        self.assertEqual(self.notice(changed, label='false'), self.notice(changed))
+        # The label is set, main runs macOS, nothing runs, or the Rust tests are skipped.
+        self.assertEqual(self.notice(changed, label='true'), [])
+        os.environ.pop('CI_MACOS_LABEL')
+        self.assertEqual(self.notice(changed, event='push'), [])
+        self.assertEqual(self.notice((True, 'A Cargo manifest changed', False, True, '')), [])
+        self.assertEqual(self.notice((True, 'A Cargo manifest changed', True, False, 'Only web')), [])
+        self.assertEqual(self.notice((False, 'Only Linux-covered inputs changed', True, True, '')), [])
+        plan = (dev.ROOT / '.github/workflows/development.yml').read_text().split('\n  rust:\n', 1)[0]
+        self.assertIn("      - name: Select the jobs\n        id: plan\n        env:\n"
+                      "          CI_MACOS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:macos') }}\n"
+                      "        run: python3 tooling/dev-ci.py plan", plan)
+        self.assertNotIn('outputs.macos', plan)
 
     def run_main(self, summary):
         with tempfile.TemporaryDirectory() as directory:
@@ -251,7 +279,7 @@ class DevCiTest(unittest.TestCase):
             return written
 
     def test_writes_the_output_last(self):
-        self.assertEqual(self.run_main(None), 'macos=false\nrun=false\nrust=true\n')
+        self.assertEqual(self.run_main(None), 'run=false\nrust=true\n')
         # A failed step must leave no answer.
         with tempfile.TemporaryDirectory() as directory, self.assertRaises(OSError):
             self.run_main(Path(directory))

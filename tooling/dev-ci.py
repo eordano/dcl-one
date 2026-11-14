@@ -262,7 +262,8 @@ def platform_main():
     macos, reason, run, rust, rust_reason = plan(event, args.base or 'HEAD^1', args.head)
     print(f'run={str(run).lower()} macos={str(macos).lower()}: {reason}')
     print(f'rust={str(rust).lower()}: {rust_reason}')
-    if macos and run and event == 'pull_request':
+    # The label already adds macOS, and a pull request without Rust tests has none to add.
+    if macos and run and rust and event == 'pull_request' and os.environ.get('CI_MACOS_LABEL') != 'true':
         print(f'::notice::{reason}. Add the ci:macos label to run the Rust tests on macOS before the merge.')
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
@@ -270,7 +271,7 @@ def platform_main():
             summary.write(f'Rust tests run: {str(run and rust).lower()} ({rust_reason}).\n')
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-            output.write(f'macos={str(macos).lower()}\nrun={str(run).lower()}\nrust={str(rust).lower()}\n')
+            output.write(f'run={str(run).lower()}\nrust={str(rust).lower()}\n')
 
 
 def web_main():

@@ -118,6 +118,8 @@ jobs:
       - name: Verify the vendored texture decoder bytes and patch replay
         run: python3 rendering/bevy-explorer/source/vendor/basisu/verify.py
   changes:
+    # It reads nothing from the guards, so it runs beside them; each build job needs both.
+    if: github.event.action != 'closed'
     name: Changes
     runs-on: ubuntu-24.04
     permissions:
@@ -148,8 +150,6 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 tooling/bevy-ci.py consumer-plan
     timeout-minutes: 10
-    needs:
-      - source
   test:
     name: Test Suite
     needs:

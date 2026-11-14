@@ -51,8 +51,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
-      - name: Select the jobs and the Rust test platforms
+      - name: Select the jobs
         id: plan
+        env:
+          CI_MACOS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:macos') }}
         run: python3 tooling/dev-ci.py plan
   rust:
     name: Rust tests
