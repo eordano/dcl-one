@@ -112,7 +112,7 @@ per writer:
 
 | Section | Written by | Holds |
 | --- | --- | --- |
-| *Build* | `bevy-explorer-ci-status.yml` | The web app and the headless engine with their artifacts, the web app's PR preview on the zone services, and the `benchmark` runner per platform |
+| *Build* | `bevy-explorer-ci-status.yml` | The web app and the headless engine with their artifacts, the web app's PR preview on the zone services (published only for a PR with the `ci:preview` label; label, then push or reopen), and the `benchmark` runner per platform |
 | *Tests* | `bevy-explorer-ci-status.yml` | *Test Suite* per platform and *Headless Smoke*, with job times |
 | *Performance* | `bevy-explorer-benchmark.yml` | After each passed CI run that built the web app: running, not run and why, cancelled, or the report with a badge from its *Overall* line |
 

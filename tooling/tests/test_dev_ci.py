@@ -169,13 +169,80 @@ class DevCiTest(unittest.TestCase):
             body = workflow.split(f'\n  {job}:\n', 1)[1].split('\n  ', 1)[0] + workflow.split(f'\n  {job}:\n', 1)[1][:600]
             with self.subTest(job=job):
                 self.assertIn("needs.changes.outputs.run != 'false'", body)
+                # Only the Rust job reads the web-source answer: smoke and web test the web source.
+                self.assertEqual("needs.changes.outputs.rust != 'false'" in body.split('\n    steps:', 1)[0], job == 'rust')
+        self.assertIn('      rust: ${{ steps.plan.outputs.rust }}\n', workflow)
+
+    def rust(self, *changed):
+        return dev.needs_rust(self.dev.non_documentation(changed), 'HEAD')[0]
+
+    def test_web_source_alone_skips_the_rust_tests(self):
+        for changed in (['apps/ui3/src/play/Hud.tsx'], ['apps/sites/src/app.ts', 'apps/ui3/package.json'],
+                        ['library/ui/apps/hud/Hud.tsx', 'apps/sites/pnpm-lock.yaml', 'docs/development.md']):
+            with self.subTest(changed=changed):
+                self.assertFalse(self.rust(*changed))
+
+    def test_everything_else_runs_the_rust_tests(self):
+        for path in ('services/catalyst/db/src/lib.rs', 'schemas/storage.sql', 'library/vendor/rusty_enet/src/lib.rs',
+                     'library/explorer-core/lib/hudAutomation.ts', 'library/shop/index.ts', 'library/catalyst-api/openapi/a.json',
+                     'library/uix/a.ts', 'apps/ui3-next/a.ts', 'tooling/dev-test.sh', 'tooling/catalyst-test.sh',
+                     'tooling/tests/test_dev_regressions.py', '.github/workflows/development.yml', 'flake.lock',
+                     'apps/dcl-scene-cli/src/main.rs', 'infra/gateway/smoke.py',
+                     # Not watched by this workflow: still not web source alone.
+                     'apps/creator-hub/package.json', 'rendering/bevy-explorer/source/src/main.rs',
+                     # Rust build files, wherever they are.
+                     'apps/ui3/src-native/Cargo.toml', 'apps/sites/native/build.rs', 'library/ui/wasm/src/lib.rs',
+                     'apps/ui3/rust-toolchain.toml'):
+            with self.subTest(path=path):
+                self.assertTrue(self.rust(path))
+                self.assertTrue(self.rust('apps/ui3/src/play/Hud.tsx', path))
+
+    def test_web_files_that_rust_sources_name_run_the_rust_tests(self):
+        references = dev.rust_web_references('HEAD')
+        # The event poster default that the backend embeds.
+        self.assertIn('apps/ui3/public/assets/event-default.webp', references)
+        for reference in references:
+            with self.subTest(reference=reference):
+                self.assertTrue(reference.startswith(dev.WEB_ONLY))
+                self.assertTrue(self.rust(reference))
+                self.assertTrue(self.rust('apps/sites/src/app.ts', reference))
+
+    def test_a_failed_scan_runs_the_rust_tests(self):
+        with patch.object(dev, 'rust_web_references', side_effect=ValueError('scan')):
+            self.assertEqual(dev.needs_rust(['apps/ui3/src/a.ts'], 'HEAD'), (True, 'Rust source scan unavailable: scan'))
+        with patch.object(dev.subprocess, 'run', return_value=subprocess.CompletedProcess([], 2, '', 'fatal')):
+            self.assertTrue(dev.needs_rust(['apps/ui3/src/a.ts'], 'HEAD')[0])
+
+    def test_only_a_compared_pull_request_skips_the_rust_tests(self):
+        self.assertTrue(dev.plan('push', 'HEAD^1', 'HEAD')[3])
+        self.assertTrue(dev.plan('pull_request', 'not-a-revision', 'HEAD')[3])
+        with patch.object(dev, 'load_ci_local', side_effect=FileNotFoundError('ci-local.py')):
+            self.assertTrue(dev.plan('pull_request', 'HEAD', 'HEAD')[3])
+        with patch.object(dev.subprocess, 'check_output', return_value='apps/ui3/src/a.ts\0docs/a.md'), \
+                patch.object(dev, 'rust_web_references', return_value=set()):
+            self.assertEqual(dev.plan('pull_request', 'base', 'head')[2:4], (True, False))
+        with patch.object(dev.subprocess, 'check_output', return_value='apps/ui3/src/a.ts\0schemas/a.sql'), \
+                patch.object(dev, 'rust_web_references', return_value=set()):
+            self.assertEqual(dev.plan('pull_request', 'base', 'head')[2:4], (True, True))
+
+    def test_writes_the_rust_answer_and_its_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output, summary = Path(directory, 'output'), Path(directory, 'summary')
+            os.environ.update(GITHUB_EVENT_NAME='pull_request', GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=str(summary))
+            printed = io.StringIO()
+            with patch.object(dev, 'plan', return_value=(False, 'Only Linux-covered inputs changed', True, False, 'Only web')), \
+                    patch('sys.argv', ['dev-ci.py', 'plan']), contextlib.redirect_stdout(printed):
+                dev.main()
+            self.assertEqual(output.read_text(), 'macos=false\nrun=true\nrust=false\n')
+            self.assertIn('Rust tests run: false (Only web).', summary.read_text())
+            self.assertIn('rust=false: Only web', printed.getvalue())
 
     def run_main(self, summary):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory, 'output')
             os.environ.update(GITHUB_EVENT_NAME='pull_request', GITHUB_OUTPUT=str(output),
                               GITHUB_STEP_SUMMARY=str(summary or Path(directory, 'summary')))
-            with patch.object(dev, 'plan', return_value=(False, 'Only Linux-covered inputs changed', False)), \
+            with patch.object(dev, 'plan', return_value=(False, 'Only Linux-covered inputs changed', False, True, '')), \
                     patch('sys.argv', ['dev-ci.py', 'plan']), contextlib.redirect_stdout(io.StringIO()):
                 try:
                     dev.main()
@@ -184,7 +251,7 @@ class DevCiTest(unittest.TestCase):
             return written
 
     def test_writes_the_output_last(self):
-        self.assertEqual(self.run_main(None), 'macos=false\nrun=false\n')
+        self.assertEqual(self.run_main(None), 'macos=false\nrun=false\nrust=true\n')
         # A failed step must leave no answer.
         with tempfile.TemporaryDirectory() as directory, self.assertRaises(OSError):
             self.run_main(Path(directory))
@@ -227,6 +294,36 @@ class FrontendSelectionTest(unittest.TestCase):
 
     def selected(self, head, base=None, event='pull_request'):
         return dev.web_plan(event, base or self.base, head)['run-web-unit-tests']
+
+    def test_rust_sources_name_web_files_and_folders(self):
+        self.write('services/catalyst/explore/src/posters.rs',
+                   'include_bytes!(concat!(env!("DCL_ONE_ROOT"), "/apps/ui3/public/assets/poster.webp"));\n'
+                   '// The Shop pages (apps/ui3 market/access.tsx) and library/ui-kit read this.\n')
+        self.write('apps/dcl-scene-cli/src/start/chrome.rs', 'const STYLES: &str = "apps/ui3/src/atoms/";\n')
+        self.write('library/protocol/src/lib.rs', '// See library/ui/apps/hud/Hud.tsx.\n')
+        # Not Rust sources: other files do not select the Rust tests.
+        self.write('services/catalyst/tests/fixtures/notes.md', 'apps/sites/src/data/a.ts')
+        self.write('tooling/dev.py', 'apps/sites')
+        head = self.commit()
+        self.assertEqual(dev.rust_web_references(head), {
+            'apps/ui3/public/assets/poster.webp', 'apps/ui3/src/atoms', 'library/ui/apps/hud/Hud.tsx',
+            # A sentence end is kept both ways.
+            'library/ui/apps/hud/Hud.tsx.'})
+        for path, rust in (('apps/ui3/public/assets/poster.webp', True), ('apps/ui3/src/atoms/button.css', True),
+                           ('library/ui/apps/hud/Hud.tsx', True), ('apps/ui3/public/assets/other.webp', False),
+                           ('apps/ui3/src/atomsphere.ts', False), ('apps/sites/src/data/a.ts', False)):
+            with self.subTest(path=path):
+                self.assertEqual(dev.needs_rust([path], head)[0], rust)
+
+    def test_a_web_path_built_from_parts_runs_the_rust_tests(self):
+        for source in ('let root = concat!(env!("DCL_ONE_ROOT"), "/apps/ui3/");', "let root = 'apps/sites';",
+                       'let root = format!("{root}/library/ui/`");'):
+            with self.subTest(source=source):
+                self.write('services/catalyst/src/web.rs', source)
+                head = self.commit()
+                with self.assertRaisesRegex(ValueError, 'Computed web path'):
+                    dev.rust_web_references(head)
+                self.assertTrue(dev.needs_rust(['apps/ui3/src/a.ts'], head)[0])
 
     def test_backend_implementation_and_prose_documentation_skip_units(self):
         self.write(self.backend, 'changed')

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 WORKFLOW = Path(__file__).parents[2] / '.github/workflows/development.yml'
 CLEANUP = WORKFLOW.with_name('closed-pr-cache.yml')
+CREATOR_HUB = WORKFLOW.with_name('creator-hub-ci.yml')
 
 
 def jobs():
@@ -232,6 +233,22 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                     current = fingerprint()
                     self.assertNotEqual(previous, current)
                     previous = current
+
+    def test_creator_hub_desktop_builds_need_the_label_on_pull_requests(self):
+        source = CREATOR_HUB.read_text().split('jobs:\n', 1)[1]
+        found = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)', source))
+        label = "contains(github.event.pull_request.labels.*.name, 'ci:desktop')"
+        # main always builds; a skipped build is not a failure for the required check.
+        self.assertIn(f"    if: github.event_name != 'pull_request' || {label}\n", found['creator-hub'])
+        self.assertIn('    needs: [ creator-hub ]\n', found['prune_pre_releases'])
+        self.assertIn('creator-hub, prune_pre_releases ]', found['result'])
+        self.assertIn('any(.value.result == "failure" or .value.result == "cancelled")', found['result'])
+        # No other job reads the label: the checks every pull request needs stay unconditional.
+        conditions = {name: re.findall(r'(?m)^    if: (.*)$', job) for name, job in found.items()}
+        self.assertEqual([name for name, lines in conditions.items() if any('ci:desktop' in line for line in lines)],
+                         ['creator-hub'])
+        self.assertIn(f'          DESKTOP: ${{{{ {label} }}}}\n', found['changes'])
+        self.assertIn('Add the ci:desktop label', found['changes'])
 
     def test_only_unit_suites_are_gated_by_web_selection(self):
         web = jobs()['web']

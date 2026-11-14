@@ -610,10 +610,11 @@ jobs:
       # Bevy Explorer / Benchmark refuses unoptimized web apps; while its fleet is off ('none'),
       # nothing measures a PR's, so PR builds skip wasm-opt.
       BEVY_WEB_OPT: ${{ github.event_name == 'pull_request' && vars.BENCHMARK_ENABLED_RUNNERS == 'none' && 'unoptimized' || 'optimized' }}
-      # Same-repo PRs publish under the pr-<n> dist-tag as a preview, which the CI status comment
-      # links; fork PRs have no secrets. oddish tags a main/master branch next whatever custom-tag
-      # says, so a PR from one never publishes.
-      BEVY_WEB_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish-tag != '') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'main' && github.head_ref != 'master') }}
+      # A same-repo PR with the ci:preview label publishes under the pr-<n> dist-tag as a preview,
+      # which the CI status comment links (label, then push or reopen); no PR job reads the
+      # publication. Fork PRs have no secrets. oddish tags a main/master branch next whatever
+      # custom-tag says, so a PR from one never publishes.
+      BEVY_WEB_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish-tag != '') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'main' && github.head_ref != 'master' && contains(github.event.pull_request.labels.*.name, 'ci:preview')) }}
     outputs:
       publish: ${{ env.BEVY_WEB_PUBLISH }}
     permissions:
@@ -761,6 +762,9 @@ jobs:
         working-directory: rendering/bevy-explorer/source/react-web/bridge-scene
       # Publishing waits minutes for the registry; publish-web does it on a standard runner so
       # APIs + Sites starts as soon as the web app is tested.
+      - name: Say how to get a preview
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.BEVY_WEB_PUBLISH != 'true'
+        run: echo '::notice::This pull request has no web preview. Add the ci:preview label, then push or reopen, to publish one.'
       - name: Upload the stamped package for publication
         if: env.BEVY_WEB_PUBLISH == 'true'
         continue-on-error: ${{ github.event_name == 'pull_request' }}

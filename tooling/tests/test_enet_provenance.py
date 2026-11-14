@@ -137,11 +137,13 @@ class OnlineProvenanceTests(unittest.TestCase):
                     workflow.replace("'[\"ubuntu-26.04\"]'", "'[]'"),
                     workflow.replace('"ubuntu-26.04", "macos-26"', '"macos-26"'),
                     workflow.replace(" && '[\"ubuntu-26.04\"]' || ", "\n          && '[\"macos-26\"]' || "),
-                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n", ""),
-                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n", "    if: ${{ success() }}\n"),
-                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n", "    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n    continue-on-error: true\n"),
+                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.rust != 'false' }}\n", ""),
+                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.rust != 'false' }}\n", "    if: ${{ success() }}\n"),
+                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.rust != 'false' }}\n", "    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.rust != 'false' }}\n    continue-on-error: true\n"),
                     # The skip must stay tied to the plan's comparison, never an unconditional or looser one.
-                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n", "    if: ${{ !cancelled() && false }}\n")]
+                    workflow.replace("    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.rust != 'false' }}\n", "    if: ${{ !cancelled() && false }}\n"),
+                    # Without a plan the outputs are empty: the job must run then.
+                    workflow.replace("needs.changes.outputs.rust != 'false' }}", "needs.changes.outputs.rust == 'true' }}")]
         for bad in mutations:
             # Every mutation must actually change the workflow, or the test would prove nothing.
             self.assertNotEqual(bad, workflow)

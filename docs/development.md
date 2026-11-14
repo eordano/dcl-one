@@ -141,4 +141,9 @@ the Rust tests and smoke run on macOS, and a new push does not cancel a running
 Development run: it waits, replacing any run already waiting, so each completed
 run tests every earlier commit and a macOS-only failure shows up
 there. A PR labelled `ci:macos` runs both on macOS (label, then push or reopen;
-re-running a job does not pick up a new label).
+re-running a job does not pick up a new label). A PR that changes only web
+source (`apps/sites`, `apps/ui3`, `library/ui`) skips the Rust tests, unless a
+Rust source names one of the changed files. Two more labels work the same way:
+`ci:desktop` builds the Creator Hub desktop app on a PR and attaches its test
+builds, and `ci:preview` publishes the Explorer web preview that the CI status
+comment links.

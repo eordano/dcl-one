@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       run: ${{ steps.plan.outputs.run }}
+      rust: ${{ steps.plan.outputs.rust }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,9 +57,9 @@ jobs:
   rust:
     name: Rust tests
     needs: changes
-    # Runs whatever the plan's outcome unless it found nothing to test; without a plan (other events, a failed
-    # plan job) it runs. PRs run on Linux; main and the ci:macos label add macOS.
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    # Runs whatever the plan's outcome unless it found nothing to test or web source alone; without a plan
+    # (other events, a failed plan job) it runs. PRs run on Linux; main and the ci:macos label add macOS.
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.rust != 'false' }}
     strategy:
       fail-fast: false
       matrix:
