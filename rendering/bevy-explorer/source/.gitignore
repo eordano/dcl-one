@@ -31,3 +31,6 @@ node_modules/
 
 # headless npm packaging build output
 /deploy/headless/dist
+
+# written in CI by apps/bevy-explorer/prepare-native-cache.py
+/cache-key
