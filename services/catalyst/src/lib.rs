@@ -31,3 +31,8 @@ pub use catalyst_storage as storage;
 pub use catalyst_worlds as worlds;
 /// The EVM relay layer the shop drives (SHOP.md): the old `src/economy`.
 pub use shop::evm as economy;
+
+/// Marker of the compiler cache trial.
+pub fn lab6_marker() -> u32 {
+    1
+}
