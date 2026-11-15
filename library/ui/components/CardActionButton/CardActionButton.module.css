@@ -1,0 +1,47 @@
+/* Buttons / CardActionButton, through the foundations tokens. No parity page renders it yet, so every
+   value is the Figma one. */
+@layer dcl.reset, dcl.foundations, dcl.components;
+
+@layer dcl.components {
+  .root {
+    display: inline-flex;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    justify-content: center;
+    align-items: center;
+    width: 57px;
+    height: 46px;
+    margin: 0;
+    padding: var(--dcl-space-0);
+    border: none;
+    border-radius: var(--dcl-radius-md);
+    background-color: var(--dcl-transparencies-white-10);
+    color: var(--dcl-neutrals-snow);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+
+    &:hover:not(:disabled) {
+      background-color: var(--dcl-transparencies-white-20);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--dcl-neutrals-white);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    & > svg {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+    }
+  }
+
+  .icon {
+    display: block;
+  }
+}

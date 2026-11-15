@@ -64,6 +64,7 @@ extern "C" {
         local_participant: &JsValue,
         local_track: &JsValue,
     ) -> Result<JsValue, JsValue>;
+    fn local_participant_can_publish(local_participant: &JsValue) -> bool;
     fn local_participant_sid(local_participant: &JsValue) -> String;
     fn local_participant_identity(local_participant: &JsValue) -> String;
     fn local_participant_metadata(local_participant: &JsValue) -> Option<String>;
@@ -437,6 +438,13 @@ fn serve(command: LivekitCommand, host: &SharedHost, events: &UnboundedSender<Li
             let events = events.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let result = match (local_participant, track) {
+                    // A listen-only token: the SDK would throw once the room refused the
+                    // track, so it is never offered. The publication task stops its own track.
+                    (Ok(local_participant), Ok(_))
+                        if !local_participant_can_publish(&local_participant) =>
+                    {
+                        Err("the room's permissions allow no publishing".to_owned())
+                    }
                     (Ok(local_participant), Ok(track)) => local_participant_publish_track(
                         &local_participant,
                         &track,
@@ -468,8 +476,15 @@ fn serve(command: LivekitCommand, host: &SharedHost, events: &UnboundedSender<Li
                     (Some(local_participant), Some(js_track)) => {
                         local_participant_unpublish_track(&local_participant, &js_track)
                             .await
-                            .map(|publication| local_track_publication(&publication))
                             .map_err(js_error)
+                            .and_then(|publication| {
+                                // null when the SDK held no publication of the track
+                                if publication.is_null() || publication.is_undefined() {
+                                    Err("the track was not published".to_owned())
+                                } else {
+                                    Ok(local_track_publication(&publication))
+                                }
+                            })
                     }
                     (None, _) => Err(format!("unknown room {room}")),
                     (_, None) => Err(format!("unknown local track {track}")),

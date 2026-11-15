@@ -4,6 +4,7 @@
 // overrode it, or the Creator Hub editor's), and the pinned engine artifact Sites serves.
 import type { EngineLaunch } from '@explorer-core/hostContract'
 import { launchOptionsFromUrl } from '@explorer-core/lib/webParams'
+import { trackAudioContexts } from './audioUnlock'
 import { engineServiceOptions } from './baseDomain'
 import { bootMode } from './bootMode'
 import { EDITOR_SCENE, editorSession, isEditorScene } from './editorEmbed'
@@ -13,6 +14,9 @@ import { SYSTEM_SCENE } from './systemScene'
 /** In the scene editor's viewport the session is the editor's, so the editor scene's bus channel
  *  (suffixed by the sandbox) is the one the editor page opens. */
 export function seedBridgeSession(): void {
+  // Before any module that creates an AudioContext loads: the engine's is born while the sign-in
+  // screen is up, and the first gesture, the sign-in or jump-in click, resumes it (audioUnlock.ts).
+  trackAudioContexts()
   const editor = editorSession(bootMode().systemScene, location.hash)
   if (editor != null) (window as { __bridgeSession?: string }).__bridgeSession = editor
 }

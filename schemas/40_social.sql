@@ -631,7 +631,10 @@ CREATE INDEX player_reports_created_idx ON social.player_reports (created_at DES
 CREATE INDEX player_reports_reporter_idx ON social.player_reports (reporter_address, created_at);
 
 -- One slot per declared evidence file; `content_hash` is the CID of the
--- bytes in the ONE blob store, set with `uploaded_at` by the upload.
+-- bytes in the ONE blob store, set with `uploaded_at` by the one upload the
+-- slot takes. `source_key` is the client address bucket of the presign (an
+-- IPv4 address or an IPv6 /64), for the address's share of the node's bound;
+-- a presign clears it on slots older than the bound's 24 hours.
 CREATE TABLE social.player_report_evidence (
     report_id uuid NOT NULL,
     evidence_key text NOT NULL,
@@ -642,14 +645,20 @@ CREATE TABLE social.player_report_evidence (
     content_hash text,
     uploaded_at timestamp without time zone,
     created_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
+    source_key text,
     CONSTRAINT player_report_evidence_pkey PRIMARY KEY (report_id, evidence_key),
     CONSTRAINT player_report_evidence_upload_check CHECK ((uploaded_at IS NULL) = (content_hash IS NULL))
 );
 
 -- The per-reporter pending-slot quota.
 CREATE INDEX player_report_evidence_reporter_idx ON social.player_report_evidence (reporter_address, created_at);
--- The orphan sweep (oldest unsubmitted slots first, in batches).
+-- The orphan sweep (oldest unsubmitted slots first, in batches) and the
+-- node bound's slots still in their upload time.
 CREATE INDEX player_report_evidence_created_idx ON social.player_report_evidence (created_at);
+-- The node bound's slots that hold a file, over the last 24 hours.
+CREATE INDEX player_report_evidence_uploaded_idx ON social.player_report_evidence (created_at) WHERE content_hash IS NOT NULL;
+-- The slots whose address bucket is still to clear (oldest first, in batches).
+CREATE INDEX player_report_evidence_source_idx ON social.player_report_evidence (created_at) WHERE content_hash IS NOT NULL AND source_key IS NOT NULL;
 
 -- ── notifications ──────────────────────────────────────────────────────────
 

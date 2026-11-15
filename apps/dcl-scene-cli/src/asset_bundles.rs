@@ -234,7 +234,7 @@ fn relay_output(
         if to_stderr {
             eprintln!("{line}");
         } else {
-            println!("{line}");
+            crate::ux::say(line);
         }
     };
     tokio::spawn(async move {

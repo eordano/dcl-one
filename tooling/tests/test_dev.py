@@ -216,6 +216,31 @@ class DevTest(unittest.TestCase):
         self.assertEqual({k: dev.settings()[k] for k in older}, older, 'a stack from before the token keeps its secrets')
         self.assertTrue(dev.settings()['MODERATOR_TOKEN'])
 
+    def test_scenes_reach_their_third_party_services_through_the_nodes_proxy(self):
+        self.assertEqual(dev.runtime_env(self.config)['SCENE_PROXY_HOSTS'], ','.join(dev.SCENE_PROXY_HOSTS))
+        own = {**self.config, 'scene_proxy_hosts': ['rooms.example.test', 'files.example.test']}
+        self.assertEqual(dev.runtime_env(own)['SCENE_PROXY_HOSTS'], 'rooms.example.test,files.example.test')
+        self.assertEqual(dev.runtime_env({**self.config, 'scene_proxy_hosts': []})['SCENE_PROXY_HOSTS'], '')
+        with self.assertRaises(SystemExit):
+            dev.runtime_env({**self.config, 'scene_proxy_hosts': 'rooms.example.test'})
+
+    def test_profile_images_render_here_once_the_avatar_renderer_is_built(self):
+        with patch.dict(os.environ, {}, clear=False), patch.object(dev, 'AVATAR_RENDER_BIN', self.state / 'missing'):
+            os.environ.pop('FOUNDATION_DEV_AVATAR_RENDER_BIN', None)
+            env = dev.runtime_env({**self.config, 'profile': 'mirror'})
+        self.assertNotIn('PROFILE_IMAGES_RENDER_ENABLED', env)
+        self.assertEqual(env['PROFILE_IMAGES_ORIGIN_URL'], 'https://profile-images.decentraland.org')
+        renderer = self.state / 'avatar_render'
+        renderer.write_text('#!/bin/sh\n')
+        renderer.chmod(0o755)
+        with patch.dict(os.environ, {'FOUNDATION_DEV_AVATAR_RENDER_BIN': str(renderer)}):
+            env = dev.runtime_env({**self.config, 'profile': 'mirror'})
+        self.assertEqual(env['PROFILE_IMAGES_RENDER_ENABLED'], 'true')
+        self.assertEqual(env['PROFILE_IMAGES_RENDERER'], 'bevy')
+        self.assertEqual(env['PROFILE_IMAGES_AVATAR_RENDER_BIN'], str(renderer))
+        self.assertEqual(env['PROFILE_IMAGES_ORIGIN_URL'], 'https://profile-images.decentraland.org',
+                         'the upstream stays the last resort')
+
     def test_a_stack_created_before_livekit_gets_a_pair_and_keeps_its_secrets(self):
         old = {k: v for k, v in self.config.items() if not k.startswith('LIVEKIT_')}
         dev.save_json(dev.SETTINGS, old)

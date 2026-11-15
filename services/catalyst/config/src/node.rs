@@ -44,6 +44,10 @@ pub struct NodeConfig {
     #[arg(long, env = "HTTP_TRUSTED_PROXY_CIDRS", value_delimiter = ',')]
     pub http_trusted_proxy_cidrs: Vec<ipnet::IpNet>,
 
+    /// Third-party hosts the scene proxy forwards to (`scene_proxy` in the root crate).
+    #[arg(long, env = "SCENE_PROXY_HOSTS", value_delimiter = ',')]
+    pub scene_proxy_hosts: Vec<String>,
+
     /// Operator-local Prometheus scrape listener, separate from the application API.
     #[arg(long, env = "SERVE_METRICS_BIND", default_value = "127.0.0.1:5006")]
     pub serve_metrics_bind: String,

@@ -1,4 +1,4 @@
-.PHONY: web web-dev headless
+.PHONY: web web-dev headless avatar-render
 
 # python3 is a Microsoft Store stub on a stock Windows: make web PYTHON=python
 PYTHON ?= python3
@@ -11,3 +11,6 @@ web-dev:
 
 headless:
 	$(PYTHON) build-headless.py
+
+avatar-render:
+	$(PYTHON) build-avatar-render.py

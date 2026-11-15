@@ -420,7 +420,7 @@ async fn deploy_via_linker(
         programmatic: opts.programmatic,
         host: opts.host_signer.clone(),
     };
-    let published = linker::run(dep, lopts).await?;
+    let published = linker::run(dep, lopts, opts.signing).await?;
     steps.done(&published.message);
     if !opts.quiet {
         ux::note(jump_in_url(world.as_deref(), &base));

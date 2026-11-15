@@ -9,9 +9,17 @@
 // give the same session on every run, and the captures do not change with it.
 import type { BrowserContext } from "playwright-core";
 import { keccak256, toHex, type Hex } from "viem";
-
-export { runnable, walletKey, WALLET_KEY_ENV } from "./wallet-key.mts";
 import { privateKeyToAccount } from "viem/accounts";
+import { runnable, walletKey, WALLET_KEY_ENV } from "./wallet-key.mts";
+
+export { runnable, walletKey, WALLET_KEY_ENV };
+
+/** The test wallet's signer for a recording's signed reads, when its key is set (record.mts, nav-walk.mts --fill). */
+export function testWalletSigner(): ((method: string, path: string, metadata: string) => Promise<Record<string, string>>) | undefined {
+  if (!process.env[WALLET_KEY_ENV]) return undefined;
+  const key = walletKey();
+  return (method, path, metadata) => signedHeaders(key, method, path, Date.now(), metadata);
+}
 
 export type SharedIdentity = {
   ephemeralIdentity: { address: string; publicKey: string; privateKey: string };

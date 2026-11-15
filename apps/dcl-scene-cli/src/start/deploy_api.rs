@@ -2,10 +2,13 @@
 //! serves so a program driving the deploy (the Creator Hub, a script) needs
 //! no page: `POST /api/deploy` signs and starts, `GET` follows it (JSON, or
 //! server-sent events), `DELETE` cancels it with the run's deploy token.
-//! `/api/info` and `/api/files` describe what is about to be signed.
+//! `/api/info` and `/api/files` describe what is about to be signed;
+//! `/api/catalyst-pointers` tells what the servers have at the base parcel.
 
 use super::AppState;
 use super::deploy_page::{cli_signer, signing_blocked};
+use super::deploy_status::{ProbeFail, fetch_json, status_client};
+use crate::deploy::host_of;
 use crate::linker::{self, CancelOutcome, DeploymentState, LinkerState, SignOutcome, Signed};
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
@@ -159,6 +162,72 @@ pub(super) async fn files(
         .map(|(name, _, bytes)| json!({ "name": name, "size": bytes.len() }))
         .collect();
     Json(files).into_response()
+}
+
+/// The servers `/api/catalyst-pointers` asks, as (the `url` of the answer,
+/// the content URL). The content server of the run alone; when that server
+/// is a member of the catalyst rotation, every member.
+fn pointer_servers(target_content: &str, rotation: &[String]) -> Vec<(String, String)> {
+    let target = target_content.trim_end_matches('/');
+    let same_host = |base: &String| host_of(base) == host_of(target);
+    if !rotation.iter().any(same_host) {
+        return vec![(target.to_string(), target.to_string())];
+    }
+    rotation
+        .iter()
+        .map(|base| match same_host(base) {
+            true => (base.clone(), target.to_string()),
+            false => (base.clone(), format!("{base}/content")),
+        })
+        .collect()
+}
+
+/// `GET /api/catalyst-pointers`: the entity each server has at the base
+/// parcel, in the shape upstream answers, so a program can see the
+/// deployment reach the servers. A server that gives no readable answer is
+/// left out; one that answers with a failure, or has no entity there, has an
+/// empty `entityId` and no `timestamp`. The route makes this machine ask
+/// other servers, so a page of another origin is refused.
+pub(super) async fn catalyst_pointers(
+    State(st): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(blocked) = reading_blocked(&st, peer, &headers) {
+        return blocked;
+    }
+    if let Some(why) = super::cross_origin_refusal(&headers) {
+        return message(StatusCode::FORBIDDEN, why);
+    }
+    let Some(signer) = cli_signer(&st) else {
+        return no_pending();
+    };
+    let dep = signer.dep();
+    let servers = pointer_servers(&dep.target_content, &crate::deploy::catalyst_rotation());
+    let asked = servers.into_iter().map(|(url, content)| async move {
+        let req = status_client()
+            .post(format!("{content}/entities/active"))
+            .json(&json!({ "pointers": [dep.base_parcel] }));
+        let first = match fetch_json::<Vec<Value>>(req).await {
+            Ok(entities) => entities.into_iter().next(),
+            Err(ProbeFail::Http(_)) => None,
+            Err(ProbeFail::Unreachable | ProbeFail::Unreadable) => return None,
+        };
+        let mut answer = serde_json::Map::new();
+        if let Some(timestamp) = first.as_ref().and_then(|e| e.get("timestamp")) {
+            answer.insert("timestamp".into(), timestamp.clone());
+        }
+        let id = first.as_ref().and_then(|e| e.get("id")?.as_str());
+        answer.insert("entityId".into(), id.unwrap_or_default().into());
+        answer.insert("url".into(), url.into());
+        Some(Value::Object(answer))
+    });
+    let catalysts: Vec<Value> = futures::future::join_all(asked)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+    Json(json!({ "catalysts": catalysts })).into_response()
 }
 
 /// `GET /api/deploy`: the state as JSON, or every change as server-sent
@@ -441,6 +510,7 @@ mod tests {
             get(State(st.clone()), ConnectInfo(LOCAL), HeaderMap::new()).await,
             info(State(st.clone()), ConnectInfo(LOCAL), HeaderMap::new()).await,
             files(State(st.clone()), ConnectInfo(LOCAL), HeaderMap::new()).await,
+            catalyst_pointers(State(st.clone()), ConnectInfo(LOCAL), HeaderMap::new()).await,
             cancel(State(st.clone()), with(&[(TOKEN_HEADER, TOKEN)])).await,
             post(
                 State(st.clone()),
@@ -518,6 +588,7 @@ mod tests {
                 get(State(st.clone()), ConnectInfo(peer), headers.clone()).await,
                 info(State(st.clone()), ConnectInfo(peer), headers.clone()).await,
                 files(State(st.clone()), ConnectInfo(peer), headers.clone()).await,
+                catalyst_pointers(State(st.clone()), ConnectInfo(peer), headers.clone()).await,
             ] {
                 assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{peer} {headers:?}");
             }
@@ -534,6 +605,34 @@ mod tests {
         let lan = with(&[("host", "10.0.0.5:8000")]);
         let resp = info(State(open), ConnectInfo(LAN), lan).await;
         assert_eq!(resp.status(), StatusCode::OK, "remote deploys are open");
+    }
+
+    /// The pointers route makes this machine ask other servers, so it has
+    /// the same-origin rule of the signing routes: a page of another site
+    /// gets a 403, the preview's own page an answer.
+    #[tokio::test]
+    async fn the_pointers_route_refuses_a_page_of_another_origin() {
+        let (target, _requests) = pointer_server(StatusCode::OK, json!([])).await;
+        let (_tmp, st) = app("api-pointers-origin");
+        adopt_cli_signing(&st, signer_to(None, &target));
+        let ask = |name: &'static str, value: &str| {
+            let headers = with(&[("host", "localhost:8000"), (name, value)]);
+            catalyst_pointers(State(st.clone()), ConnectInfo(LOCAL), headers)
+        };
+        for (name, value) in [
+            ("origin", "http://evil.example"),
+            ("origin", "http://localhost:9000"),
+            ("sec-fetch-site", "cross-site"),
+        ] {
+            let resp = ask(name, value).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{name}: {value}");
+            assert_eq!(
+                json_of(resp).await["message"],
+                "this request did not come from the preview's own page"
+            );
+        }
+        let own = ask("origin", "http://localhost:8000").await;
+        assert_eq!(own.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -663,6 +762,110 @@ mod tests {
             late.status(),
             StatusCode::CONFLICT,
             "nothing starts after a cancel"
+        );
+    }
+
+    /// A content server that answers `/entities/active` with `status` and
+    /// `body`, and sends each request body it gets.
+    async fn pointer_server(
+        status: StatusCode,
+        body: Value,
+    ) -> (String, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+        let (seen, requests) = tokio::sync::mpsc::unbounded_channel();
+        let app = axum::Router::new().route(
+            "/entities/active",
+            axum::routing::post(move |Json(request): Json<Value>| {
+                let _ = seen.send(request);
+                let body = body.clone();
+                async move { (status, Json(body)) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        (target, requests)
+    }
+
+    async fn pointers_of(target: &str) -> Value {
+        let (_tmp, st) = app("api-pointers");
+        adopt_cli_signing(&st, signer_to(None, target));
+        let resp = catalyst_pointers(State(st), ConnectInfo(LOCAL), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        json_of(resp).await
+    }
+
+    #[tokio::test]
+    async fn the_pointers_route_tells_the_entity_at_the_base_parcel() {
+        let entity =
+            json!([{ "id": "bafkreiold", "timestamp": 1700000000000u64, "pointers": ["0,0"] }]);
+        let (target, mut requests) = pointer_server(StatusCode::OK, entity).await;
+        assert_eq!(
+            pointers_of(&format!("{target}/")).await,
+            json!({ "catalysts": [
+                { "timestamp": 1700000000000u64, "entityId": "bafkreiold", "url": target }
+            ] })
+        );
+        assert_eq!(
+            requests.recv().await.unwrap(),
+            json!({ "pointers": ["0,0"] }),
+            "the server is asked for the base parcel"
+        );
+
+        let (empty, _requests) = pointer_server(StatusCode::OK, json!([])).await;
+        assert_eq!(
+            pointers_of(&empty).await,
+            json!({ "catalysts": [{ "entityId": "", "url": empty }] }),
+            "no entity at the parcel"
+        );
+        let (failing, _requests) =
+            pointer_server(StatusCode::INTERNAL_SERVER_ERROR, json!({})).await;
+        assert_eq!(
+            pointers_of(&failing).await,
+            json!({ "catalysts": [{ "entityId": "", "url": failing }] }),
+            "a failure answer"
+        );
+        let (unreadable, _requests) = pointer_server(StatusCode::OK, json!("no list")).await;
+        assert_eq!(
+            pointers_of(&unreadable).await,
+            json!({ "catalysts": [] }),
+            "an answer that is not a list of entities"
+        );
+        let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed = format!("http://{}", gone.local_addr().unwrap());
+        drop(gone);
+        assert_eq!(
+            pointers_of(&closed).await,
+            json!({ "catalysts": [] }),
+            "a server that does not answer is left out"
+        );
+    }
+
+    #[test]
+    fn the_pointers_route_asks_the_rotation_for_a_target_in_it() {
+        let rotation = [
+            "https://one.example".to_string(),
+            "https://two.example".to_string(),
+        ];
+        assert_eq!(
+            pointer_servers("https://two.example/content/", &rotation),
+            [
+                (
+                    "https://one.example".to_string(),
+                    "https://one.example/content".to_string()
+                ),
+                (
+                    "https://two.example".to_string(),
+                    "https://two.example/content".to_string()
+                ),
+            ]
+        );
+        assert_eq!(
+            pointer_servers("http://127.0.0.1:9", &rotation),
+            [(
+                "http://127.0.0.1:9".to_string(),
+                "http://127.0.0.1:9".to_string()
+            )],
+            "another target is asked alone"
         );
     }
 

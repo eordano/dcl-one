@@ -8,7 +8,7 @@
 //! instead of killing the CLI.
 
 use crate::deploy::{caused, read_server_message, refusal};
-use crate::linker::{LinkerOptions, finish, fmt_wait, linker_bind_host, spawn_browser};
+use crate::linker::{LinkerOptions, finish, fmt_wait, signing_bind, spawn_browser};
 use crate::ux::{self, TrySteps, UserError};
 use crate::world::{WorldAction, browser_headers, signed_fetch_payload_meta};
 use anyhow::{Context, Result};
@@ -275,9 +275,10 @@ pub(crate) async fn serve(
     summary: &str,
     opts: LinkerOptions,
 ) -> Result<String> {
-    let bind_host = linker_bind_host();
-    let loopback = bind_host == "127.0.0.1";
-    let listener = tokio::net::TcpListener::bind((bind_host.as_str(), opts.port.unwrap_or(0)))
+    // The same reading of DCL_SCENE_CLI_LINKER_HOST as `deploy`; these
+    // commands have no `--host`.
+    let signing = signing_bind(None)?;
+    let listener = tokio::net::TcpListener::bind((signing.addr, opts.port.unwrap_or(0)))
         .await
         .map_err(caused(
             match opts.port {
@@ -286,19 +287,16 @@ pub(crate) async fn serve(
             },
             TrySteps::one("pass --port <free-port> or free the port and retry"),
         ))?;
-    let port = listener
+    let bound = listener
         .local_addr()
-        .context("reading the signing page port")?
-        .port();
-    let url = format!("http://localhost:{port}/");
+        .context("reading the signing page port")?;
+    let url = format!("{}/", crate::start::signing_origin(bound));
     println!();
     println!("Sign this change to {world} with your wallet in a browser:");
     println!("  {url}");
     ux::note(format!("the wallet must be allowed to {summary}"));
-    if loopback {
-        ux::note("to sign from another device, re-run with DCL_SCENE_CLI_LINKER_HOST=0.0.0.0");
-    } else {
-        ux::note("from another device, replace localhost with this machine's address");
+    if let Some(note) = signing.other_device_note() {
+        ux::note(note);
     }
     if opts.open_browser {
         spawn_browser(&url);
@@ -430,8 +428,40 @@ mod tests {
         crate::world_access::assert_built_from_ui3(super::PAGE, &["btn btn--primary btn--lg"]);
     }
 
+    /// The signing page reads `DCL_SCENE_CLI_LINKER_HOST` as `deploy` does:
+    /// a value that is not an IP address stops the command before a port
+    /// opens.
+    #[tokio::test]
+    async fn the_signing_page_reads_the_variable_as_deploy_does() {
+        let _env = crate::deploy::ENV_LOCK.lock().await;
+        crate::set_test_env("DCL_SCENE_CLI_LINKER_HOST", "not-an-address");
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+        let served = super::serve(
+            axum::Router::new(),
+            rx,
+            "example.dcl.eth",
+            "publish",
+            crate::linker::LinkerOptions {
+                port: None,
+                open_browser: false,
+                timeout: std::time::Duration::from_secs(5),
+                programmatic: false,
+                host: None,
+            },
+        )
+        .await;
+        crate::remove_test_env("DCL_SCENE_CLI_LINKER_HOST");
+        let err = format!("{:#}", served.unwrap_err());
+        assert!(
+            err.contains("DCL_SCENE_CLI_LINKER_HOST is not an IP address: not-an-address"),
+            "{err}"
+        );
+    }
+
     #[tokio::test]
     async fn standalone_signing_drains_the_response_before_returning() {
+        let _env = crate::deploy::ENV_LOCK.lock().await;
+        crate::remove_test_env("DCL_SCENE_CLI_LINKER_HOST");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);

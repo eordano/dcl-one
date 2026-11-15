@@ -4,27 +4,21 @@
 //
 //   node record.mts --set <name> [--pages overview,items] [--viewports desktop,mobile]
 //   node record.mts --set <name> --fill     # replay; read what the replay could not answer, once
-import { runnable, signedHeaders, walletKey, WALLET_KEY_ENV } from "./lib/session.mts";
+import { runnable, testWalletSigner } from "./lib/session.mts";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import type { Page } from "playwright-core";
 import { join } from "node:path";
-import { PAGES, type PageSpec } from "./pages.mts";
+import { PAGES } from "./pages.mts";
 import { offerSynthesizer } from "./lib/offers.mts";
-import { RECORDINGS, referencePin, ROOT, STATE } from "./lib/paths.mts";
+import { arg } from "./lib/env.mts";
+import { RECORDINGS, REFERENCE_IDS, referencePin, ROOT, SITES, STATE } from "./lib/paths.mts";
+import { referenceOf, type PageSpec } from "./lib/spec.mts";
 import { fillMisses, Recording, savingAfter } from "./lib/recording.mts";
-import { runAll, selectViewports } from "./lib/run.mts";
+import { captureSide } from "./lib/capture.mts";
+import { runAll, SEED, selectViewports } from "./lib/run.mts";
 import { prepareReference } from "./reference.mts";
 
-/** The test wallet's signer for the pages that read signed in, when its key is set. */
-function testWalletSigner() {
-  if (!process.env[WALLET_KEY_ENV]) return undefined;
-  const key = walletKey();
-  return (method: string, path: string, metadata: string) => signedHeaders(key, method, path, Date.now(), metadata);
-}
-
-const arg = (name: string) => {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-};
 const set = arg("--set");
 if (!set || !/^[a-z0-9-]+$/.test(set)) throw new Error("--set <name> (lowercase, digits, dashes) is required");
 const dir = join(RECORDINGS, set);
@@ -42,7 +36,9 @@ if (process.argv.includes("--fill")) {
     process.exitCode = 1;
   }
 } else {
-  prepareReference();
+  for (const reference of new Set(specs.map(referenceOf))) prepareReference({ reference });
+  // Checked before the set is opened: a run that cannot start must not mark a shared set incomplete.
+  if (!existsSync(join(SITES, "build", "server", "index.js"))) throw new Error("apps/sites is not built: run capture.mts --build (or `pnpm build` in apps/sites) first");
   const live = new Recording(dir, { live: true, signer: testWalletSigner() });
   live.synthesize = offerSynthesizer(live);
   const targets: Record<string, string> = { ...(live.manifest?.targets ?? {}) };
@@ -50,27 +46,34 @@ if (process.argv.includes("--fill")) {
   let current: PageSpec | null = null;
   /** The targets a discover found in this run, on any viewport. */
   const found = new Set<string>();
+  // targets starts from the previous manifest. discover runs once per viewport (or once per page with discoverAt):
+  // a target one of them found in this run stays, and one that a discover reports as not found, with none finding
+  // it, is dropped rather than kept from the previous set.
+  const discoverInto = async (spec: PageSpec, page: Page) => {
+    for (const [key, value] of Object.entries(await spec.discover!(page, targets))) {
+      if (value != null) {
+        targets[key] = value;
+        found.add(key);
+      } else if (!found.has(key)) delete targets[key];
+    }
+  };
   const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim();
   const run = () =>
     runAll(live, specs, selectViewports(arg("--viewports")), {
       now,
       targets,
       out: join(STATE, "record-run", set),
-      beforePage: async (spec) => {
+      beforePage: async (spec, browser, servers) => {
         current = spec;
+        if (!spec.discover || !spec.discoverAt) return;
+        // The page's path needs what discover finds: it reads the reference's discoverAt page first, in the
+        // page's own context (session, init), through the same recording.
+        const vp = selectViewports(arg("--viewports"))[0]!;
+        const at: PageSpec = { ...spec, path: spec.discoverAt, ready: { reference: "body", "dcl-one": "body" }, keys: [], masks: [], regions: [], setup: undefined, maxHeight: 1 };
+        await captureSide(browser, at, vp, "reference", { origin: servers.origin("reference", referenceOf(spec)), recording: live, now, seed: SEED, targets, onPage: (page) => discoverInto(spec, page) });
       },
       onPage: async (side, page) => {
-        if (side === "reference" && current?.discover) {
-          // targets starts from the previous manifest. discover runs once per viewport: a target one of them found
-          // in this run stays, and one that a discover reports as not found, with no viewport finding it, is dropped
-          // rather than kept from the previous set.
-          for (const [key, value] of Object.entries(await current.discover(page, targets))) {
-            if (value != null) {
-              targets[key] = value;
-              found.add(key);
-            } else if (!found.has(key)) delete targets[key];
-          }
-        }
+        if (side === "reference" && current?.discover && !current.discoverAt) await discoverInto(current, page);
       },
       onResult: (r) => {
         console.log(`recorded ${r.page}@${r.viewport}: ${r.sides.reference.error ?? "reference ok"}, ${r.sides["dcl-one"].error ?? "dcl-one ok"}`);
@@ -84,8 +87,9 @@ if (process.argv.includes("--fill")) {
   const { results } = await savingAfter(live, run, () => ({
     set,
     recordedAt: new Date(now).toISOString(),
-    source: "production Decentraland services, read-only, through the pinned reference shop and the dcl-one UI",
-    reference: referencePin().revision,
+    source: "production Decentraland services, read-only, through the pinned references (shop, sites) and the dcl-one UI",
+    reference: referencePin("shop").revision,
+    references: Object.fromEntries(REFERENCE_IDS.map((r) => [r, referencePin(r).revision])),
     dclOne: commit,
     targets,
   }));

@@ -130,7 +130,7 @@ function nameByShared(refNodes: Node[], oneNodes: Node[], refTexts: Node[], oneT
 
 const near = (a?: Box, b?: Box) => !!a && !!b && Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1;
 
-export function compareStructure(ref: Collected, one: Collected, opts: { tolerance?: number; expected?: Expectation[] } = {}): StructDiff[] {
+export function compareStructure(ref: Collected, one: Collected, opts: { tolerance?: number; expected?: Expectation[]; keys?: string[] } = {}): StructDiff[] {
   const tol = opts.tolerance ?? 1;
   const keyRef = ref.nodes.filter((n) => n.id.startsWith("key:"));
   const keyOne = one.nodes.filter((n) => n.id.startsWith("key:"));
@@ -164,6 +164,12 @@ export function compareStructure(ref: Collected, one: Collected, opts: { toleran
     const hit = (opts.expected ?? []).find((e) => e.match.test(d.id) && (!e.status || e.status === d.status) && (!e.only || (d.changes.length > 0 && d.changes.every((c) => e.only!.some((w) => c === w || c.startsWith(`${w} `))))));
     if (hit) d.expected = hit.why;
   }
+  // A declared key found on neither side compares nothing: report it, so a declaration cannot target nothing silently;
+  // no expectation covers it.
+  // A key below maxHeight was found, then left out of the comparison: not missing.
+  const ids = [...keyRef.map((n) => n.id), ...keyOne.map((n) => n.id), ...(ref.clipped ?? []), ...(one.clipped ?? [])];
+  const found = (name: string) => ids.some((id) => id === `key:${name}` || id.startsWith(`key:${name}#`));
+  for (const name of opts.keys ?? []) if (!found(name)) diffs.push({ id: `key:${name}`, kind: "key", status: "changed", changes: ["found on neither side"] });
   return diffs.sort((a, b) => (a.ref?.y ?? a.one?.y ?? -1) - (b.ref?.y ?? b.one?.y ?? -1) || (a.ref?.x ?? a.one?.x ?? 0) - (b.ref?.x ?? b.one?.x ?? 0));
 }
 

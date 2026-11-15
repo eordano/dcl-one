@@ -2,6 +2,11 @@
 // memory, and the kill escalation. The page functions `spawn_and_init_sandbox` and
 // `terminate_sandbox` (crates/dcl_wasm) are `spawn` and `terminate` of the host made here.
 
+import { createSceneRoutes } from "./scene_fetch.js";
+
+// the node's routing map for the scenes' third-party requests, read once for every worker
+const sceneRoutes = createSceneRoutes(self.fetch.bind(self));
+
 // the scene runtime every sandbox worker runs its scene on, compiled once for all of them; a
 // failed fetch or compile isn't kept, so the next spawn tries again
 let sceneRuntimeModule;
@@ -117,6 +122,7 @@ export function createSandboxHost({ compiledModule, sharedMemory, bridgeSession,
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
+    const routes = await sceneRoutes();
     var timeoutId;
     return new Promise((resolve, _reject) => {
       // The BUNDLE, not sandbox_worker.js. Scene code shares this worker's realm, and any
@@ -167,6 +173,7 @@ export function createSandboxHost({ compiledModule, sharedMemory, bridgeSession,
             killToken,
             shutdownToken,
             sceneModule,
+            sceneRoutes: routes,
           },
         });
         let warnedForgery = false;

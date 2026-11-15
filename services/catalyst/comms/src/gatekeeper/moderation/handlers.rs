@@ -641,7 +641,7 @@ impl SchemaValidate for WarnPlayerBody {
     }
 }
 
-pub(super) fn moderator_creds(state: &CommsState) -> ModeratorCredentials<'_> {
+pub(in crate::gatekeeper) fn moderator_creds(state: &CommsState) -> ModeratorCredentials<'_> {
     ModeratorCredentials {
         token: state.settings.moderator_token.as_deref(),
         addresses: &state.settings.moderator_addresses,

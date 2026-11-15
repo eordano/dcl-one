@@ -6,6 +6,10 @@ let
   manifest = builtins.fromTOML (builtins.readFile (backend + /Cargo.toml));
   # The domain crates beside src/; the library and SDK members are listed below.
   crates = map (m: backend + "/${m}") (lib.filter (m: !lib.hasPrefix "../" m) manifest.workspace.members);
+  library = root + /library;
+  # The workspace member glob `../../library/dcl-*`.
+  libraryCrates = map (name: library + "/${name}") (builtins.attrNames
+    (lib.filterAttrs (name: type: type == "directory" && lib.hasPrefix "dcl-" name) (builtins.readDir library)));
   src = lib.fileset.toSource {
     inherit root;
     fileset = lib.fileset.unions ([
@@ -17,9 +21,14 @@ let
       (root + /apps/ui3/public/assets/event-default.webp)
       (root + /apps/dcl-scene-cli/Cargo.toml)
       (root + /apps/dcl-scene-cli/src/main.rs)
-      (root + /library)
+      # All that the build reads under library/, beside the crates. A change to any other library
+      # file keeps this derivation, so the image job does not compile the backend again. A new
+      # compile-time read of another library file fails this build: add its path here.
+      (library + /vendor/rusty_enet)
+      (library + /protocol/proto)
+      (lib.fileset.fileFilter (file: file.hasExt "json") (library + /catalyst-api/openapi))
       (root + /.cargo/config.toml)
-    ] ++ crates);
+    ] ++ crates ++ libraryCrates);
   };
   common = {
     inherit src;

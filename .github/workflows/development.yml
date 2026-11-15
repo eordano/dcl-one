@@ -69,7 +69,8 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-15"]') }}
-        # Each shard compiles the tests and runs every third test executable.
+        # Each shard compiles the tests and runs every third test executable. One shard also runs the
+        # provisioned Archipelago tests, which take a fixed time (CATALYST_TEST_PROVISIONED_SHARD).
         shard: [1, 2, 3]
     runs-on: ${{ matrix.os == 'ubuntu-26.04' && (vars.RUNNER_LINUX_X86 || 'ubuntu-26.04')
       || matrix.os == 'macos-15' && (vars.RUNNER_MACOS || 'macos-15')
@@ -77,6 +78,7 @@ jobs:
     timeout-minutes: 100
     env:
       CATALYST_TEST_SHARD: ${{ matrix.shard }}/3
+      CATALYST_TEST_PROVISIONED_SHARD: '2'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
       FOUNDATION_DEV_STARTUP_TIMEOUT: '120'

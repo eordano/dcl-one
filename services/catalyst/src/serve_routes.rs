@@ -65,6 +65,7 @@ pub(super) struct Routes<'a> {
     pub(super) social: &'a social::States,
     pub(super) builder: builder::SharedState,
     pub(super) camera_reel: camera_reel::SharedState,
+    pub(super) scene_proxy: crate::scene_proxy::Shared,
     pub(super) ops_admin: ops::admin::SharedState,
     pub(super) snapshot_gen: Option<Arc<content::snapshot_gen::SnapshotGenerator>>,
 }
@@ -97,6 +98,7 @@ pub(super) fn build_routes(
         social,
         builder,
         camera_reel,
+        scene_proxy,
         ops_admin,
         snapshot_gen,
     } = routes;
@@ -129,6 +131,7 @@ pub(super) fn build_routes(
     );
     let statistics = archipelago.statistics.clone();
     let blobs = content.clone();
+    let report_storage = blobs.storage.clone();
     let app = content::build_router(content)
         .merge(shop::market::router(market.clone()))
         .nest(
@@ -174,6 +177,8 @@ pub(super) fn build_routes(
             axum::Router::new()
         })
         .merge(explore::api::router(explorer_api))
+        // The scene workers' routing map and proxy (`scene_proxy`).
+        .nest("/_scene", crate::scene_proxy::router(scene_proxy))
         // The gatekeeper's mounts, where `social::router` held them: the Pulse
         // room authority, the world comms mints and the LiveKit webhook (the
         // worlds content server's root path) at the root, the mints and the
@@ -208,7 +213,16 @@ pub(super) fn build_routes(
         .merge(social::router(social, config.writes.social_writes_enabled))
         .merge(builder::root_router(builder.clone()))
         .nest("/builder-api", builder::router(builder))
-        .nest("/camera-reel-service", camera_reel::router(camera_reel));
+        .nest("/camera-reel-service", camera_reel::router(camera_reel))
+        // The player report intake (`gatekeeper::reports`). Reports and their
+        // evidence are social rows and blobs, so the social writes switch gates them.
+        .nest(
+            "/report-user",
+            social::writes::guard(
+                comms::gatekeeper::reports::router(gatekeeper.clone(), report_storage),
+                config.writes.social_writes_enabled,
+            ),
+        );
     // The operator plane under the old gateway's prefixes: credits under
     // /credits only (its /users, /cart and /checkout would collide at the root; the
     // handlers verify a signed fetch over the request path or a matching

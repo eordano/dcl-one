@@ -1,0 +1,31 @@
+/* sites@17b3535a LandingNavbar.styled.ts CreditsChip: the bar's 14px text, the mark at 16px.
+   Font weight and line-height have no token; the text styles do not match (line-height 1.5, not 1). */
+@layer dcl.components {
+  .root {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: var(--dcl-space-4);
+    flex-shrink: 0;
+    color: var(--dcl-neutrals-white);
+    font-size: var(--dcl-font-size-body-sm);
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .root:hover {
+    opacity: 0.8;
+  }
+
+  .root:focus-visible {
+    outline: 2px solid var(--dcl-primary-primary);
+    outline-offset: 2px;
+  }
+
+  .root svg {
+    flex-shrink: 0;
+  }
+}

@@ -88,8 +88,8 @@ pub(super) async fn data_layer_ws(State(st): State<Arc<AppState>>, req: Request)
     let Some(dl) = st.data_layer.clone() else {
         return editor_disabled();
     };
-    let port = *dl.port_rx.borrow();
-    if port == 0 {
+    let host = dl.host_rx.borrow().clone();
+    if host.port == 0 {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "the data layer is restarting \u{2014} retry in a moment",
@@ -103,16 +103,15 @@ pub(super) async fn data_layer_ws(State(st): State<Arc<AppState>>, req: Request)
     )
     .await
     {
-        Ok(upgrade) => upgrade.on_upgrade(move |socket| proxy_data_layer(socket, port)),
+        Ok(upgrade) => upgrade.on_upgrade(move |socket| proxy_data_layer(socket, host)),
         Err(e) => e.into_response(),
     }
 }
 
-async fn proxy_data_layer(client: axum::extract::ws::WebSocket, port: u16) {
+async fn proxy_data_layer(client: axum::extract::ws::WebSocket, host: data_layer::Host) {
     use tokio_tungstenite::tungstenite::Message as TgMessage;
-    let url = format!("ws://127.0.0.1:{port}/");
-    let upstream = match tokio_tungstenite::connect_async(&url).await {
-        Ok((socket, _)) => socket,
+    let upstream = match host.connect().await {
+        Ok(socket) => socket,
         Err(e) => {
             tracing::warn!("data-layer upstream connect failed: {e}");
             return;

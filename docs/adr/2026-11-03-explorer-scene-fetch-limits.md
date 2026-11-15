@@ -30,3 +30,8 @@ engine-imposed deadline. The slot is released at headers, when the caller takes
 ownership of the response stream. An open body can still occupy a browser
 connection. Other browser facilities, such as module imports, use the browser's
 own scheduling.
+
+A browser request to a host that the node's scene proxy forwards meets that
+proxy's limits: a 20-second deadline for the whole answer, a 1 MiB request body
+and a 32 MiB answer ([ADR](2026-11-14-scene-proxy.md)). A native scene calls the
+same host directly and meets none of them.

@@ -1,0 +1,19 @@
+/* Figma: Tabs bar / TabsBar. The pill variant follows decentraland.org's events tab row (ExperiencesTabs). */
+@layer dcl.components {
+  .root {
+    display: flex;
+    align-items: center;
+  }
+
+  .underline {
+    gap: 50px;
+    padding: var(--dcl-space-0) var(--dcl-space-64);
+    background: var(--dcl-transparencies-black-20);
+    box-shadow: inset 0 -1px 0 0 var(--dcl-transparencies-white-20);
+  }
+
+  .pill {
+    flex-wrap: wrap;
+    gap: var(--dcl-space-16);
+  }
+}

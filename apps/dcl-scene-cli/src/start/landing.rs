@@ -129,7 +129,7 @@ pub(super) fn page(st: &AppState, headers: &HeaderMap, query: Option<&str>) -> R
         &prefix,
         &mobile_realm,
         lan_realm.as_deref(),
-        &knobs(query, &names),
+        &knobs(query, &names, &st.link_defaults),
         super::page_token(st, headers),
     ))
 }

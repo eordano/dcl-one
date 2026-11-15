@@ -10,5 +10,29 @@
     "check": "url",
     "id": "tsyaDSedcsVZ8iM9N0McT2",
     "reason": "Public Figma file linked from vendored docs.decentraland.org content (gen-docs-content); predates the guard. Pins this file id only: any other Figma URL in this path still fails."
+  },
+  {
+    "path": "apps/sites/content/docs/contributor/contributor-es/guias-para-colaboradores/estandares-de-ui-web/process-overview/index.md",
+    "check": "url",
+    "id": "tsyaDSedcsVZ8iM9N0McT2",
+    "reason": "The es translation of the contributor process overview, vendored from docs.decentraland.org (gen-docs-content --capture); it links the same public Figma file. Pins this file id only: any other Figma URL in this path still fails."
+  },
+  {
+    "path": "apps/sites/content/docs/contributor/contributor-ko/contributor-guides/ui-1/process-overview/index.md",
+    "check": "url",
+    "id": "tsyaDSedcsVZ8iM9N0McT2",
+    "reason": "The ko translation of the contributor process overview, vendored from docs.decentraland.org (gen-docs-content --capture); it links the same public Figma file. Pins this file id only: any other Figma URL in this path still fails."
+  },
+  {
+    "path": "apps/sites/content/docs/contributor/contributor-pt/guias-para-colaboradores/padroes-de-web-ui/process-overview/index.md",
+    "check": "url",
+    "id": "tsyaDSedcsVZ8iM9N0McT2",
+    "reason": "The pt translation of the contributor process overview, vendored from docs.decentraland.org (gen-docs-content --capture); it links the same public Figma file. Pins this file id only: any other Figma URL in this path still fails."
+  },
+  {
+    "path": "apps/sites/content/docs/contributor/contributor-zh/gong-xian-zhe-zhi-nan/web-ui-biao-zhun/process-overview/index.md",
+    "check": "url",
+    "id": "tsyaDSedcsVZ8iM9N0McT2",
+    "reason": "The zh translation of the contributor process overview, vendored from docs.decentraland.org (gen-docs-content --capture); it links the same public Figma file. Pins this file id only: any other Figma URL in this path still fails."
   }
 ]

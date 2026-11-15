@@ -12,5 +12,5 @@ pub use stats::{scene_stats_sample, source_window_seconds, EmittedSceneStats};
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-pub use app::{assemble, config};
+pub use app::{assemble, config, scene_runtime_resources};
 pub use logs::{drain_scene_logs, scene_log_level, SceneLogReceivers};

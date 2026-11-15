@@ -1,0 +1,18 @@
+/* A section tab's menu entry in the site bar. Font weight and line-height inherit from the bar. */
+@layer dcl.components {
+  .root {
+    display: block;
+    padding: 9px var(--dcl-space-12);
+    border-radius: 7px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: var(--dcl-font-size-button-lg);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .root:hover,
+  .root:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--dcl-neutrals-white);
+  }
+}

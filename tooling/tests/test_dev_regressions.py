@@ -193,6 +193,7 @@ class InventoryTests(unittest.TestCase):
         required = {(entry["target"]["name"], entry["target"]["kind"][0]): [f"required_{index}"]
                     for index, entry in enumerate(artifacts) if entry["executable"] not in ("root-bin", "retry-lib", "engine-lib")}
         with mock.patch.object(guard, "MANDATORY_ARCHIPELAGO", required), \
+             mock.patch.dict(guard.os.environ, {}, clear=True), \
              mock.patch.object(guard, "external_prerequisites", return_value="nats"), \
              mock.patch.object(guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "nats fixture")), \
              mock.patch.object(guard, "run", return_value=output) as build, \
@@ -208,6 +209,7 @@ class InventoryTests(unittest.TestCase):
         for absent, kind in (("content", "lib"), ("root", "lib"), ("retry", "test"), ("engine", "test")):
             incomplete = "\n".join(json.dumps(entry) for entry in artifacts if entry["executable"] != absent)
             with self.subTest(absent=absent), mock.patch.object(guard, "MANDATORY_ARCHIPELAGO", required), \
+                 mock.patch.dict(guard.os.environ, {}, clear=True), \
                  mock.patch.object(guard, "external_prerequisites", return_value="nats"), \
                  mock.patch.object(guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "nats fixture")), \
                  mock.patch.object(guard, "run", return_value=incomplete), \
@@ -215,10 +217,70 @@ class InventoryTests(unittest.TestCase):
                  self.assertRaisesRegex(ValueError, f"missing provisioned {kind} target"):
                 guard.check_external()
             execute.assert_not_called()
-        with mock.patch.object(guard, "external_prerequisites", return_value="nats"), \
+        with mock.patch.dict(guard.os.environ, {}, clear=True), \
+             mock.patch.object(guard, "external_prerequisites", return_value="nats"), \
              mock.patch.object(guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "nats fixture")), \
              mock.patch.object(guard, "run", return_value=""), self.assertRaisesRegex(ValueError, "missing provisioned"):
             guard.check_external()
+
+    def test_one_shard_of_a_run_executes_the_provisioned_tests(self):
+        setting = guard.EXTERNAL_SHARD
+        self.assertEqual(guard.external_shard({}), (True, "1/1"))
+        self.assertEqual(guard.external_shard({"CATALYST_TEST_SHARD": "", setting: ""}), (True, "1/1"))
+        # A run without shards executes them whatever the workflow sets for its three shards.
+        for total in range(1, 6):
+            for chosen in range(1, total + 1):
+                owners = [guard.external_shard({"CATALYST_TEST_SHARD": f"{index}/{total}", setting: str(chosen)})
+                          for index in range(1, total + 1)]
+                self.assertEqual([index for index, (execute, _) in enumerate(owners, 1) if execute], [chosen])
+                self.assertEqual({owner for _, owner in owners}, {f"{chosen}/{total}"})
+            # Without the setting the first shard executes them.
+            self.assertEqual([guard.external_shard({"CATALYST_TEST_SHARD": f"{index}/{total}"})[0]
+                              for index in range(1, total + 1)], [True] + [False] * (total - 1))
+        for environment in [{"CATALYST_TEST_SHARD": "1/3", setting: "4"}, {"CATALYST_TEST_SHARD": "3/3", setting: "0"},
+                            {"CATALYST_TEST_SHARD": "2/3", setting: "2/3"}, {"CATALYST_TEST_SHARD": "1/3", setting: " 2"},
+                            {setting: "2"}, {"CATALYST_TEST_SHARD": "4/3", setting: "2"},
+                            {"CATALYST_TEST_SHARD": "0/3"}, {"CATALYST_TEST_SHARD": "2"}]:
+            with self.subTest(environment=environment), self.assertRaises(ValueError):
+                guard.external_shard(environment)
+
+    def test_the_other_shards_check_the_provisioned_tests_and_do_not_run_them(self):
+        import json
+        artifacts = [{"reason": "compiler-artifact", "executable": executable, "profile": {"test": True},
+                      "target": {"name": name, "kind": [kind]}}
+                     for executable, name, kind in [("unit", "catalyst_comms", "lib"), ("socket", "archipelago_socket_bounds", "test")]]
+        output = "\n".join(map(json.dumps, artifacts))
+        names = [entry[2] for entry in guard.EXTERNAL]
+
+        def check(environment, listed):
+            with mock.patch.object(guard, "MANDATORY_ARCHIPELAGO", {("catalyst_comms", "lib"): ["required"]}), \
+                 mock.patch.dict(guard.os.environ, environment, clear=True), \
+                 mock.patch.object(guard, "external_prerequisites", return_value="nats"), \
+                 mock.patch.object(guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "nats fixture")) as process, \
+                 mock.patch.object(guard, "run", side_effect=lambda command, *rest: output if command[0] == "cargo" else listed) as called, \
+                 mock.patch.object(guard, "check_executable") as mandatory, \
+                 mock.patch.object(guard, "run_external") as execute:
+                guard.check_external()
+            return called, mandatory, execute, process
+
+        listed = "".join(name + ": test\n" for name in names)
+        for shard in ("1/3", "3/3"):
+            called, mandatory, execute, process = check({"CATALYST_TEST_SHARD": shard, guard.EXTERNAL_SHARD: "2"}, listed)
+            execute.assert_not_called()
+            # Only the version probe of the broker starts a process; no test body runs.
+            self.assertEqual([call.args[0] for call in process.call_args_list], [["nats", "--version"]])
+            self.assertEqual(mandatory.call_count, 1)
+            self.assertEqual([call.args[0] for call in called.call_args_list[1:]],
+                             [[executable, "--list", *ignored, "--format", "terse"]
+                              for executable in ("unit", "socket", "socket") for ignored in ([], ["--ignored"])])
+        called, mandatory, execute, _ = check({"CATALYST_TEST_SHARD": "2/3", guard.EXTERNAL_SHARD: "2"}, listed)
+        self.assertEqual([call.args for call in execute.call_args_list], list(zip(("unit", "socket", "socket"), names)))
+        self.assertEqual(mandatory.call_count, 1)
+        # A shard that does not run the tests still fails when one is renamed or no longer ignored.
+        with self.assertRaisesRegex(ValueError, "absent/renamed or annotation changed"):
+            check({"CATALYST_TEST_SHARD": "1/3", guard.EXTERNAL_SHARD: "2"}, listed.replace(names[1], "renamed"))
+        with self.assertRaisesRegex(ValueError, guard.EXTERNAL_SHARD):
+            check({"CATALYST_TEST_SHARD": "1/3", guard.EXTERNAL_SHARD: "4"}, listed)
 
     def test_runtime_rejects_missing_filtered_or_conditional_external_checks(self):
         script = (ROOT / "tooling/dev-test.sh").read_text()

@@ -4,6 +4,7 @@ pub mod build;
 pub mod build_script;
 pub mod check_server;
 pub mod check_stamp;
+pub mod code_to_composite;
 pub mod comms;
 pub mod context_files;
 pub mod crdt_gen;

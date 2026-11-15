@@ -118,6 +118,11 @@ const fail = (error: Error) => {
 };
 const server = app.listen(Number(base.port), base.hostname, (error?: Error) => (error ? fail(error) : console.log(`sites preview: ${base.origin}`)));
 server.on("error", fail);
-for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(0));
+// Each stop names its cause, so a capture that loses its preview mid-run can tell which one it was.
+const stop = (why: string) => {
+  console.error(`sites preview: stopped (${why})`);
+  process.exit(0);
+};
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => stop(signal));
 // The capture that started this preview owns it: stop when its pipe closes.
-process.stdin.on("end", () => process.exit(0)).resume();
+process.stdin.on("end", () => stop("the capture's pipe closed")).resume();

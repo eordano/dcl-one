@@ -23,11 +23,24 @@ pub struct ExportStaticOptions {
     pub skip_build: bool,
 }
 
+/// One content file of an exported scene.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ContentFile {
+    /// The path in the scene, as the entity names it.
+    pub file: String,
+    /// The content hash: the name of the file in the destination.
+    pub hash: String,
+}
+
 #[derive(Debug)]
 pub struct Exported {
     pub scenes_urn: Vec<String>,
     pub entities: Vec<String>,
+    /// The content files of each entity, in the order of `entities`.
+    pub content_files: Vec<Vec<ContentFile>>,
     pub destination: PathBuf,
+    /// The realm `about` file, when `--realmName` wrote one.
+    pub about: Option<PathBuf>,
 }
 
 const DEFAULT_ADAPTER: &str = "offline:offline";
@@ -77,6 +90,7 @@ pub async fn export_static(opts: &ExportStaticOptions) -> Result<Exported> {
     let mut steps = ux::Steps::new(ws.projects.len() + usize::from(realm_name.is_some()));
     let mut scenes_urn = Vec::new();
     let mut entities = Vec::new();
+    let mut content_files = Vec::new();
     for (i, project) in ws.projects.iter().enumerate() {
         if let Some(header) = ws.member_header(i) {
             ux::note(header);
@@ -109,7 +123,14 @@ pub async fn export_static(opts: &ExportStaticOptions) -> Result<Exported> {
         ));
         scenes_urn.push(urn);
         entities.push(entity_id);
+        content_files.push(Vec::from_iter(prepared.files.iter().map(
+            |(file, hash, _)| ContentFile {
+                file: file.clone(),
+                hash: hash.clone(),
+            },
+        )));
     }
+    let mut about_file = None;
     if let Some(name) = realm_name {
         let adapter = opts
             .comms_adapter
@@ -124,6 +145,7 @@ pub async fn export_static(opts: &ExportStaticOptions) -> Result<Exported> {
         std::fs::write(&path, serde_json::to_vec_pretty(&about)?)
             .map_err(|e| ux::write_error(&path, e))?;
         steps.done(format!("Realm written {name}/about (comms {adapter})"));
+        about_file = Some(path);
     }
     ux::note(format!("Destination: {}", destination.display()));
     for urn in &scenes_urn {
@@ -132,7 +154,9 @@ pub async fn export_static(opts: &ExportStaticOptions) -> Result<Exported> {
     Ok(Exported {
         scenes_urn,
         entities,
+        content_files,
         destination,
+        about: about_file,
     })
 }
 

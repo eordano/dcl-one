@@ -3,52 +3,18 @@
 // (ui3 kept upstream's data-testid values), a few need a selector per side. Masks hide only what
 // cannot be equal between two renders (3D previews, live timers) and say why; expected entries
 // are deliberate differences, each with the rule (the repository's AGENTS.md) or code behind it.
+//
+// The Shop pages (reference.json) are declared here; the decentraland.org pages
+// (reference-sites.json) each in their own file under pages/sites/, aggregated at the end.
 import type { Page } from "playwright-core";
 import { waitUntil } from "../../library/async/index.ts";
 import { collectionOfItem, creatorOfProfile } from "./lib/discover.mts";
-import type { Expectation } from "./lib/structure.mts";
+import { both, signedIn, type Expectation, type KeyElement, type Mask, type PageSpec, type PerSide, type Region } from "./lib/spec.mts";
+import { NAV_SECTIONS, UP } from "./pages/sites/frame.mts";
+import { SITES_PAGES } from "./pages/sites/index.mts";
 
-
-export type Side = "reference" | "dcl-one";
-export type PerSide<T> = { reference: T; "dcl-one": T };
-
-export type KeyElement = { name: string; selector: string | PerSide<string>; max?: number };
-/** What cannot be equal between two renders, in a box both sides have at the same place: a pixel only one side masks still counts. */
-export type Mask = { selector: PerSide<string[]>; why: string };
-/** A deliberate difference's area: excluded from the pixel count, listed with its rule. */
-export type Region = { selector: PerSide<string[]>; why: string };
-
-export type PageSpec = {
-  id: string;
-  title: string;
-  /** The same path on both sides; a function reads targets discovered while recording. */
-  path: string | ((targets: Record<string, string>) => string);
-  /** Visible on each side once the page has rendered its content. */
-  ready: PerSide<string>;
-  /** Signed in as the test wallet ([`signIn`](lib/session.mts), SHOP_PARITY_WALLET_KEY) on both sides. */
-  signedIn?: boolean;
-  /** Interactions after the first render (both sides do the same thing). */
-  setup?: (page: Page, side: Side, targets: Record<string, string>) => Promise<void>;
-  /** While recording: read targets later pages need (from the reference). A null target was not found: the
-   *  recording drops it, so a page reading it refuses rather than compare the previous set's. */
-  discover?: (page: Page, targets: Readonly<Record<string, string>>) => Promise<Record<string, string | null>>;
-  keys: KeyElement[];
-  masks?: Mask[];
-  regions?: Region[];
-  /**
-   * Compare only the top of the page, in CSS px: an infinitely scrolling list is captured to a depth
-   * that never reaches its next-page trigger, so both sides show the same first page.
-   */
-  maxHeight?: number;
-  expected?: Expectation[];
-  /** Requests a page makes that the recording cannot hold, matched on `METHOD service path body`, with why. */
-  unrecorded?: { match: RegExp; why: string }[];
-};
-
-const both = (s: string): PerSide<string> => ({ reference: s, "dcl-one": s });
 const both1 = (s: string): PerSide<string[]> => ({ reference: [s], "dcl-one": [s] });
 
-const UP = "translate(normalize-space(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ')";
 /** An element by its visible words, case-insensitively (the same words on both sides). */
 const byText = (tag: string, text: string, scope = "//main") => `xpath=${scope}//${tag}[${UP}='${text.toUpperCase()}']`;
 /**
@@ -109,8 +75,8 @@ const panelOf = (text: string) => `xpath=//main//*[${UP}='${text.toUpperCase()}'
 
 /** The frame every Shop page shares: site nav, Shop subnav, footer. */
 const FRAME_KEYS: KeyElement[] = [
-  { name: "site-nav", selector: { reference: "xpath=//nav[.//*[normalize-space(text())='Discover']]", "dcl-one": "header.dtb" } },
-  { name: "site-nav.signin", selector: { reference: "xpath=//nav[.//*[normalize-space(text())='Discover']]//*[self::a or self::button][normalize-space()='SIGN IN' or normalize-space()='Sign In' or normalize-space()='Sign in']", "dcl-one": "header.dtb .dtb__signin" } },
+  { name: "site-nav", selector: { reference: "xpath=//nav[.//*[normalize-space(text())='Discover']]", "dcl-one": "header[aria-label='Decentraland']" } },
+  { name: "site-nav.signin", selector: { reference: "xpath=//nav[.//*[normalize-space(text())='Discover']]//*[self::a or self::button][normalize-space()='SIGN IN' or normalize-space()='Sign In' or normalize-space()='Sign in']", "dcl-one": "xpath=//header[@aria-label='Decentraland']//*[self::a or self::button][normalize-space()='SIGN IN' or normalize-space()='Sign In' or normalize-space()='Sign in']" } },
   { name: "subnav", selector: both("[data-testid=subnav]") },
   { name: "subnav.tabs", selector: both("[data-testid=subnav-tabs]") },
   { name: "subnav.tab", selector: both("[data-testid=subnav-tabs] a"), max: 4 },
@@ -127,7 +93,6 @@ const WEBGL: Mask = {
   why: "WebGL canvas (3D preview): its pixels differ between frames and renderers; the box it sits in is still compared structurally",
 };
 
-const NAV_SECTIONS = "the site nav links dcl-one's own sections: the landing page, What's On, /play, /shop, /create and /docs are one site (AGENTS.md, Scope)";
 
 const NO_MODELS =
   "3D models are not recorded (pictures are placeholders), so ui3's renderer shows its fallback notice inside the masked preview; the reference's preview iframe renders nothing there";
@@ -162,7 +127,7 @@ const NEWSLETTER_EMBED = { match: /^GET embeds\.beehiiv\.com\//, why: NEWSLETTER
 
 /** Only the section links: the bar's height, brand, sign-in button and colours are still compared. */
 const FRAME_REGIONS: Region[] = [
-  { selector: { reference: ["xpath=//nav[.//*[normalize-space(text())='Discover']]//*[normalize-space(text())='Discover']/ancestor::div[count(*)>=4][1]"], "dcl-one": ["header.dtb nav.dtb__links"] }, why: NAV_SECTIONS },
+  { selector: { reference: ["xpath=//nav[.//*[normalize-space(text())='Discover']]//*[normalize-space(text())='Discover']/ancestor::div[count(*)>=4][1]"], "dcl-one": ["header[aria-label='Decentraland'] nav > div > ul"] }, why: NAV_SECTIONS },
   { selector: { reference: ["footer iframe"], "dcl-one": ["[data-testid=shop-footer-newsletter]"] }, why: NEWSLETTER },
 ];
 
@@ -422,24 +387,6 @@ export const PAGES: PageSpec[] = [
   },
 ];
 
-/**
- * The same page signed in as the test wallet: the frame shows the account and its balances instead
- * of the sign-in button, and the cart its payment buttons. A signed-in page is its signed-out page's
- * path, interactions, masks and rules; only the sign-in key, which a session replaces, is dropped.
- */
-function signedIn(spec: PageSpec, title: string): PageSpec {
-  // Discovery stays with the signed-out page: a second pass would rewrite targets already recorded under
-  // them (the reference reshuffles Buy the Look on every visit).
-  const { discover: _discover, ...rest } = spec;
-  return {
-    ...rest,
-    id: `${spec.id}-signed-in`,
-    title,
-    signedIn: true,
-    keys: spec.keys.filter((k) => k.name !== "site-nav.signin"),
-  };
-}
-
 const byId = (id: string) => {
   const spec = PAGES.find((p) => p.id === id);
   if (!spec) throw new Error(`no page ${id}`);
@@ -560,6 +507,4 @@ PAGES.push(
   signedIn(byId("cart-two"), "Cart with two different items, signed in as the test wallet"),
 );
 
-export function pagePath(spec: PageSpec, targets: Record<string, string>): string {
-  return typeof spec.path === "function" ? spec.path(targets) : spec.path;
-}
+PAGES.push(...SITES_PAGES);

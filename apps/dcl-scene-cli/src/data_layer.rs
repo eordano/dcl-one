@@ -5,15 +5,41 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::sync::watch;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 const DRIVER_TEMPLATE: &str = include_str!("templates/data-layer-host.mjs");
+/// How the host gets the secret of its launch, and the header an upgrade to
+/// it carries the secret in (`admission` in the driver).
+const SECRET_ENV: &str = "DCL_SCENE_CLI_DATA_LAYER_SECRET";
+const SECRET_HEADER: &str = "x-dcl-data-layer-secret";
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const DUMP_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// A launch of the host: its loopback port (0 while it restarts) and the
+/// secret made for that launch, which only the relay sends.
+#[derive(Clone, Default)]
+pub struct Host {
+    pub port: u16,
+    secret: String,
+}
+
+impl Host {
+    /// The one connection the host admits: no `Origin`, the secret in a header.
+    pub async fn connect(&self) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+        let mut request = format!("ws://127.0.0.1:{}/", self.port).into_client_request()?;
+        request
+            .headers_mut()
+            .insert(SECRET_HEADER, self.secret.parse()?);
+        Ok(tokio_tungstenite::connect_async(request).await?.0)
+    }
+}
+
 #[derive(Clone)]
 pub struct DataLayerState {
-    pub port_rx: watch::Receiver<u16>,
+    pub host_rx: watch::Receiver<Host>,
     /// The editor's browser bundle, if installed. `None` is normal: the data
     /// layer still serves the protocol and 404s `/inspector/*`; treating it as
     /// fatal made the vendored host unreachable, since a real `@dcl/inspector`
@@ -137,13 +163,8 @@ pub fn inspector_mime(path: &Path) -> &'static str {
     }
 }
 
-pub fn write_driver(root: &Path) -> Result<PathBuf> {
-    let dir = crate::scene::work_dir(root)
-        .with_context(|| format!("creating {}", root.join(".dcl-one").display()))?;
-    let path = dir.join("data-layer-host.mjs");
-    std::fs::write(&path, DRIVER_TEMPLATE)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(path)
+fn write_driver(root: &Path) -> Result<PathBuf> {
+    crate::scene::write_driver(root, "data-layer-host.mjs", DRIVER_TEMPLATE)
 }
 
 fn node_for_data_layer() -> Result<PathBuf> {
@@ -156,14 +177,16 @@ fn node_for_data_layer() -> Result<PathBuf> {
 struct Driver {
     child: tokio::process::Child,
     _stdin: Option<tokio::process::ChildStdin>,
-    port: u16,
+    host: Host,
 }
 
 async fn launch(node: &Path, driver: &Path, root: &Path) -> Result<Driver> {
+    let secret = hex::encode(rand::random::<[u8; 32]>());
     let mut child = tokio::process::Command::new(node)
         .arg(driver)
         .arg(root)
         .arg("serve")
+        .env(SECRET_ENV, &secret)
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -214,7 +237,7 @@ async fn launch(node: &Path, driver: &Path, root: &Path) -> Result<Driver> {
         Ok(Some(port)) => Ok(Driver {
             child,
             _stdin: stdin,
-            port,
+            host: Host { port, secret },
         }),
         _ => {
             let _ = child.kill().await;
@@ -241,12 +264,12 @@ async fn launch(node: &Path, driver: &Path, root: &Path) -> Result<Driver> {
     }
 }
 
-pub async fn spawn(root: &Path) -> Result<watch::Receiver<u16>> {
+pub async fn spawn(root: &Path) -> Result<watch::Receiver<Host>> {
     let node = node_for_data_layer()?;
     let driver = write_driver(root)?;
     let mut current = launch(&node, &driver, root).await?;
-    let (tx, rx) = watch::channel(current.port);
-    tracing::info!("data-layer host ready on 127.0.0.1:{}", current.port);
+    let (tx, rx) = watch::channel(current.host.clone());
+    tracing::info!("data-layer host ready on 127.0.0.1:{}", current.host.port);
     let root = root.to_path_buf();
     tokio::spawn(async move {
         let mut backoff = Duration::from_secs(1);
@@ -256,7 +279,7 @@ pub async fn spawn(root: &Path) -> Result<watch::Receiver<u16>> {
             if tx.is_closed() {
                 return;
             }
-            let _ = tx.send(0);
+            let _ = tx.send(Host::default());
             ux::report_watch(
                 &UserError::new(
                     "the visual-editor data layer stopped \u{2014} restarting it",
@@ -280,10 +303,13 @@ pub async fn spawn(root: &Path) -> Result<watch::Receiver<u16>> {
                 match launch(&node, &driver, &root).await {
                     Ok(next) => {
                         current = next;
-                        if tx.send(current.port).is_err() {
+                        if tx.send(current.host.clone()).is_err() {
                             return;
                         }
-                        tracing::info!("data-layer host restarted on 127.0.0.1:{}", current.port);
+                        tracing::info!(
+                            "data-layer host restarted on 127.0.0.1:{}",
+                            current.host.port
+                        );
                         break;
                     }
                     Err(e) => ux::report_watch(&e),
@@ -536,6 +562,246 @@ mod tests {
         let output = run(true);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("configured inspector broken"));
+    }
+
+    /// The stand-in `ws` that the tests below serve with. Like the real one,
+    /// it asks `verifyClient` about each upgrade; `ANSWER` is replaced.
+    const WS_STAND_IN: &str = "const http=require('node:http');\
+        exports.WebSocketServer=class extends require('node:events'){\
+        constructor(o){super();\
+        this.s=http.createServer().on('upgrade',(q,s)=>ANSWER)\
+        .listen(o.port,o.host,()=>this.emit('listening'))}\
+        address(){return this.s.address()}}";
+
+    /// A scene whose `@dcl/inspector` is `inspector`, with stand-ins for the
+    /// `@dcl/rpc` and `ws` that the host serves it with. With `verifies`
+    /// false the `ws` admits every upgrade, as one without `verifyClient`.
+    fn scene_with_host_packages(t: &TestDir, inspector: &str, verifies: bool) -> PathBuf {
+        let asks =
+            "o.verifyClient({req:q},(ok,code)=>s.end(`HTTP/1.1 ${ok?101:code} x\\r\\n\\r\\n`))";
+        let admits = "s.end('HTTP/1.1 101 x\\r\\n\\r\\n')";
+        let ws = WS_STAND_IN.replace("ANSWER", if verifies { asks } else { admits });
+        t.write("scene/package.json", "{}");
+        for (module, source) in [
+            ("@dcl/inspector/index.js", inspector),
+            (
+                "@dcl/rpc/index.js",
+                "exports.createRpcServer=()=>({setHandler(){},attachTransport(){}})",
+            ),
+            ("@dcl/rpc/dist/codegen.js", "exports.registerService=()=>{}"),
+            (
+                "@dcl/rpc/dist/transports/WebSocket.js",
+                "exports.WebSocketTransport=(ws)=>ws",
+            ),
+            ("ws/index.js", ws.as_str()),
+        ] {
+            t.write(&format!("scene/node_modules/{module}"), source);
+        }
+        t.0.join("scene")
+    }
+
+    /// A stand-in `@dcl/inspector` that drives the fs interface the host hands
+    /// it: every method on every path of `OUTSIDE` must throw, and work inside
+    /// the scene must not.
+    #[cfg(unix)]
+    const FS_PROBE_INSPECTOR: &str = r#"
+const nodeFs = require('fs')
+exports.DataServiceDefinition = {}
+exports.createDataLayerHost = async (fs) => {
+  const passed = []
+  for (const p of JSON.parse(process.env.OUTSIDE)) {
+    const calls = {
+      readFile: () => fs.readFile(p),
+      writeFile: () => fs.writeFile(p, Buffer.from('written')),
+      rm: () => fs.rm(p),
+      rmdir: () => fs.rmdir(p),
+      readdir: () => fs.readdir(p),
+      stat: () => fs.stat(p)
+    }
+    for (const [name, call] of Object.entries(calls)) {
+      await call().then(() => passed.push(`${name} ${p}`), () => {})
+    }
+    if (await fs.existFile(p)) passed.push(`existFile ${p}`)
+  }
+  await fs.rmdir('../link-in').then(() => passed.push('rmdir ../link-in'), () => {})
+  let inside = 'ok'
+  try {
+    await fs.writeFile('assets/new/a.txt', Buffer.from('in'))
+    const absolute = fs.join(fs.cwd(), 'assets/new/a.txt')
+    for (const p of ['assets/new/a.txt', './assets/x/../new/a.txt', absolute, 'inner-link/new/a.txt']) {
+      if (String(await fs.readFile(p)) !== 'in') throw new Error(`read ${p}`)
+    }
+    if (!(await fs.existFile('assets/new/a.txt'))) throw new Error('existFile')
+    if ((await fs.stat('assets/new/a.txt')).size !== 2) throw new Error('stat')
+    for (const p of ['', '.', './', fs.cwd()]) {
+      if (!(await fs.readdir(p)).some((e) => e.name === 'assets' && e.isDirectory)) throw new Error(`readdir ${p}`)
+    }
+    if ((await fs.readdir('assets/new'))[0].name !== 'a.txt') throw new Error('readdir')
+    await fs.rm('assets/new/a.txt')
+    await fs.rmdir('assets/new')
+    if (nodeFs.existsSync('assets/new')) throw new Error('rmdir')
+    await fs.rmdir('inner-link')
+    if (nodeFs.lstatSync('inner-link', { throwIfNoEntry: false })) throw new Error('rmdir of a link')
+  } catch (e) {
+    inside = String(e)
+  }
+  nodeFs.writeFileSync('../report.json', JSON.stringify({ passed, inside }))
+  return {}
+}
+"#;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_fs_interface_refuses_every_path_outside_the_scene() {
+        let t = TestDir::new("datalayer-confine");
+        let root = scene_with_host_packages(&t, FS_PROBE_INSPECTOR, true);
+        t.write("scene/assets/keep.txt", "keep");
+        t.write("outside/secret.txt", "secret");
+        let outside = t.0.join("outside");
+        let link = |target: &Path, name: &str| {
+            std::os::unix::fs::symlink(target, root.join(name)).unwrap();
+        };
+        link(&outside, "link-dir");
+        link(&outside.join("secret.txt"), "link-file");
+        link(&outside.join("made.txt"), "link-nowhere");
+        link(&root.join("assets"), "inner-link");
+        link(&root.join("assets"), "../link-in");
+        let secret = outside.join("secret.txt").display().to_string();
+        let escapes = [
+            "..",
+            "../outside",
+            "../outside/secret.txt",
+            "assets/../../outside/secret.txt",
+            "../outside/made.txt",
+            outside.to_str().unwrap(),
+            secret.as_str(),
+            "link-dir",
+            "link-dir/secret.txt",
+            "link-dir/made.txt",
+            "link-file",
+            "link-nowhere",
+        ];
+        let output = std::process::Command::new(node_for_data_layer().unwrap())
+            .arg(write_driver(&root).unwrap())
+            .arg(&root)
+            .arg("serve")
+            .env_remove("DCL_ONE_INSPECTOR_DIR")
+            .env(SECRET_ENV, "secret")
+            .env("OUTSIDE", json!(escapes).to_string())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ready: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            ready["ready"], true,
+            "the host serves and ends with its stdin"
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(t.0.join("report.json")).unwrap()).unwrap();
+        assert_eq!(report, json!({ "passed": [], "inside": "ok" }));
+        let left: Vec<_> = std::fs::read_dir(&outside)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["secret.txt"], "the folder outside the scene");
+        assert!(t.0.join("link-in").is_symlink(), "a link outside the scene");
+        assert_eq!(
+            std::fs::read_to_string(outside.join("secret.txt")).unwrap(),
+            "secret"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("assets/keep.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    /// The packages of the archive, whose `ws` makes the server. The CLI's
+    /// relay (`start::editor::proxy_data_layer`) connects as here: the secret
+    /// of the launch and no Origin. Anything a browser sends carries an
+    /// Origin, and a program of another user does not have the secret.
+    #[tokio::test]
+    async fn the_host_admits_only_the_secret_of_its_launch_without_an_origin() {
+        use tokio_tungstenite::tungstenite;
+        let t = TestDir::new("datalayer-admission");
+        t.write("scene/package.json", "{}");
+        t.write(
+            "scene/scene.json",
+            r#"{"main":"bin/index.js","scene":{"parcels":["0,0"],"base":"0,0"}}"#,
+        );
+        let root = t.0.join("scene");
+        crate::init::restore_missing_node_modules(&root).unwrap();
+        let driver = write_driver(&root).unwrap();
+        let launched = launch(&node_for_data_layer().unwrap(), &driver, &root)
+            .await
+            .unwrap();
+        let host = &launched.host;
+        assert_eq!(host.secret.len(), 64, "32 random bytes, in hex");
+        host.connect().await.expect("the CLI's relay connects");
+        let wrong = "0".repeat(64);
+        let own_origin = format!("http://127.0.0.1:{}", host.port);
+        let mut refused = vec![
+            vec![],
+            vec![(SECRET_HEADER, wrong.as_str())],
+            vec![(SECRET_HEADER, &host.secret[..8])],
+        ];
+        for origin in [
+            "https://example.com",
+            "http://localhost:8000",
+            own_origin.as_str(),
+            "null",
+        ] {
+            refused.push(vec![
+                (SECRET_HEADER, host.secret.as_str()),
+                ("origin", origin),
+            ]);
+        }
+        for headers in refused {
+            let mut request = format!("ws://127.0.0.1:{}/", host.port)
+                .into_client_request()
+                .unwrap();
+            for (name, value) in &headers {
+                request.headers_mut().insert(*name, value.parse().unwrap());
+            }
+            match tokio_tungstenite::connect_async(request).await {
+                Err(tungstenite::Error::Http(response)) => {
+                    assert_eq!(response.status().as_u16(), 403, "{headers:?}")
+                }
+                other => panic!("{headers:?} was not refused: {other:?}"),
+            }
+        }
+    }
+
+    /// The host does not start without the secret, nor on a `ws` that does
+    /// not ask `verifyClient`.
+    #[test]
+    fn the_host_stops_without_its_secret_or_on_a_server_that_admits_every_upgrade() {
+        let t = TestDir::new("datalayer-no-admission");
+        let inspector =
+            "exports.createDataLayerHost=async()=>({});exports.DataServiceDefinition={}";
+        let root = scene_with_host_packages(&t, inspector, false);
+        let driver = write_driver(&root).unwrap();
+        for (secret, why) in [
+            (None, "DCL_SCENE_CLI_DATA_LAYER_SECRET is not set"),
+            (Some("secret"), "does not refuse an upgrade without"),
+        ] {
+            let mut host = std::process::Command::new(node_for_data_layer().unwrap());
+            host.args([&driver, &root])
+                .arg("serve")
+                .env_remove("DCL_ONE_INSPECTOR_DIR")
+                .env_remove(SECRET_ENV)
+                .envs(secret.map(|secret| (SECRET_ENV, secret)))
+                .stdin(Stdio::null());
+            let output = host.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{why}: the host started");
+            assert!(stderr.contains(why), "{why}: {stderr}");
+            assert!(output.stdout.is_empty(), "{why}: a port was reported");
+        }
     }
 
     #[test]

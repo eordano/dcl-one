@@ -55,8 +55,9 @@ use dcl_scene_authoring::{
 };
 use rolldown::Bundler;
 use rolldown_common::{
-    BundlerOptions, BundlerTransformOptions, ChecksOptions, CodeSplittingMode, Either, InputItem,
-    IsExternal, OutputFormat, Platform, RawMinifyOptions, ResolveOptions, SourceMapType, TsConfig,
+    BundlerOptions, BundlerTransformOptions, ChecksOptions, CodeSplittingMode, CommentsOptions,
+    Either, InputItem, IsExternal, OutputFormat, Platform, RawMinifyOptions, ResolveOptions,
+    SourceMapType, TsConfig,
 };
 use rolldown_utils::indexmap::FxIndexMap;
 use rolldown_utils::pattern_filter::StringOrRegex;
@@ -289,6 +290,10 @@ async fn build_async(root: &Path, opts: &Options) -> Result<Report> {
             &max_composite_entity.to_string(),
         )
         .replace("__DCL_ONE_MP__", if mp { "true" } else { "false" });
+    let loader = match opts.production {
+        true => dcl_scene_authoring::compact_loader(&loader),
+        false => loader,
+    };
     write(&outfile, loader)?;
     outputs.push(main.clone());
 
@@ -489,6 +494,12 @@ async fn bundle(
             ..Default::default()
         }),
         minify: Some(RawMinifyOptions::Bool(production)),
+        // rolldown_backend::run: a production bundle keeps the legal comments only.
+        comments: Some(CommentsOptions {
+            legal: true,
+            annotation: !production,
+            jsdoc: !production,
+        }),
         sourcemap: (!production).then_some(SourceMapType::Inline),
         ..Default::default()
     };

@@ -1,0 +1,120 @@
+/* Buttons / JumpInCTA. Sizes follow the Figma component through the foundations tokens and text
+   styles; where decentraland.org renders a parity page differently, its value is used and named in a
+   comment ("reference"). A consumer sets only layout (width, placement) on top. */
+@layer dcl.reset, dcl.foundations, dcl.components;
+
+@layer dcl.components {
+  .root {
+    position: relative;
+    display: flex;
+    box-sizing: border-box;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    margin: 0;
+    border: none;
+    background-color: var(--dcl-primary-primary);
+    color: var(--dcl-neutrals-white);
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+
+    &:hover:not(:disabled, [data-disabled], [data-loading]) {
+      background-color: var(--dcl-primary-primary-light-1);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--dcl-neutrals-white);
+      outline-offset: 2px;
+    }
+
+    &:disabled,
+    &[data-disabled] {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    &[data-loading] {
+      cursor: progress;
+    }
+  }
+
+  /* xl: the place card's CTA as decentraland.org renders it (Figma xl: 56px tall, gap 12px). */
+  .xl {
+    composes: text627574746f6e2f786c from '../../foundations/typography/text-styles.module.css';
+    gap: var(--dcl-space-8);
+    height: 46px; /* reference 46px (Figma 56px), no size token */
+    padding: var(--dcl-space-0) var(--dcl-space-48);
+    border-radius: var(--dcl-radius-lg);
+    --jump-in-icon: 24px;
+  }
+
+  .lg {
+    composes: text627574746f6e2f6c67 from '../../foundations/typography/text-styles.module.css';
+    gap: var(--dcl-space-8);
+    height: 48px;
+    padding: var(--dcl-space-0) var(--dcl-space-32);
+    border-radius: var(--dcl-radius-md);
+    --jump-in-icon: 20px;
+  }
+
+  .md {
+    composes: text627574746f6e2f6d64 from '../../foundations/typography/text-styles.module.css';
+    gap: var(--dcl-space-8);
+    height: 40px;
+    padding: var(--dcl-space-0) var(--dcl-space-24);
+    border-radius: var(--dcl-radius-md);
+    --jump-in-icon: 20px;
+  }
+
+  .sm {
+    composes: text627574746f6e2f736d from '../../foundations/typography/text-styles.module.css';
+    gap: var(--dcl-space-4);
+    height: 32px;
+    padding: var(--dcl-space-0) var(--dcl-space-16);
+    border-radius: var(--dcl-radius-sm);
+    --jump-in-icon: 16px;
+  }
+
+  .icon {
+    flex-shrink: 0;
+    width: var(--jump-in-icon);
+    height: var(--jump-in-icon);
+  }
+
+  /* The reference icon: a #fcfcfc frame at 30% and a #fcfcfc arrow (Figma: a filled primary square). */
+  .iconFrame {
+    stroke: var(--dcl-neutrals-snow);
+    stroke-opacity: 0.3;
+  }
+
+  .iconArrow {
+    fill: var(--dcl-neutrals-snow);
+  }
+
+  /* The ring of Button's loading state (800 ms a turn, still under reduced motion), sized to the icon it
+     replaces. The Spinner component draws its arc in the primary colour, which is this surface. */
+  .spinner {
+    flex-shrink: 0;
+    box-sizing: border-box;
+    width: var(--jump-in-icon);
+    height: var(--jump-in-icon);
+    border: calc(var(--jump-in-icon) * 0.133) solid var(--dcl-transparencies-black-20);
+    border-top-color: var(--dcl-neutrals-white);
+    border-radius: var(--dcl-radius-full);
+    animation: dcl-jump-in-spin 0.8s linear infinite;
+  }
+
+  @keyframes dcl-jump-in-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+    }
+  }
+}

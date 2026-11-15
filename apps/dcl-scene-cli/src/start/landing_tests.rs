@@ -57,7 +57,7 @@ fn gather_state() -> AppState {
 }
 
 fn gather_knobs(query: &str) -> Knobs {
-    knobs(Some(query), &["entrance".to_string()])
+    knobs(Some(query), &["entrance".to_string()], &DEFAULT_ON)
 }
 
 fn render_local(st: &AppState, lan: Option<&str>, knobs: &Knobs) -> String {
@@ -303,7 +303,13 @@ fn page_knobs_reach_the_link_but_cannot_repoint_it() {
 #[test]
 fn the_mcp_knob_adds_exactly_the_mcp_pair() {
     let st = scene_state(json!({ "display": { "title": "Gather" } }));
-    let link = |query: &str| launch_href(&render_local(&st, None, &knobs(Some(query), &[])));
+    let link = |query: &str| {
+        launch_href(&render_local(
+            &st,
+            None,
+            &knobs(Some(query), &[], &DEFAULT_ON),
+        ))
+    };
     let (off, on) = (link("mcp=off"), link("mcp=on"));
     assert_eq!(
         on.replace(
@@ -326,7 +332,7 @@ fn the_mcp_knob_adds_exactly_the_mcp_pair() {
 #[test]
 fn the_knobs_take_only_what_the_page_offers() {
     let names = ["entrance".to_string()];
-    let tokens = |q: Option<&str>| knobs(q, &names).tokens(Carry::Loopback);
+    let tokens = |q: Option<&str>| knobs(q, &names, &DEFAULT_ON).tokens(Carry::Loopback);
     let terrain_off = ["--landscape-terrain-enabled=false".to_string()];
     assert_eq!(
         tokens(None),
@@ -366,15 +372,18 @@ fn the_knobs_take_only_what_the_page_offers() {
             "{smuggled} smuggles nothing beyond the terrain default"
         );
     }
-    assert_eq!(knobs(Some("where=lan"), &names).where_key, "lan");
     assert_eq!(
-        knobs(Some("where=%2F%2Fevil"), &names).where_key,
+        knobs(Some("where=lan"), &names, &DEFAULT_ON).where_key,
+        "lan"
+    );
+    assert_eq!(
+        knobs(Some("where=%2F%2Fevil"), &names, &DEFAULT_ON).where_key,
         "",
         "a target that is not on offer selects nothing"
     );
-    assert_eq!(knobs(Some("mcp=on"), &names).mcp, Some(true));
+    assert_eq!(knobs(Some("mcp=on"), &names, &DEFAULT_ON).mcp, Some(true));
     assert_eq!(
-        knobs(Some("mcp=maybe"), &names).mcp,
+        knobs(Some("mcp=maybe"), &names, &DEFAULT_ON).mcp,
         None,
         "the mcp knob has two states and nothing else"
     );
@@ -1060,7 +1069,7 @@ fn the_layout_card_leads_with_info_and_counts_its_tabs() {
 /// form still names its own set, so unchecking sticks.
 #[test]
 fn the_default_knobs_launch_a_second_client_straight_in() {
-    let fresh = knobs(None, &[]);
+    let fresh = knobs(None, &[], &DEFAULT_ON);
     assert_eq!(
         fresh.opts,
         ["multi-instance", "skip-auth-screen", TERRAIN],
@@ -1072,8 +1081,15 @@ fn the_default_knobs_launch_a_second_client_straight_in() {
         "the fresh page's launch link carries both; checked terrain is the client's own default"
     );
     assert!(
-        knobs(Some("where=desktop"), &[]).opts.is_empty(),
+        knobs(Some("where=desktop"), &[], &DEFAULT_ON)
+            .opts
+            .is_empty(),
         "a submitted form names its own set"
+    );
+    assert_eq!(
+        knobs(None, &[], &["skip-auth-screen"]).tokens(Carry::Loopback),
+        ["--skip-auth-screen=true"],
+        "the fresh page of a run that gave one flag turns on that parameter alone"
     );
 }
 

@@ -63,8 +63,17 @@ python3 tooling/image-smoke.py
   A compiled closure restored under its exact identity skips that
   package's dependency restore, import and toolchain build: nothing is left to compile.
   Container revision labels are still rebuilt for each commit.
+- In Bevy CI the compile job (`apis-sites-compile.yml`) runs beside the web build, and
+  the image build starts after both. The compile job looks for the two compiled closures
+  under their exact keys without a download. When one is missing and this run can save it
+  (the first attempt of a main push or of a PR), the job compiles the packages and saves
+  the four cache groups, with the keys, the export checks and the save gate of the image
+  build. The image build restores them and has nothing left to compile. Without a saved
+  entry it compiles the packages itself, as tag and manual builds do. An entry holds the
+  output of one derivation, so its content does not depend on which job saved it; the
+  compile job saves before the image smoke tests.
 - Successful main builds save trusted caches. PR builds save only their explicit
-  PR namespace and merge-ref scope after image smoke tests. PR dependency caches
+  PR namespace and merge-ref scope, the image build after its smoke tests. PR dependency caches
   may fall back from an exact main identity to the newest main entry of the group;
   a stale hit saves its replacement. Same-digest main hits need no duplicate save.
   A stale Catalyst hit reuses vendored sources; changed dependency derivations still
@@ -86,8 +95,9 @@ python3 tooling/image-smoke.py
   the APIs archive is written while Sites compiles, and it loads into Docker beside
   the Sites archives.
   Cache keys and export (`.`) and image builds (`git+file:.?lfs=1`) must resolve the
-  same Catalyst and Sites app derivations. The Catalyst fileset includes `library/`,
-  including LFS-tracked files outside the checkout's fetch filter. Before each export,
+  same Catalyst and Sites app derivations. The Catalyst fileset takes from
+  `library/` only what the backend build reads (the `dcl-*` crates, `vendor/rusty_enet`, the
+  protocol sources and the OpenAPI documents), none of it LFS-tracked. Before each export,
   the job evaluates both references, using the image build's `--impure` mode for its
   ref. A mismatch or evaluation failure stops export before a second compilation.
 

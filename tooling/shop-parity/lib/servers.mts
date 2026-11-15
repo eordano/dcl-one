@@ -11,7 +11,7 @@ import { childEnv } from "./env.mts";
 import { placeholderPng } from "./png.mts";
 import { SITES, TOOL } from "./paths.mts";
 import type { Recording } from "./recording.mts";
-import { fromNodePath, isContentImage, OWN_IMAGE_MOUNTS, serviceForHost } from "./services.mts";
+import { CMS_SPACE_PATH, fromNodePath, isContentImage, NODE_TELEMETRY, OWN_IMAGE_MOUNTS, serviceForHost } from "./services.mts";
 
 const PROCESS_STARTUP_TIMEOUT_MS = 60_000;
 
@@ -46,8 +46,18 @@ function listen(server: Server, port: number): Promise<Server> {
   });
 }
 
-/** The reference build: files as built, every other path the SPA's index.html (vercel.json's rewrite). */
-export function startStatic(dist: string, port: number): Promise<Server> {
+/** A file under `dir` at `path` (its leading prefix removed), or null when there is none or the path leaves `dir`. */
+function fileUnder(dir: string, path: string, prefix = "/"): string | null {
+  const file = normalize(join(dir, path.slice(prefix.length)));
+  return file.startsWith(dir + sep) && existsSync(file) && !statSync(file).isDirectory() ? file : null;
+}
+
+/**
+ * The reference build: files as built, every other path the SPA's index.html (vercel.json's rewrite).
+ * `mounts` serves other directories by URL prefix as the server's own static files (dcl-one's Inter
+ * files for the sites reference, lib/fonts.mts): a file missing there is 404, never the index.
+ */
+export function startStatic(dist: string, port: number, mounts: Record<string, string> = {}): Promise<Server> {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     let path: string;
@@ -56,8 +66,12 @@ export function startStatic(dist: string, port: number): Promise<Server> {
     } catch {
       path = "/";
     }
-    let file = normalize(join(dist, path));
-    if (!file.startsWith(dist + sep) || !existsSync(file) || statSync(file).isDirectory()) file = join(dist, "index.html");
+    const mount = Object.entries(mounts).find(([prefix]) => path.startsWith(prefix));
+    const file = mount ? fileUnder(mount[1], path, mount[0]) : fileUnder(dist, path) ?? join(dist, "index.html");
+    if (!file) {
+      res.writeHead(404, { "content-type": "text/plain", "cache-control": "no-store" });
+      return res.end(`no ${path} under the ${mount![0]} mount`);
+    }
     res.writeHead(200, { "content-type": TYPES[extname(file)] ?? "application/octet-stream", "cache-control": "no-store" });
     res.end(readFileSync(file));
   });
@@ -74,8 +88,16 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 }
 
 /** The picture a content URL stands for, independent of which host or mount serves it. */
+const CMS_IMAGE_HOSTS = new Set(["cms-images.decentraland.org", "images.ctfassets.net"]);
+
 export function imageSeed(url: URL): string {
+  // A resized copy (the node's /media/convert, Vercel's /_vercel/image) is the picture it wraps.
+  const wrapped = /^\/(media\/convert|_vercel\/image)\/?$/.test(url.pathname) ? url.searchParams.get("url") : null;
+  if (wrapped) return imageSeed(new URL(wrapped, url));
   const p = decodeURIComponent(url.pathname);
+  // A CMS picture on the CMS's image host (/<space>/<asset>/<token>/<file>).
+  const cms = CMS_IMAGE_HOSTS.has(url.host) ? p.match(/^\/[^/]+\/([A-Za-z0-9_-]+)\//) : null;
+  if (cms) return `cms-asset:${cms[1]}`;
   const urn = p.match(/(urn:decentraland:[^/]+)\/(thumbnail|image)$/i);
   if (urn) return `${urn[1]!.toLowerCase()}/${urn[2]}`;
   const content = p.match(/\/contents\/([A-Za-z0-9]{32,})$/);
@@ -122,6 +144,10 @@ export function startReplay(recording: Recording, port: number): Promise<Server>
         res.writeHead(200, { "content-type": "image/png" });
         return res.end(placeholderFor(recording, url));
       }
+      if (NODE_TELEMETRY.test(url.pathname)) {
+        res.writeHead(204);
+        return res.end();
+      }
       const { service, path } = fromNodePath(method, url.pathname);
       const body = await readBody(req);
       const answer = await recording.answer({ method, service, path, search: url.search, body, headers: req.headers as Record<string, string>, side: "dcl-one" });
@@ -140,7 +166,8 @@ export async function startSites(port: number, upstream: string, env: Record<str
   if (!existsSync(join(SITES, "build", "server", "index.js"))) throw new Error("apps/sites is not built: run `pnpm build` in apps/sites (or capture.mts --build)");
   const previewUrl = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, [join(TOOL, "sites-preview.mts"), "--base", previewUrl, "--upstream", upstream], {
-    env: { ...childEnv(), CATALYST_URL: upstream, PUBLIC_CATALYST_URL: "", ...env },
+    // The blog reads the CMS space from the replay (`/cms/*` is the recorded cms-api), so both sides read one answer.
+    env: { ...childEnv(), CATALYST_URL: upstream, PUBLIC_CATALYST_URL: "", BLOG_CMS_URL: `${upstream}/cms${CMS_SPACE_PATH}`, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
   // Exiting without stopping the preview would leave its port taken for the next run.

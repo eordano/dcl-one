@@ -103,10 +103,10 @@ pub(in crate::start) const DEFAULT_ON: [&str; 2] = ["multi-instance", "skip-auth
 /// Every key is an allowlist over what the page drew, so a link can only be
 /// built out of what it offered — there is no free-text field to smuggle a
 /// flag through.
-pub(super) fn knobs(query: Option<&str>, spawn_names: &[String]) -> Knobs {
+pub(super) fn knobs(query: Option<&str>, spawn_names: &[String], first_visit: &[&str]) -> Knobs {
     let Some(query) = query else {
         return Knobs {
-            opts: DEFAULT_ON
+            opts: first_visit
                 .iter()
                 .copied()
                 .chain([TERRAIN])

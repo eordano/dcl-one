@@ -57,9 +57,9 @@ mod tests {
         let public = temp.0.join("public");
         let runtime = public.join("sdk-ui-designer");
         std::fs::create_dir_all(&runtime).unwrap();
-        let (_, port_rx) = tokio::sync::watch::channel(1000);
+        let (_, host_rx) = tokio::sync::watch::channel(Default::default());
         st.data_layer = Some(crate::data_layer::DataLayerState {
-            port_rx,
+            host_rx,
             public_dir: Some(public.clone()),
         });
         assert!(!available(&st));

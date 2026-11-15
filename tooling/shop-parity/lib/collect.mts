@@ -27,7 +27,8 @@ export type Node = {
   /** Whether the element has visible text of its own (its colour and font then matter). */
   ownText: boolean;
 };
-export type Collected = { url: string; width: number; height: number; nodes: Node[]; texts: Node[]; masks: Box[] };
+/** `clipped`: the key nodes found below the spec's maxHeight, which the comparison leaves out. */
+export type Collected = { url: string; width: number; height: number; nodes: Node[]; texts: Node[]; masks: Box[]; clipped?: string[] };
 
 export type CollectOptions = { keys: { name: string; selector: string; max: number }[]; masks: string[] };
 
@@ -172,12 +173,14 @@ export function collectInPage(opts: CollectOptions): Collected {
     }
     if (!Number.isFinite(l)) continue;
     const text = own.map(shown).join(" ").replace(/\s+/g, " ").trim();
-    const n = seen.get(text) ?? 0;
-    seen.set(text, n + 1);
+    // Numbered by the label the id shows: two texts sharing their first 60 characters stay apart.
+    const label = text.slice(0, 60);
+    const n = seen.get(label) ?? 0;
+    seen.set(label, n + 1);
     let anc: Element | null = el;
     while (anc && !chains.has(anc)) anc = anc.parentElement;
     texts.push({
-      id: `"${text.slice(0, 60)}"${n ? `#${n}` : ""}`,
+      id: `"${label}"${n ? `#${n}` : ""}`,
       parentChain: anc ? chains.get(anc) : undefined,
       parent: null,
       box: box({ left: l, top: tp, width: rr - l, height: b - tp }),

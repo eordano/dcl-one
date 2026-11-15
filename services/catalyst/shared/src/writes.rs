@@ -571,6 +571,7 @@ mod tests {
         ("builder/src/drafts.rs", "create"),
         ("builder/src/projects.rs", "create"),
         ("camera-reel/src/handlers/images.rs", "create"),
+        ("comms/src/gatekeeper/reports.rs", "social"),
         ("content/src/deploy_remote_entity.rs", "content"),
         ("content/src/partial_deployments.rs", "content"),
         ("content/src/read_through.rs", "mirror"),

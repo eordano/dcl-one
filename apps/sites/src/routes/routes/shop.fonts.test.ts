@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../shop/host", () => ({ default: () => null }));
 
 const UI3_PUBLIC = fileURLToPath(new URL("../../../../ui3/public", import.meta.url));
-const SHOP_THEME = fileURLToPath(new URL("../../../../ui3/src/shop/discovery/frames/shoptheme.css", import.meta.url));
+const INTER_CSS = fileURLToPath(new URL("../../../../ui3/src/atoms/inter.css", import.meta.url));
 
 describe("the Shop's Inter", () => {
   it("preloads a font file that ships, and the one the Shop's Latin text is set in", async () => {
@@ -17,7 +17,7 @@ describe("the Shop's Inter", () => {
   });
 
   it("declares every face it names from a file that ships, once per weight as Google Fonts does", () => {
-    const css = readFileSync(SHOP_THEME, "utf8");
+    const css = readFileSync(INTER_CSS, "utf8");
     const faces = [...css.matchAll(/@font-face \{ font-family: "Inter"; src: url\("([^"]+)"\)[^}]*font-weight: ([^;]+);/g)];
     expect(faces.length).toBe(21);
     for (const [, src] of faces) expect(existsSync(`${UI3_PUBLIC}${src}`)).toBe(true);

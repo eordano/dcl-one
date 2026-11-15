@@ -63,7 +63,13 @@ fn spawn_as(mode: &[&str], dir: &Fixture, extra: &[&str], envs: &[(&str, &str)])
         .args(["--skip-build", "--target-content", DEAD_TARGET])
         .args(mode)
         .args(extra);
-    for k in ["DCL_PRIVATE_KEY", "RUST_LOG", "DCL_SCENE_CLI_TARGET_SERVER"] {
+    for k in [
+        "DCL_PRIVATE_KEY",
+        "RUST_LOG",
+        "DCL_SCENE_CLI_TARGET_SERVER",
+        "DCL_SCENE_CLI_LINKER_HOST",
+        "DCL_SCENE_CLI_CATALYST_ROTATION",
+    ] {
         cmd.env_remove(k);
     }
     cmd.env("NO_COLOR", "1")
@@ -130,18 +136,32 @@ impl Run {
     }
 
     /// The exit and both streams; the child is stopped when it outlives the guard.
-    fn finish(mut self, guard: Duration) -> (bool, String, String) {
+    fn finish(self, guard: Duration) -> (bool, String, String) {
+        let (code, out, err) = self.end(guard);
+        (code == Some(0), out, err)
+    }
+
+    /// [`Run::finish`] with the exit code, `None` for an exit by a signal.
+    fn end(mut self, guard: Duration) -> (Option<i32>, String, String) {
         let status = wait_bounded(&mut self.child, guard).unwrap_or_else(|| {
             let (out, err) = (self.out.text(), self.err.text());
             terminate(&mut self.child);
             panic!("the deploy outlived {guard:?}\nstdout: {out}\nstderr: {err}");
         });
         (
-            status.success(),
+            status.code(),
             String::from_utf8_lossy(&self.out.finish()).into_owned(),
             String::from_utf8_lossy(&self.err.finish()).into_owned(),
         )
     }
+}
+
+/// Each line of stdout, which must be one JSON object.
+fn json_lines(stdout: &str) -> Vec<Value> {
+    stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}")))
+        .collect()
 }
 
 fn client() -> reqwest::Client {
@@ -361,20 +381,33 @@ async fn a_short_token_is_refused_before_any_server_starts() {
     let (ok, stdout, stderr) = run.finish(Duration::from_secs(15));
     assert!(!ok);
     assert!(stderr.contains("at least 16 characters"), "{stderr}");
-    let last: Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
-    assert_eq!(last["phase"], "failed", "{stdout}");
-    assert!(!stdout.contains(r#""event":"ready""#), "{stdout}");
+    let lines = json_lines(&stdout);
+    assert_eq!(lines.len(), 2, "the final state and the error: {stdout}");
+    assert_eq!(lines[0]["event"], "state", "{stdout}");
+    assert_eq!(lines[0]["phase"], "failed", "{stdout}");
+    assert_eq!(lines[1]["event"], "error", "{stdout}");
+    assert_eq!(lines[1]["code"], Value::Null, "{stdout}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_headless_run_prints_only_the_final_state() {
+async fn a_headless_run_prints_the_final_state_and_no_ready_line() {
     let f = Fixture::new("headless");
     let key = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
     let run = spawn(&f, &[], &[("DCL_PRIVATE_KEY", key)]);
     let (ok, stdout, stderr) = run.finish(HANG_GUARD);
     assert!(!ok);
-    assert_eq!(stdout.lines().count(), 1, "{stdout}");
-    let last: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let lines = json_lines(&stdout);
+    assert_eq!(lines.len(), 2, "the final state and the error: {stdout}");
+    assert_eq!(lines[1]["event"], "error", "{stdout}");
+    assert_eq!(lines[1]["code"], Value::Null, "{stdout}");
+    assert!(
+        lines[1]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("could not reach the content server"),
+        "{stdout}"
+    );
+    let last = &lines[0];
     assert_eq!(last["event"], "state");
     assert_eq!(last["phase"], "failed");
     assert_eq!(last["error"]["code"], "DEPLOY_FAILED");
@@ -389,4 +422,339 @@ async fn a_headless_run_prints_only_the_final_state() {
         stderr.contains("could not reach the content server"),
         "{stderr}"
     );
+}
+
+/// The signing server listens on IPv4 loopback. `--host`, or
+/// `DCL_SCENE_CLI_LINKER_HOST`, selects another address, and the URLs name an
+/// address that is not loopback. 127.0.0.2 is a second loopback address on
+/// Linux: a listener on 127.0.0.1 does not answer there.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_signing_server_listens_on_loopback_unless_another_address_is_given() {
+    let f = Fixture::new("host");
+    let other = |port: u16| std::net::TcpStream::connect(("127.0.0.2", port)).is_ok();
+    let ready = |extra: &[&str], envs: &[(&str, &str)]| {
+        let run = spawn(&f, &[&["--port", "0"], extra].concat(), envs);
+        let ready = run.line_with(r#""event":"ready""#);
+        let port = ready["port"].as_u64().unwrap() as u16;
+        let api = ready["api"].as_str().unwrap().to_string();
+        let url = ready["url"].as_str().unwrap().to_string();
+        (run, port, api, url)
+    };
+
+    let (_run, port, api, url) = ready(&[], &[]);
+    assert_eq!(api, format!("http://localhost:{port}/api/deploy"));
+    assert!(
+        url.starts_with(&format!("http://localhost:{port}/deploy#token=")),
+        "{url}"
+    );
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+    assert!(!other(port), "the default address is 127.0.0.1 alone");
+
+    let (_run, port, api, _) = ready(&["--host", "0.0.0.0"], &[]);
+    assert_eq!(api, format!("http://localhost:{port}/api/deploy"));
+    assert!(other(port), "--host 0.0.0.0 listens on every address");
+
+    let (_run, port, api, url) = ready(&["--host", "127.0.0.2"], &[]);
+    assert_eq!(api, format!("http://127.0.0.2:{port}/api/deploy"));
+    assert!(
+        url.starts_with(&format!("http://127.0.0.2:{port}/deploy#token=")),
+        "{url}"
+    );
+    assert!(other(port));
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+
+    let (_run, port, _, _) = ready(&[], &[("DCL_SCENE_CLI_LINKER_HOST", "0.0.0.0")]);
+    assert!(other(port), "the variable selects the address too");
+    let (_run, port, _, _) = ready(
+        &["--host", "127.0.0.1"],
+        &[("DCL_SCENE_CLI_LINKER_HOST", "0.0.0.0")],
+    );
+    assert!(!other(port), "the flag wins");
+}
+
+/// Under the signing URL, the note that names `DCL_SCENE_CLI_LINKER_HOST` is
+/// there for a run that the variable can open. `--host 127.0.0.1` wins over
+/// the variable, so that run does not print the note.
+#[test]
+fn the_note_on_another_device_is_absent_when_the_flag_keeps_loopback() {
+    const NOTE: &str = "to sign from another device, re-run with DCL_SCENE_CLI_LINKER_HOST=0.0.0.0";
+    let f = Fixture::new("host-note");
+    for (extra, noted) in [(&[][..], true), (&["--host", "127.0.0.1"][..], false)] {
+        let args = [&["--port", "0", "--no-browser"], extra].concat();
+        let run = spawn_as(&[], &f, &args, &[]);
+        // The last note under the URL.
+        assert!(
+            run.out.wait_for("open the URL manually", HANG_GUARD),
+            "stdout: {}\nstderr: {}",
+            run.out.text(),
+            run.err.text()
+        );
+        assert_eq!(run.out.text().contains(NOTE), noted, "{}", run.out.text());
+    }
+}
+
+/// `--host` with one address that is not loopback, while remote signing is
+/// off: the signing routes would refuse each request to that address, so the
+/// command line is refused with the step to take. Exit code 2, no event,
+/// and no server starts.
+#[test]
+fn a_host_that_needs_remote_signing_is_a_usage_error() {
+    let f = Fixture::new("host-refused");
+    for envs in [&[][..], &[("DCL_SCENE_CLI_LINKER_HOST", "127.0.0.1")][..]] {
+        let run = spawn(&f, &["--port", "0", "--host", "192.0.2.7"], envs);
+        let (code, out, err) = run.end(HANG_GUARD);
+        assert_eq!(code, Some(2), "{err}");
+        assert_eq!(out, "", "a usage error prints no event");
+        assert!(
+            err.contains("--host 192.0.2.7 needs remote signing, and remote signing is off"),
+            "{err}"
+        );
+        assert!(err.contains("\u{2192} try: pass --host 0.0.0.0"), "{err}");
+        assert!(err.contains("DCL_SCENE_CLI_LINKER_HOST=192.0.2.7"), "{err}");
+    }
+}
+
+/// An address of this machine that is not loopback. No packet is sent: a UDP
+/// socket that names a destination (a documentation address) only selects
+/// its source address.
+fn address_of_this_machine() -> Option<std::net::IpAddr> {
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    probe.connect("192.0.2.1:9").ok()?;
+    let addr = probe.local_addr().ok()?.ip();
+    (!addr.is_loopback() && !addr.is_unspecified()).then_some(addr)
+}
+
+/// Remote signing on an address of this machine that is not loopback: the
+/// printed `api` names the address, and the signing routes answer a request
+/// to it, for the variable alone and for the flag with the variable. Each
+/// request goes to an address of this machine, with no proxy.
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_signing_on_an_address_of_this_machine_answers_its_printed_url() {
+    use std::io::Write;
+    let Some(addr) = address_of_this_machine() else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "SKIPPED remote_signing_on_an_address_of_this_machine_answers_its_printed_url: \
+             this machine has no address that is not loopback"
+        );
+        return;
+    };
+    let f = Fixture::new("host-remote");
+    let host = addr.to_string();
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(HANG_GUARD)
+        .build()
+        .unwrap();
+    for (extra, variable) in [
+        (&[][..], host.as_str()),
+        (&["--host", host.as_str()][..], "0.0.0.0"),
+    ] {
+        let mut run = spawn(
+            &f,
+            &[&["--port", "0", "--deploy-token", TOKEN], extra].concat(),
+            &[("DCL_SCENE_CLI_LINKER_HOST", variable)],
+        );
+        let ready = run.line_with(r#""event":"ready""#);
+        let port = ready["port"].as_u64().unwrap();
+        let api = ready["api"].as_str().unwrap().to_string();
+        let origin = std::net::SocketAddr::new(addr, port as u16);
+        assert_eq!(api, format!("http://{origin}/api/deploy"));
+        assert!(
+            ready["url"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("http://{origin}/deploy#token=")),
+            "{ready}"
+        );
+
+        let (status, state) = run.json(http.get(&api)).await;
+        assert_eq!(status, 200, "the reading gate admits the address: {state}");
+        assert_eq!(state["phase"], "awaiting-signature");
+        let (status, body) = run
+            .json(
+                http.post(&api)
+                    .header("origin", format!("http://{origin}"))
+                    .json(&serde_json::json!({ "address": "0x1" })),
+            )
+            .await;
+        assert_eq!(status, 400, "the signing gate admits the address: {body}");
+        assert_eq!(body["message"], "Invalid payload: address");
+        let (status, _) = run
+            .json(http.delete(&api).header("x-deploy-token", TOKEN))
+            .await;
+        assert_eq!(status, 202);
+        let (ok, _, err) = run.finish(HANG_GUARD);
+        assert!(!ok, "a cancelled run: {err}");
+    }
+}
+
+/// `--language` is accepted and changes nothing a program reads, and
+/// `/api/catalyst-pointers` answers in the upstream shape: the target of
+/// this run does not answer, so the list is empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_program_gives_a_language_and_reads_the_pointers() {
+    let f = Fixture::new("language");
+    let mut run = spawn(&f, &["--language", "es", "--deploy-token", TOKEN], &[]);
+    let ready = run.line_with(r#""event":"ready""#);
+    let base = ready["api"]
+        .as_str()
+        .unwrap()
+        .trim_end_matches("/api/deploy")
+        .to_string();
+    let http = client();
+    let (status, pointers) = run
+        .json(http.get(format!("{base}/api/catalyst-pointers")))
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(pointers, serde_json::json!({ "catalysts": [] }));
+    let (status, _) = run
+        .json(
+            http.delete(format!("{base}/api/deploy"))
+                .header("x-deploy-token", TOKEN),
+        )
+        .await;
+    assert_eq!(status, 202);
+    let (_, stdout, _) = run.finish(Duration::from_secs(15));
+    assert_eq!(
+        stdout.lines().count(),
+        2,
+        "ready and the final state only: {stdout}"
+    );
+}
+
+/// A deploy that fails prints the `error` event of `start --json`: the last
+/// line of stdout, with the code of a cause the CLI knows. `--programmatic`
+/// prints its final state first. The text stays on stderr, and the port step
+/// names `deploy`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deploy_that_fails_prints_the_error_event() {
+    let f = Fixture::new("error-event");
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = held.local_addr().unwrap().port().to_string();
+    let taken = serde_json::json!({
+        "event": "error",
+        "message": format!("port {port} is already in use"),
+        "code": "port-in-use",
+    });
+    let args = ["--port", &port, "--deploy-token", TOKEN];
+
+    let (code, stdout, stderr) = spawn_as(&["--json"], &f, &args, &[]).end(Duration::from_secs(15));
+    assert_eq!(code, Some(1), "{stderr}");
+    assert_eq!(
+        json_lines(&stdout),
+        std::slice::from_ref(&taken),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(&format!("Error: port {port} is already in use")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("dcl-scene-cli deploy --port "), "{stderr}");
+    assert!(!stderr.contains("start --port"), "{stderr}");
+    assert!(!stderr.contains(TOKEN), "{stderr}");
+
+    let (code, stdout, stderr) = spawn(&f, &args, &[]).end(Duration::from_secs(15));
+    assert_eq!(code, Some(1), "{stderr}");
+    let lines = json_lines(&stdout);
+    assert_eq!(lines.len(), 2, "the final state, then the error: {stdout}");
+    assert_eq!(lines[0]["event"], "state", "{stdout}");
+    assert_eq!(lines[0]["phase"], "failed", "{stdout}");
+    assert_eq!(lines[0]["error"]["code"], "DEPLOY_FAILED", "{stdout}");
+    assert_eq!(lines[1], taken, "{stdout}");
+    assert!(!stdout.contains(TOKEN), "{stdout}");
+    assert!(!stderr.contains(TOKEN), "{stderr}");
+
+    // Without --json and --programmatic no line of stdout is an event.
+    let (code, stdout, stderr) = spawn_as(&[], &f, &args, &[]).end(Duration::from_secs(15));
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(!stdout.contains(r#""event""#), "{stdout}");
+    assert!(stderr.contains("dcl-scene-cli deploy --port "), "{stderr}");
+    drop(held);
+
+    let empty = Fixture(f.0.join("empty"));
+    std::fs::create_dir_all(&empty.0).unwrap();
+    let missing = Fixture(f.0.join("missing"));
+    for (dir, code_word, message) in [
+        (
+            &empty,
+            "no-scene",
+            Some("this directory is not a Decentraland scene"),
+        ),
+        (&missing, "no-directory", None),
+    ] {
+        for mode in ["--json", "--programmatic"] {
+            let (code, stdout, stderr) =
+                spawn_as(&[mode], dir, &[], &[]).end(Duration::from_secs(15));
+            assert_eq!(code, Some(1), "{stderr}");
+            let lines = json_lines(&stdout);
+            let last = lines.last().unwrap_or_else(|| panic!("no line: {stderr}"));
+            assert_eq!(last["event"], "error", "{stdout}");
+            assert_eq!(last["code"], code_word, "{stdout}");
+            assert_eq!(last.as_object().unwrap().len(), 3, "{stdout}");
+            if let Some(message) = message {
+                assert_eq!(last["message"], message, "{stdout}");
+            }
+            assert_eq!(
+                lines.len(),
+                1 + usize::from(mode == "--programmatic"),
+                "{stdout}"
+            );
+        }
+    }
+
+    // A command line that does not parse: exit code 2 and no event.
+    let (code, stdout, _) =
+        spawn_as(&["--json"], &f, &["--no-such-flag"], &[]).end(Duration::from_secs(15));
+    assert_eq!(code, Some(2));
+    assert!(stdout.is_empty(), "no event for a usage error: {stdout}");
+}
+
+/// A stop by SIGTERM is not a failure of the run: no `error` event. A
+/// programmatic run still prints its final state.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deploy_stopped_by_a_signal_prints_no_error_event() {
+    let f = Fixture::new("signal");
+    let sigterm = |run: &Run| unsafe {
+        libc::kill(run.child.id() as libc::pid_t, libc::SIGTERM);
+    };
+
+    // An answer of the server shows that the run waits for a signature, and
+    // so for a signal.
+    let http = client();
+    let mut run = spawn(&f, &["--port", "0"], &[]);
+    let ready = run.line_with(r#""event":"ready""#);
+    let (status, _) = run.json(http.get(ready["api"].as_str().unwrap())).await;
+    assert_eq!(status, 200);
+    sigterm(&run);
+    let (code, stdout, stderr) = run.end(Duration::from_secs(15));
+    assert_ne!(code, Some(0), "{stderr}");
+    let lines = json_lines(&stdout);
+    let events: Vec<&str> = lines.iter().map(|l| l["event"].as_str().unwrap()).collect();
+    assert_eq!(events, ["ready", "state"], "{stdout}");
+    assert_eq!(lines[1]["phase"], "failed", "{stdout}");
+
+    let mut run = spawn_as(&["--json"], &f, &["--port", "0"], &[]);
+    assert!(
+        run.err.wait_for("/deploy#token=", HANG_GUARD),
+        "stderr never carried the signing url: {}",
+        run.err.text()
+    );
+    let err = run.err.text();
+    let origin = err
+        .lines()
+        .filter(|l| l.contains("/deploy#token="))
+        .find_map(|l| l.trim().strip_prefix("http://")?.split("/deploy#").next())
+        .unwrap_or_else(|| panic!("no signing url line in {err}"))
+        .to_string();
+    let (status, _) = run
+        .json(http.get(format!("http://{origin}/api/deploy")))
+        .await;
+    assert_eq!(status, 200);
+    sigterm(&run);
+    let (code, stdout, stderr) = run.end(Duration::from_secs(15));
+    assert_ne!(code, Some(0), "{stderr}");
+    assert!(stdout.is_empty(), "no document and no event: {stdout}");
 }

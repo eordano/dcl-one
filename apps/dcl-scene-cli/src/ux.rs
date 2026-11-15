@@ -67,6 +67,78 @@ pub fn json() -> bool {
     JSON.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static EVENTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `start --json`: stdout carries one JSON object per line ([`event`]) and
+/// nothing else. The run is not [`quiet`]: the lines a terminal reads go to
+/// stderr ([`say`]).
+pub fn set_events(on: bool) {
+    EVENTS.store(on, std::sync::atomic::Ordering::Relaxed);
+    if on {
+        set_quiet(false);
+    }
+}
+
+pub fn events() -> bool {
+    EVENTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A line for the person at the terminal: stdout, or stderr when stdout
+/// carries [`events`].
+pub fn say(line: impl fmt::Display) {
+    match events() {
+        true => eprintln!("{line}"),
+        false => println!("{line}"),
+    }
+}
+
+/// One event of a `start --json` run, a JSON object on a line of its own;
+/// nothing without [`events`].
+pub fn event(line: &impl serde::Serialize) {
+    if events()
+        && let Ok(line) = serde_json::to_string(line)
+    {
+        println!("{line}");
+    }
+}
+
+/// `start --json`: a rebuild of the running preview failed. The parts are
+/// the ones the terminal prints and `/api/problems` serves.
+#[derive(serde::Serialize)]
+struct BuildErrorEvent<'a> {
+    event: &'static str,
+    message: String,
+    detail: Option<String>,
+    steps: &'a [String],
+}
+
+/// `start --json`: the run failed and exits.
+#[derive(serde::Serialize)]
+struct ErrorEvent {
+    event: &'static str,
+    message: String,
+    code: Option<&'static str>,
+}
+
+/// The `error` event of a `start --json` run: the first line [`render`]
+/// gives for `err`, and the code of its cause when the error has one.
+/// Nothing without [`events`].
+pub fn error_event(err: &anyhow::Error) {
+    let fallen;
+    let user = match find_user(err) {
+        Some(u) => u,
+        None => {
+            fallen = fallback(err);
+            &fallen
+        }
+    };
+    event(&ErrorEvent {
+        event: "error",
+        message: sanitize(&strip_sgr(&user.what)),
+        code: user.code,
+    });
+}
+
 static CUSTOM_BUILD_NOTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// `start --no-build-note`: a preview rebuild through package.json scripts.build is not
@@ -98,6 +170,8 @@ pub struct UserError {
     why: Option<String>,
     try_next: Vec<String>,
     source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    code: Option<&'static str>,
+    usage: bool,
 }
 
 impl UserError {
@@ -107,7 +181,23 @@ impl UserError {
             why: None,
             try_next: try_next.0,
             source: None,
+            code: None,
+            usage: false,
         }
+    }
+
+    /// A command line the CLI read but cannot run as it stands: the exit
+    /// code is 2 and no `error` event prints, as for one it cannot parse.
+    pub fn usage(mut self) -> Self {
+        self.usage = true;
+        self
+    }
+
+    /// A short stable word for the cause, which the `error` event of
+    /// `start --json` carries. Only for a cause the code knows as a branch.
+    pub fn code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
     }
 
     pub fn why(mut self, why: impl Into<String>) -> Self {
@@ -147,6 +237,9 @@ fn stderr_color() -> bool {
 }
 
 pub(crate) fn stdout_color() -> bool {
+    if events() {
+        return stderr_color();
+    }
     color_allowed(std::io::stdout().is_terminal())
 }
 
@@ -159,6 +252,11 @@ pub(crate) fn tint(color: bool, sgr: &str, body: &str) -> String {
 
 fn find_user(err: &anyhow::Error) -> Option<&UserError> {
     err.chain().find_map(|c| c.downcast_ref::<UserError>())
+}
+
+/// Whether the failure is a [`UserError::usage`] one.
+pub fn usage_error(err: &anyhow::Error) -> bool {
+    find_user(err).is_some_and(|user| user.usage)
 }
 
 pub fn concise_cause(err: &anyhow::Error) -> String {
@@ -310,6 +408,14 @@ fn report_topic(topic: Topic, err: &anyhow::Error) {
             &fallen
         }
     };
+    if topic == Topic::Build {
+        event(&BuildErrorEvent {
+            event: "build-error",
+            message: sanitize(&strip_sgr(&user.what)),
+            detail: user.why.as_deref().map(sanitize_block),
+            steps: &user.try_next,
+        });
+    }
     record(
         topic,
         user.what.clone(),
@@ -512,11 +618,11 @@ impl Steps {
             return;
         }
         let counter = format!("[{}/{}]", self.next, self.total);
-        println!(
+        say(format_args!(
             "{} {}",
             tint(stdout_color(), "1", &counter),
             message.as_ref()
-        );
+        ));
         self.next += 1;
     }
 }
@@ -534,7 +640,7 @@ impl Slow {
     pub fn start(label: impl Into<String>) -> Self {
         let label = label.into();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        if quiet() || !stdout_color() {
+        if quiet() || events() || !stdout_color() {
             return Slow { stop, handle: None };
         }
         let s = stop.clone();
@@ -690,7 +796,7 @@ fn emit(line: String) {
     if quiet() {
         return;
     }
-    println!("{line}");
+    say(&line);
     if !in_session() || ci() {
         return;
     }
@@ -708,7 +814,7 @@ fn emit(line: String) {
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
     if !note.is_empty() {
-        println!("{}", tint(stdout_color(), "2", &format!("\u{2302} {note}")));
+        say(tint(stdout_color(), "2", &format!("\u{2302} {note}")));
     }
 }
 

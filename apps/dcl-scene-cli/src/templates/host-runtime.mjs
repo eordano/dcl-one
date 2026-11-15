@@ -19,6 +19,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { exitWithParent, loadCjs, readSceneFile } from './driver-common.mjs'
 import { createServerModule } from './host-storage.mjs'
 
 const root = path.resolve(process.argv[2] ?? '.')
@@ -384,7 +385,7 @@ function isSdkChunk(fileName) {
 const HOST_MODULES = {
   '~system/Runtime': () => ({
     readFile: async ({ fileName }) => {
-      let content = fs.readFileSync(path.join(root, fileName))
+      let content = readSceneFile(root, fileName)
       if (isSdkChunk(fileName)) content = Buffer.concat([content, Buffer.from(SDK_CHUNK_SUFFIX)])
       else if (fileName.endsWith('.js')) {
         // a dynamic import('@dcl/sdk/server') survives bundling verbatim and
@@ -523,14 +524,6 @@ const fakeGlobal = {
   console,
   __dclOneHostServerModule: { Storage, EnvVar }
 }
-const PREAMBLE = 'const require = globalThis.require;\n'
-function loadCjs(rel) {
-  const code = fs.readFileSync(path.join(root, rel), 'utf8')
-  const mod = { exports: {} }
-  const wrapper = new Function('globalThis', 'module', 'exports', PREAMBLE + code)
-  wrapper.call(fakeGlobal, fakeGlobal, mod, mod.exports)
-  return mod.exports
-}
 
 process.on('unhandledRejection', (e) => console.error('[multiplayer] unhandled rejection:', e))
 
@@ -538,11 +531,9 @@ process.on('unhandledRejection', (e) => console.error('[multiplayer] unhandled r
 // hard exit), so child-reaping cannot be its job: the CLI holds our stdin
 // pipe, and any death mode closes it -- exit with it instead of squatting
 // the room slot as an orphan (same pattern as data-layer-host.mjs)
-process.stdin.resume()
-process.stdin.on('end', () => process.exit(0))
-process.stdin.on('close', () => process.exit(0))
+exitWithParent()
 
-const loader = loadCjs(mainFile)
+const loader = loadCjs(root, mainFile, fakeGlobal)
 if (typeof loader.onStart !== 'function' || typeof loader.onUpdate !== 'function') {
   console.error('[multiplayer] the scene main exports no onStart/onUpdate -- not a built scene?')
   process.exit(1)

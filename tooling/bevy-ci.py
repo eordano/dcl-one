@@ -85,6 +85,7 @@ IMAGES_INPUTS = (
     'tooling/tests/test_ci_publication.py',
     'tooling/tests/test_image_publish.py',
     '.github/workflows/apis-sites-images.yml',
+    '.github/workflows/apis-sites-compile.yml',
 )
 # How the images are built and published, and what the fixed dependency hashes in infra/packages
 # follow (manifests, lockfiles, toolchain). A PR builds the images only for these; main builds
@@ -99,6 +100,7 @@ IMAGES_PACKAGING = (
     'tooling/tests/check_hud_manifest_nix.py',
     'tooling/tests/test_ci_publication.py', 'tooling/tests/test_image_publish.py',
     '.github/workflows/bevy-explorer-ci.yml', '.github/workflows/apis-sites-images.yml',
+    '.github/workflows/apis-sites-compile.yml',
 )
 IMAGES_JOBS = {'APIs + Sites / build (amd64, ubuntu-26.04)',
                'APIs + Sites / build (arm64, ubuntu-26.04-arm)'}

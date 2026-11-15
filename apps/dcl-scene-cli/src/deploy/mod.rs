@@ -56,6 +56,9 @@ pub struct DeployOptions {
     pub no_browser: bool,
     pub ci: bool,
     pub port: Option<u16>,
+    /// Where the signing server listens and whom it answers:
+    /// [`crate::linker::signing_bind`] of `--host`.
+    pub signing: crate::linker::SigningBind,
     /// A caller hosting the signing routes on its own server (the preview
     /// server's `/deploy/sign/`); `None` (the CLI) serves the page itself.
     pub host_signer: Option<crate::linker::HostSigner>,
@@ -143,11 +146,15 @@ pub fn catalyst_rotation() -> Vec<String> {
 /// one of these — a bundler's module-path comment, a `require('../package.json')`
 /// — without the explorer ever fetching it, so such a mention is not a lost
 /// asset.
-const DEVELOPER_DCL_IGNORE: [&str; 22] = [
+const DEVELOPER_DCL_IGNORE: [&str; 25] = [
     ".*",
     "package.json",
     "package-lock.json",
     "yarn-lock.json",
+    // The pnpm workspace file can hold local paths.
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
     "build.json",
     "export",
     "tsconfig.json",
@@ -1132,6 +1139,8 @@ mod tests {
             "bin/index.js",
             "bin/index.js.map",
             "yarn.lock",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
             "builder.json",
             "package.json",
             "package-lock.json",
@@ -1153,7 +1162,6 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                "yarn.lock",
                 "scene.json",
                 "builder.json",
                 "src/tex.png",

@@ -2829,7 +2829,11 @@ async fn standalone_browser_server_stays_available_after_publish() {
         let task = tokio::spawn(async move {
             super::super::serve_signing_on(
                 workspace,
-                (port, listener),
+                super::super::SigningListener {
+                    port,
+                    listener,
+                    signing: crate::linker::SigningBind::LOCAL,
+                },
                 false,
                 Duration::from_secs(5),
                 false,

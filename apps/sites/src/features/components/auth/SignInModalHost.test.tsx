@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   Object.assign(window, { __vite_plugin_react_preamble_installed__: true });
@@ -30,6 +30,10 @@ vi.mock("@/data/lib/auth/index", () => ({
 import SignInModalHost from "./SignInModalHost";
 import { closeSignIn, openSignIn, peekPendingRedirect } from "./signin-store";
 
+// The host loads the view lazily; a first load on a busy machine outlasts the query's wait.
+beforeAll(async () => {
+  await import("@ui/components/SignInModalView");
+}, 60_000);
 beforeEach(() => {
   vi.stubGlobal("location", { pathname: "/create/storage", search: "?step=edit", hash: "", origin: "http://localhost:3000", assign: vi.fn() });
 });

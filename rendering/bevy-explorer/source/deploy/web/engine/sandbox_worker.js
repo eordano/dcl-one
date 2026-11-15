@@ -13,7 +13,9 @@ const RealBroadcastChannel = self.BroadcastChannel;
 // postMessage carries killToken.
 const workerPostMessage = self.postMessage.bind(self);
 const workerClose = self.close.bind(self);
-self.fetch = createSceneFetch(self.fetch.bind(self));
+// The node's routing map, given by INIT_WORKER before scene code exists; null until then.
+let sceneRoutes = null;
+self.fetch = createSceneFetch(self.fetch.bind(self), () => sceneRoutes);
 // Stack traces are only ever formatted the default way: scene code can't install a formatter.
 Object.defineProperty(Error, "prepareStackTrace", {
   get: () => undefined,
@@ -679,6 +681,7 @@ self.onmessage = async (event) => {
     killToken = event.data.payload.killToken;
     shutdownToken = event.data.payload.shutdownToken;
     killFlags = new Int32Array(event.data.payload.killFlags);
+    sceneRoutes = event.data.payload.sceneRoutes instanceof Map ? event.data.payload.sceneRoutes : null;
 
     if (!compiledModule || !sharedMemory) {
       console.error("[Sandbox Worker] Invalid payload received.");

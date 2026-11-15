@@ -15,6 +15,7 @@ catalyst-shared = { path = "../shared" }
 catalyst-config = { path = "../config" }
 catalyst-chain-index = { path = "../chain-index" }
 catalyst-content = { path = "../content" }
+catalyst-storage = { path = "../storage" }
 catalyst-explore = { path = "../explore" }
 tokio.workspace = true
 axum.workspace = true
@@ -69,7 +70,7 @@ catalyst-config = { path = "../config", features = ["test-support"] }
 catalyst-chain-index = { path = "../chain-index", features = ["test-support"] }
 catalyst-content = { path = "../content", features = ["test-support"] }
 catalyst-explore = { path = "../explore", features = ["test-support"] }
-catalyst-db = { path = "../db", features = ["scratch"] }
+catalyst-db = { path = "../db", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
 alloy = { version = "2", default-features = false, features = ["std", "signer-local"] }
 tokio-tungstenite.workspace = true

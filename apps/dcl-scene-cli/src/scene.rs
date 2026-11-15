@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+const DRIVER_COMMON: &str = include_str!("templates/driver-common.mjs");
+
 #[derive(Clone, Debug)]
 pub struct Project {
     pub root: PathBuf,
@@ -22,6 +24,22 @@ pub fn work_dir(root: &Path) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Writes a node driver into `.dcl-one/`, with the module the drivers import
+/// beside it, and returns the driver's path. A file that already holds these
+/// bytes is left alone: another driver may be loading it.
+pub fn write_driver(root: &Path, name: &str, template: &str) -> Result<PathBuf> {
+    let dir =
+        work_dir(root).with_context(|| format!("creating {}", root.join(".dcl-one").display()))?;
+    for (name, contents) in [("driver-common.mjs", DRIVER_COMMON), (name, template)] {
+        let path = dir.join(name);
+        if std::fs::read(&path).is_ok_and(|on_disk| on_disk == contents.as_bytes()) {
+            continue;
+        }
+        std::fs::write(&path, contents).with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(dir.join(name))
+}
+
 impl Project {
     pub fn load(dir: &Path) -> Result<Self> {
         if !dir.is_dir() {
@@ -30,6 +48,7 @@ impl Project {
                 TrySteps::one("check the path passed to --dir")
                     .and("run the command from inside your scene folder"),
             )
+            .code("no-directory")
             .into());
         }
         let root = dunce::canonicalize(dir)
@@ -56,6 +75,7 @@ impl Project {
                     .and("start a new scene with: dcl-scene-cli init"),
             )
             .why(format!("no scene.json in {}", root.display()))
+            .code("no-scene")
             .into());
         }
         let bytes = std::fs::read(&scene_path)
@@ -697,6 +717,29 @@ mod tests {
             b64_content_hash(&abs, "m"),
             "the memo is gone: every entity request would re-read the whole scene"
         );
+    }
+
+    #[test]
+    fn a_driver_reads_a_scene_file_only_inside_the_scene_folder() {
+        let tmp = Tmp::new("driver-common");
+        tmp.write("scene/a.txt", "in");
+        tmp.write("secret.txt", "out");
+        let root = tmp.0.join("scene");
+        let probe = "import { readSceneFile } from './driver-common.mjs'\n\
+            process.stdout.write(readSceneFile(process.argv[2], process.argv[3]))\n";
+        let driver = write_driver(&root, "probe.mjs", probe).unwrap();
+        let node = crate::build::require_node("this test", "").unwrap();
+        let read = |name: &str| {
+            let mut probe = std::process::Command::new(&node);
+            probe.args([&driver, &root]).arg(name).output().unwrap()
+        };
+        assert_eq!(read("a.txt").stdout, b"in");
+        for name in ["../secret.txt", "bin/../../secret.txt"] {
+            let refused = read(name);
+            let stderr = String::from_utf8_lossy(&refused.stderr);
+            assert!(refused.stdout.is_empty(), "{name} was read");
+            assert!(stderr.contains("is outside the scene folder"), "{stderr}");
+        }
     }
 
     #[test]

@@ -1,8 +1,10 @@
 # Shop parity
 
 Compares `apps/ui3/src/shop` with the Shop UI at the `decentraland/shop` revision pinned in
-[`reference.json`](reference.json), page by page, on the same recorded data. The pin is the revision
-production serves on the date it names; moving it means recording a new set against it.
+[`reference.json`](reference.json), and `apps/sites`' landing, What's On, Create and Places pages
+with decentraland.org (the `decentraland/sites` SPA) at the revision pinned in
+[`reference-sites.json`](reference-sites.json), page by page, on the same recorded data. A pin is the
+revision production serves on the date it names; moving it means recording a new set against it.
 
 The tool is committed; the data it compares is not. Recordings, the gate and every run stay under
 `state/shop-parity/` (gitignored) on the machine that made them, so numbers quoted elsewhere name the
@@ -11,11 +13,13 @@ recording they were measured on.
 ```sh
 pnpm install                           # playwright-core; then `pnpm exec playwright-core install chromium`
 node reference.mts                     # check out and build the pinned Shop UI under state/
+node reference.mts --reference sites   # the same for the pinned sites SPA (capture builds what its pages need)
 node record.mts --set <date>           # record the answers both sides read (see Recording)
 node capture.mts --build               # build apps/sites, compare every page and viewport, print the summary
 node gate.mts                          # fail if a page marked identical is not
 node gate.mts --promote                # mark the pages that are identical now
 node inspect.mts item desktop dcl-one 'document.title'   # evaluate in one side's page
+node nav-walk.mts --set <date>         # open every link each gated sites page shows, on both sides (see Navigation walk)
 pnpm test && pnpm typecheck
 ```
 
@@ -27,16 +31,67 @@ neither), and names it. It stamps the build with what it was built
 from: the commit, a hash of every uncommitted change that can reach the build (edits and untracked
 files anywhere in the repository but this tool), and the Node version. Without `--build`, a run
 refuses a build whose stamp is not the current sources. `gate.mts --promote` runs only on a fully
-committed tree, this tool included. `--pages overview,items` and `--viewports desktop` narrow a run.
+committed tree, this tool included. `--pages overview,items` and `--viewports desktop` narrow a run
+(a capture, or the pages a promotion reads).
 `CHROMIUM_BIN` picks the browser; both sides always use the same one. `pnpm test` needs no install,
 and the repository's structure check runs it.
 
-The three loopback servers listen on 5176–5178 (`SHOP_PARITY_PORT_BASE` moves them). The replay
-answers the sites preview only, server to server, and refuses any request a browser makes; the
+The loopback servers listen on 5176–5179 (`SHOP_PARITY_PORT_BASE` moves them): the shop reference,
+the replay, the sites preview and the sites reference. The replay answers the sites preview only, server to server, and refuses any request a browser makes; the
 preview refuses any request another site makes. Both also refuse a `Host` other than their own
 loopback address, which is what a page on a name rebound to 127.0.0.1 would send. So a website open
 elsewhere cannot make a recording read production. A page opened on the preview or the reference in
 another browser calls the real services and is not what is compared.
+
+## Two references
+
+`reference-sites.json` pins `decentraland/sites` (private: `SHOP_PARITY_REFERENCE_REPO_SITES` names a
+local mirror holding the revision, as `SHOP_PARITY_REFERENCE_REPO` does for the shop), built from the
+repository root (`app: "."`) with `VITE_REACT_APP_DCL_DEFAULT_ENV=prod`, so the bundle names the
+production services the recording answers. Each reference is checked out and built under
+`state/shop-parity/reference/<revision>/` and served by its own static server; a page's `reference`
+("shop", the default, or "sites") picks the one it is compared with, and its `path` may differ per
+side (`/events` on the reference, `/whats-on` on dcl-one). The manifest and the report name both
+revisions.
+
+The sites build is `vite build` alone. The repository's build script also runs the type check
+(`tsc -b`) and four post-build scripts, none of which changes what is compared. Three write files
+the production edge reads and the app never requests: `scripts/prerender-legal.mjs` (`dist/legal/`,
+the legal pages as static HTML for a client without JavaScript), `scripts/build-route-manifest.mjs`
+(`dist/routes.json`, the paths the edge answers 404 for; the reference server here answers every
+path that is not a file with the app, which renders its own not-found page) and
+`scripts/build-llms-txt.mjs` (`dist/llms.txt`). The fourth is `scripts/prerender-hero.mjs`,
+which puts a static hero shell, a font preload and the English dictionary (`window.__dclEn`) before
+`#root` in `dist/index.html`; the app removes the shell on hydration (the landing's Hero effect, an
+inline script on every other path) and loads the dictionary itself when it is not inlined
+(`src/intl/LocaleContext.tsx`), and a capture measures after both, so the step changes nothing that is
+compared.
+
+decentraland.org's stylesheet names `Inter, Helvetica, Arial, sans-serif` but declares no Inter face, so
+the reference renders the fallback; dcl-one declares Inter v20 on every page (`apps/ui3/src/atoms/inter.css`)
+and keeps it. Every sites page is therefore measured under one frame rule (`pages/sites/frame.mts` INTER,
+installed by its `init`): the reference's context gets inter.css's `@font-face` rules before it navigates,
+each url pointing at the same woff2 files, which the sites reference's static server serves from
+`apps/ui3/public/fonts` under `/__parity/fonts/` (`lib/fonts.mts`), and both sides await
+`document.fonts.ready` before measuring. The shop reference loads its own fonts and is untouched.
+
+The sites pages live one per file under `pages/sites/<id>.mts`, each exporting its signed-out and signed-in specs,
+aggregated into `PAGES` after the shop pages; `pages/sites/frame.mts` holds the shared nav and footer
+keys (the reference's LandingNavbar and LandingFooter against dcl-one's `header.dtb` or the explorer's
+`header.xc__nav`). While recording, the places page discovers the first Live Now scene that is not
+Genesis Plaza; place-live compares its page. The node's `/api/places`, `/api/destinations`, `/api/map`
+are the places service and `/api/events`, `/api/schedules` the events service, so one recorded answer
+feeds both sides; the reference's own-origin `/api/*` is the `sites` service (decentraland.org).
+`report` compares the player report form at `/report`; `report-success` opens that form and makes the
+client navigation a submission makes (`{ submitted: true }` in the history entry), since the success
+card shows to no other visit. The invite page's clip is the `cms-videos` service (Contentful's video
+CDN as decentraland.org reads it), so the recording holds it; dcl-one serves the same bytes as its own
+asset. `page-not-found` opens `/this-page-does-not-exist` on both sides, the fullscreen page a dead link lands on
+(no nav, no footer): the reference's static server answers it with the SPA shell (200) and dcl-one with a 404, which
+is listed with the capture and not compared. The footer's language flag is the `twemoji` service (jsdelivr's twemoji SVGs only), a fixed
+interface asset, so the recording keeps its bytes, unlike a content picture. A key both sides leave out
+on one viewport by design names it in `absentOn`; every other declared key found on neither side is
+reported, and no expectation covers it.
 
 ## What a run does
 
@@ -76,8 +131,15 @@ A page×viewport is identical when no pixel differs outside its masks and region
 structural difference is a declared expectation, and every request the recording could not answer
 or that went to a host the harness does not know is declared by the page (`unrecorded`).
 `state/shop-parity/gate.json` lists the identical ones and the recording they were found on; the gate
-fails when one of them stops being identical. An expectation records a difference, it does not
-approve one: each names the rule or code behind it.
+fails when one of them stops being identical, and drops a page×viewport whose page the tool no longer
+declares. Its `ceilings` hold, per differing page×viewport, the
+differing pixels and unexpected structural differences of the last promotion (`gate.mts --promote`
+only lowers them); the gate fails when a capture rises above one. Before measuring, a capture decodes
+every image and stops every animation on both sides (infinite ones at their start, finite ones at
+their end, as the screenshot does), so a count depends on neither a decode nor an animation frame.
+Every scaled image is re-attached from a blob of its own bytes first, so both sides draw it from one
+decode at its final size and not from whichever mip Chromium's decode cache held.
+An expectation records a difference, it does not approve one: each names the rule or code behind it.
 
 ## Signed-in pages
 
@@ -93,7 +155,9 @@ session and the same captures.
 Pages sign their requests at the fixed clock, which production refuses a minute later. While
 recording, a read (GET or HEAD) a page sent signed is signed again as the same wallet, at the real
 time and with the page's own metadata, before it goes out; every other request still goes out
-unsigned. A write a page signed is never sent: it would change the test wallet's state, so it is
+unsigned. A live read follows a redirect only to a host `lib/services.mts` lists, signs each hop
+again, and signs only for a `decentraland.org` host; a redirect to any other host is listed and
+not followed. A write a page signed is never sent: it would change the test wallet's state, so it is
 listed and missed. A fill without the key fails a miss the page signed rather than sending it
 unsigned. A replay answers by method, path, query and body, never by headers, so the signature is
 not part of what is compared, and a URL both a signed-in and a signed-out page read keeps one
@@ -101,6 +165,30 @@ answer: personal fields in it (a `pickedByUser`) read the same on both sides, as
 
 The session's tests sign with viem, so they live in `test/` and run with `pnpm test` after
 `pnpm install`; the structure check runs `lib/*.test.mts`, which needs nothing installed.
+
+## Navigation walk
+
+`nav-walk.mts` checks that every link a sites page shows resolves on dcl-one as it does on the reference,
+over one recording. It opens each sites page on both sides (signed out, and signed in where the spec
+says), collects the same-origin links each side shows, maps each reference link to its dcl-one path (the
+specs' reference→path pairs, `/events/event?id=<id>` → `/whats-on/<id>`, `/places/place/<x,y>` and
+`/places/world/<name>` as they are, `https://docs.decentraland.org/<p>` → `/docs/<p>`,
+`https://decentraland.org/<p>` → `/<p>`, any other path as it is) and opens each pair as a full document
+on both sides. A pair is equal when both sides reach the same outcome (resolved, not found, error), the
+reference's final path maps to dcl-one's (or dcl-one's own redirect to `/places/<id>` reaches it), and the
+first `h1` reads the same where both have one; titles are listed, not compared. A docs link opens on
+dcl-one only (docs is not a pinned reference) and must resolve there. A link into a production app the
+sites SPA never served (`/marketplace`, `/builder`, `/auth`) opens on dcl-one only too. A production path
+dcl-one does not host (`/dao`, `/discord`) counts as external; where the walker names the public
+target dcl-one redirects such a path to, it asks dcl-one's own server for the path without following the
+redirect and reports the answer. Links to another Decentraland host are listed as unmapped, and links
+dcl-one shows that no reference link maps to are listed per page. The report (`report.md`, `visits.json`,
+under `state/shop-parity/nav/<time>/` or `--out`) lists the mapping, the unmapped links, the outside paths,
+every page and every pair; the exit code is 1 when a pair differs, an outside path answers something
+else, `--max-links` left a link unopened or `--fill` left a document with an unanswered request. `--fill` reads each
+request the replay could not answer once from production, as `record.mts --fill` does, and opens the
+documents that missed again until nothing misses, so the detail pages the links open get their answers
+recorded; run it on a copy of the set when the gate's recording must not change.
 
 ## Recording
 

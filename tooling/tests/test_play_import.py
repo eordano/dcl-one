@@ -11,7 +11,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 import zipfile
 from hud_manifest_fixture import seal, SHARED
 
@@ -55,7 +55,7 @@ class GitHubReadTests(unittest.TestCase):
                 self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4, 8, 16])
 
     def test_auth_not_found_and_unknown_errors_do_not_retry(self):
-        for status in (400, 401, 403, 404, 418, 422, 429):
+        for status in (400, 401, 403, 404, 418, 422):
             with self.subTest(status=status), \
                     patch.object(play.subprocess, 'check_output', side_effect=self.error(status)) as get, \
                     patch.object(play.time, 'sleep') as sleep:
@@ -63,6 +63,35 @@ class GitHubReadTests(unittest.TestCase):
                     play.api('actions/runs/42')
                 self.assertEqual(get.call_count, 1)
                 sleep.assert_not_called()
+
+    def test_rate_limit_backs_off_from_a_minute_and_stays_bounded(self):
+        limited = [subprocess.CalledProcessError(1, ['gh', 'api'], stderr=text) for text in (
+            'gh: API rate limit exceeded for installation ID 7. (HTTP 403)\n',
+            'gh: You have exceeded a secondary rate limit. Please wait a few minutes. (HTTP 403)\n',
+            'gh: Too Many Requests (HTTP 429)\n')]
+        for failure in limited:
+            with self.subTest(failure=failure.stderr), \
+                    patch.object(play.subprocess, 'check_output', side_effect=[failure, '{}']) as get, \
+                    patch.object(play.time, 'sleep') as sleep:
+                self.assertEqual(play.api('actions/runs/42'), {})
+                self.assertEqual(get.call_count, 2)
+                sleep.assert_called_once_with(60)
+        # Without a wait budget: five tries. With one: doubled to a cap, never past the deadline.
+        with patch.object(play.subprocess, 'check_output', side_effect=limited[0]) as get, \
+                patch.object(play.time, 'sleep') as sleep:
+            with self.assertRaises(subprocess.CalledProcessError):
+                play.api('actions/runs/42')
+            self.assertEqual(get.call_count, 5)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [60, 120, 240, 240])
+        clock = [0]
+        with patch.object(play.subprocess, 'check_output', side_effect=limited[1]) as get, \
+                patch.object(play.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(play.time, 'sleep',
+                             side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)) as sleep:
+            with self.assertRaises(subprocess.CalledProcessError):
+                play.api('actions/runs/42', deadline=500)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [60, 120, 240, 80])
+            self.assertEqual(clock[0], 500)
 
     def test_invalid_json_does_not_retry_or_become_a_successful_read(self):
         with patch.object(play.subprocess, 'check_output', return_value='not JSON') as get, \
@@ -1058,6 +1087,51 @@ class PlayImportTests(unittest.TestCase):
                                      (self.build / 'engine/pkg/webgpu_build_bg.wasm').read_bytes())
                     self.assertEqual(contract.verify(destination, self.root)['build_revision'], pr['merge'])
 
+    def test_wait_ends_when_the_producer_of_a_running_workflow_ends_without_an_upload(self):
+        # A consumer job inside the Bevy run keeps that run under way; the wait must not last to the deadline.
+        expected = contract.inputs(self.root)
+        # A skipped producer is no failure to rerun: the run found the engine inputs unchanged.
+        named = {'failure': r'did not upload a web build: 42 \(failure\)\. Rerun it, then this job',
+                 'cancelled': r'did not upload a web build: 42 \(cancelled\)\. Rerun it, then this job',
+                 'skipped': r'skipped the web build: 42\. Refresh main with:'}
+        for conclusion in ('failure', 'cancelled', 'skipped'):
+            with self.subTest(conclusion=conclusion):
+                ended = {'name': play.PRODUCER, 'status': 'completed', 'conclusion': conclusion}
+                responses = [{'workflow_runs': [run(status='in_progress', conclusion=None)]},
+                             {'total_count': 1, 'jobs': [ended]}]
+                with patch.object(play, 'api', side_effect=responses) as api, \
+                        patch.object(play, 'current_pr', return_value=None), \
+                        patch.dict(play.os.environ, {'GITHUB_SHA': SHA}), \
+                        patch.object(play.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+                        patch.object(contract, 'inputs', return_value=expected), \
+                        patch.object(play.time, 'sleep') as sleep, \
+                        self.assertRaisesRegex(RuntimeError, named[conclusion]) as failure:
+                    play.fetch(wait=60)
+                sleep.assert_not_called()
+                self.assertEqual(api.call_count, 2)
+                self.assertEqual('Rerun it' in str(failure.exception), conclusion != 'skipped')
+        # A second run of the same commit that has no producer job yet keeps the wait open,
+        # and the older run is not read before the first poll.
+        class Waited(Exception):
+            pass
+        ended = {'name': play.PRODUCER, 'status': 'completed', 'conclusion': 'failure'}
+        responses = [{'workflow_runs': [run(id=43, status='queued', conclusion=None),
+                                        run(status='in_progress', conclusion=None)]},
+                     {'total_count': 0, 'jobs': []}]
+        with patch.object(play, 'api', side_effect=responses) as api, \
+                patch.object(play, 'current_pr', return_value=None), \
+                patch.dict(play.os.environ, {'GITHUB_SHA': SHA}), \
+                patch.object(play.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+                patch.object(contract, 'inputs', return_value=expected), \
+                patch.object(play.time, 'sleep', side_effect=Waited), \
+                self.assertRaises(Waited):
+            play.fetch(wait=60)
+        self.assertEqual(api.call_count, 2)
+        # The same job in a completed run keeps the old answer: no record, no exception.
+        with patch.object(play, 'api', return_value={'total_count': 1, 'jobs': [
+                {'name': play.PRODUCER, 'status': 'completed', 'conclusion': 'skipped'}]}):
+            self.assertIsNone(play.producer_record(run()))
+
     def test_development_rejects_untrusted_and_already_failed_runs_before_job_lookup(self):
         pr = {'number': 7, 'head': SHA, 'merge': 'b' * 40}
         candidates = [run(status='in_progress', conclusion=None, head_repository={'full_name': 'other/project'}),
@@ -1137,6 +1211,99 @@ class PlayImportTests(unittest.TestCase):
         download.assert_called_once_with(run(), None, True, None, 180, producer=None)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4, 8])
         self.assertEqual(clock[0], 14)
+
+    def history(self, first, older):
+        # Page one: `first`, then 99 runs of other branches. Page two: `older`.
+        return [[first] + [run(id=900 + n, head_branch='dev') for n in range(99)], older]
+
+    def test_wait_polls_a_matching_run_under_way_before_it_reads_older_history(self):
+        # The consumer of an engine change: its own run is the newest, and its build is not uploaded yet.
+        under_way = run(id=60, status='in_progress', conclusion=None)
+        pages = self.history(under_way, [run(id=41, head_sha='b' * 40), run(id=40, head_sha='c' * 40)])
+        polls = iter([[under_way], [run(id=60)]])
+        first = [True]
+
+        def response(path, deadline):
+            page = int(path.rsplit('=', 1)[1])
+            if page == 1 and not first[0]:
+                return {'workflow_runs': next(polls)}
+            first[0] = False
+            return {'workflow_runs': pages[page - 1]}
+
+        with patch.object(play, 'api', side_effect=response) as api, \
+                patch.object(play, 'inputs_at', return_value='match') as inputs_at, \
+                patch.object(contract, 'inputs', return_value='match'), \
+                patch.object(play, 'download_run', return_value=self.build) as download, \
+                patch.object(play.time, 'sleep') as sleep:
+            self.assertEqual(play.fetch(wait=600, production=True), self.build)
+        self.assertEqual([call.args[0].rsplit('=', 1)[1] for call in api.call_args_list], ['1', '1', '1'])
+        self.assertEqual([call.args[0] for call in inputs_at.call_args_list], [SHA])  # no older commit fetched
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4])
+        download.assert_called_once_with(run(id=60), None, True, None, ANY, producer=None)
+
+    def test_history_goes_on_when_the_run_under_way_gives_no_build(self):
+        under_way = run(id=60, status='in_progress', conclusion=None)
+        older = run(id=41)
+        pages = self.history(under_way, [older])
+        requests = []
+
+        def response(path, deadline):
+            requests.append(path.rsplit('=', 1)[1])
+            if requests == ['1', '1']:
+                return {'workflow_runs': [run(id=60, conclusion='cancelled')]}
+            return {'workflow_runs': pages[int(requests[-1]) - 1]}
+
+        with patch.object(play, 'api', side_effect=response), \
+                patch.object(play, 'inputs_at', return_value='match'), \
+                patch.object(contract, 'inputs', return_value='match'), \
+                patch.object(play, 'download_run', return_value=self.build) as download, \
+                patch.object(play.time, 'sleep') as sleep:
+            self.assertEqual(play.fetch(wait=600, production=True), self.build)
+        self.assertEqual(requests, ['1', '1', '2'])
+        sleep.assert_called_once_with(2)
+        download.assert_called_once_with(older, None, True, None, ANY, producer=None)
+
+    def test_an_import_without_a_wait_reads_older_history_past_a_run_under_way(self):
+        older = run(id=41)
+        pages = self.history(run(id=60, status='in_progress', conclusion=None), [older])
+        with patch.object(play, 'api', side_effect=[{'workflow_runs': page} for page in pages]) as api, \
+                patch.object(play, 'inputs_at', return_value='match'), \
+                patch.object(contract, 'inputs', return_value='match'), \
+                patch.object(play, 'download_run', return_value=self.build) as download, \
+                patch.object(play.time, 'sleep') as sleep:
+            self.assertEqual(play.fetch(production=True), self.build)
+        self.assertEqual(api.call_count, 2)
+        sleep.assert_not_called()
+        download.assert_called_once_with(older, None, True, None, None, producer=None)
+
+    def test_a_change_without_engine_inputs_takes_the_finished_main_build_and_does_not_wait(self):
+        pr = {'number': 7, 'head': 'b' * 40, 'base': 'c' * 40, 'merge': 'd' * 40}
+        finished = run(id=41, head_sha='e' * 40)
+        with patch.object(play, 'api', return_value={'workflow_runs': [
+                run(id=60, status='in_progress', conclusion=None), finished]}), \
+                patch.object(play, 'current_pr', return_value=pr), \
+                patch.object(play, 'engine_changed', return_value=False), \
+                patch.object(play, 'inputs_at', return_value='main'), \
+                patch.object(contract, 'inputs', return_value='ours'), \
+                patch.object(play, 'download_run', side_effect=[None, self.build]) as download, \
+                patch.object(play.time, 'sleep') as sleep:
+            self.assertEqual(play.fetch(wait=600), self.build)
+        sleep.assert_not_called()
+        self.assertEqual([call.args[0]['id'] for call in download.call_args_list], [60, 41])
+
+    def test_a_wait_that_ends_inside_a_read_names_the_run_under_way(self):
+        responses = [{'workflow_runs': [run(status='in_progress', conclusion=None)]},
+                     TimeoutError('GitHub read exceeded the configured wait deadline')]
+        with patch.object(play, 'api', side_effect=responses), \
+                patch.object(play, 'current_pr', return_value=None), \
+                patch.dict(play.os.environ, {'GITHUB_SHA': SHA}), \
+                patch.object(play, 'inputs_at', return_value='match'), \
+                patch.object(contract, 'inputs', return_value='match'), \
+                patch.object(play, 'download_run', return_value=None), \
+                patch.object(play.time, 'sleep'), \
+                self.assertRaisesRegex(RuntimeError, r'Bevy CI run 42 has not uploaded its web build after the '
+                                       r'60 s wait\. Rerun this job when it has'):
+            play.fetch(wait=60)
 
     def test_pending_run_on_recent_page_is_not_fetched_twice(self):
         with patch.object(play, 'api', side_effect=[
@@ -1230,8 +1397,10 @@ class PlayImportTests(unittest.TestCase):
                 patch.object(play, 'download_run') as download, \
                 patch.object(play.time, 'monotonic', side_effect=lambda: clock[0]), \
                 patch.object(play.time, 'sleep', side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)) as sleep, \
-                self.assertRaisesRegex(RuntimeError, 'Refresh main with:'):
+                self.assertRaisesRegex(RuntimeError, r'Bevy CI run 42 has not passed after the 60 s wait\. '
+                                       'Rerun this job when it has') as failure:
             play.fetch(wait=60, production=True)
+        self.assertNotIn('Refresh main with:', str(failure.exception))  # a second main run is no help
         self.assertEqual(api.call_count, 6)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4, 8, 16, 30])
         self.assertEqual(clock[0], 60)

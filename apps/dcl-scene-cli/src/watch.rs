@@ -305,6 +305,34 @@ fn partition_batch(paths: Vec<PathBuf>) -> (Vec<(PathBuf, bool)>, Vec<PathBuf>) 
     (models, code)
 }
 
+/// `start --json`: one rebuild of the running preview, with the `main` file
+/// of scene.json and the saved files that started it. Absolute paths.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RebuildEvent {
+    event: &'static str,
+    output: String,
+    changed: Vec<String>,
+    duration_ms: u64,
+}
+
+/// `output` has one meaning for each build kind: the file the client loads,
+/// never a chunk the built-in bundler wrote beside it.
+pub fn rebuild_event(project: &Project, changed: &[PathBuf], took: Duration) {
+    let Ok(main) = project.main_output() else {
+        return;
+    };
+    let mut changed: Vec<String> = changed.iter().map(|p| p.display().to_string()).collect();
+    changed.sort();
+    changed.dedup();
+    ux::event(&RebuildEvent {
+        event: "rebuild",
+        output: project.root.join(main).display().to_string(),
+        changed,
+        duration_ms: took.as_millis() as u64,
+    });
+}
+
 struct SplitState {
     sdk_opts: EsbuildOptions,
     registry: Vec<&'static str>,
@@ -413,6 +441,7 @@ impl WatchSession {
                         "\u{21bb} rebuilt {}",
                         crate::build_script::summary(&built, started.elapsed(), ux::RESTORE_DIM)
                     ));
+                    rebuild_event(&built.project, &paths, started.elapsed());
                     notify(ReloadEvent::Scene)
                 }
                 Err(e) => ux::report_build(&e),
@@ -547,9 +576,11 @@ impl BuiltinWatchSession {
                     quiet: false,
                 };
                 let mut steps = ux::Steps::silent();
+                let started = Instant::now();
                 // Keep this session on failure so the next edit can retry.
                 match WatchSession::create(self.project.clone(), &opts, true, &mut steps).await {
                     Ok(session) => {
+                        rebuild_event(session.project(), &batch, started.elapsed());
                         notify(ReloadEvent::Scene);
                         return Box::pin(session.run(fs, notify)).await;
                     }
@@ -631,6 +662,7 @@ impl BuiltinWatchSession {
                 ux::rel_to(&self.project.root, &self.es_opts.outfile),
                 ux::fmt_elapsed_tinted(started.elapsed(), ux::RESTORE_DIM)
             ));
+            rebuild_event(&self.project, &paths, started.elapsed());
             notify(ReloadEvent::Scene);
             if self.type_checking {
                 self.typecheck.restart(self.project.clone());

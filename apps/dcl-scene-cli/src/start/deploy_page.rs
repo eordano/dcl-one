@@ -712,6 +712,7 @@ fn launch(st: Arc<AppState>, root: PathBuf, id: u64) {
         no_browser: true,
         ci: false,
         port: None,
+        signing: crate::linker::SigningBind::LOCAL,
         quiet: true,
         host_signer,
         identity,

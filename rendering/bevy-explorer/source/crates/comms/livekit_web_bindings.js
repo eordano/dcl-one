@@ -348,6 +348,16 @@ export async function local_participant_publish_track(local_participant, local_t
 }
 
 /**
+ * Whether the room's token lets this participant publish at all. A listen-only
+ * room (a stage, a world the token admits as audience) says no, and the host
+ * then refuses the publish request (`src/livekit/web/host.rs`), so no track of
+ * this participant reaches the SDK.
+ */
+export function local_participant_can_publish(local_participant) {
+    return local_participant.permissions?.canPublish ?? true;
+}
+
+/**
  * 
  * @param {livekit.LocalParticipant} local_participant
  * @param {livekit.LocalTrack} local_track

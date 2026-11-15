@@ -119,6 +119,7 @@ pub(super) fn comms_settings(config: &Config) -> anyhow::Result<comms::gatekeepe
         voice_initial_connection_ttl_ms: config.social.voice_chat_initial_connection_ttl_ms,
         community_voice_no_moderator_ttl_ms: config.social.community_voice_chat_no_moderator_ttl_ms,
         voice_expired_batch_size: config.social.voice_chat_expired_batch_size,
+        report_evidence_daily_mib: config.social.report_evidence_daily_mib,
         commit_hash: config.node.commit_hash.clone(),
     })
     .context("LIVEKIT_* / COMMS_* configuration")

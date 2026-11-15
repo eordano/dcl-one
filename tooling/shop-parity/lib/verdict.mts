@@ -1,6 +1,6 @@
 // Whether a captured page counts as identical, and which unanswered requests its spec declares. Kept
 // apart from run.mts so the tests need neither a browser nor playwright-core.
-import type { PageSpec, Side } from "../pages.mts";
+import type { PageSpec, Side } from "./spec.mts";
 import type { Miss } from "./recording.mts";
 import type { PageResult } from "./run.mts";
 
@@ -52,4 +52,31 @@ export function classifyMiss(m: Miss, spec: Pick<PageSpec, "unrecorded">): Miss 
 export function classifyUnknown(side: Side, request: string, spec: Pick<PageSpec, "unrecorded">): PageResult["unknown"][number] {
   const rule = spec.unrecorded?.find((u) => u.match.test(request));
   return rule ? { side, request, expected: rule.why } : { side, request };
+}
+
+/** A differing page×viewport's counts on the commit the gate last promoted: later captures may not exceed them. */
+export type Ceiling = { pixels: number; structural: number };
+
+const unexpected = (r: Pick<PageResult, "structure">) => r.structure.filter((d) => !d.expected).length;
+
+/** The lower of the recorded ceiling and this capture's counts, so a promotion never raises a ceiling. */
+export function lowerCeiling(old: Ceiling | undefined, r: Pick<PageResult, "pixels" | "structure">): Ceiling {
+  const now = { pixels: r.pixels.diff, structural: unexpected(r) };
+  return old ? { pixels: Math.min(old.pixels, now.pixels), structural: Math.min(old.structural, now.structural) } : now;
+}
+
+export function ceilingFailures(ceilings: Record<string, Ceiling>, results: Gated[]): { id: string; reasons: string[] }[] {
+  const failures: { id: string; reasons: string[] }[] = [];
+  for (const [id, c] of Object.entries(ceilings)) {
+    const r = results.find((x) => `${x.page}@${x.viewport}` === id);
+    if (!r) {
+      failures.push({ id, reasons: ["it was not captured"] });
+      continue;
+    }
+    const reasons: string[] = [];
+    if (r.pixels.diff > c.pixels) reasons.push(`${r.pixels.diff} differing pixels, ceiling ${c.pixels}`);
+    if (unexpected(r) > c.structural) reasons.push(`${unexpected(r)} structural differences, ceiling ${c.structural}`);
+    if (reasons.length) failures.push({ id, reasons });
+  }
+  return failures;
 }

@@ -15,6 +15,9 @@ WORLDS_SETTINGS_CAP = "12m"
 # The badges backfill body (social badges `MAX_BACKFILL_BODY_BYTES`); a
 # gateway test pins it.
 BADGES_BACKFILL_CAP = "64m"
+# One report evidence file (the gatekeeper reports `MAX_FILE_BYTES`); a
+# gateway test pins it.
+REPORT_EVIDENCE_CAP = "5m"
 # The content server's `POST /entities` route limit at the default field
 # count (`max_deployment_body_bytes`: 200 MiB of files and fields plus
 # multipart framing), rounded up, so its own 413 is the one a client meets.
@@ -288,8 +291,13 @@ def render(table, cfg, mime):
     locations += location('~ "^/world/"', proxy("apis", WORLDS_LIMIT))
     for path in ("/index", "/worlds", "/worlds/status"):
         locations += location("= " + path, proxy("apis", WORLDS_LIMIT))
-    locations += location("~ ^/comms-gatekeeper/reports/players/[^/]+/evidence/", proxy("apis",
-        "client_max_body_size 11m;"))
+    # The player report intake: one evidence file for each PUT, and no deeper path. The
+    # match also covers the moderator's evidence read, so a key that ends in `.data` stays
+    # ahead of the Sites regex below. The app reads the credentials after nginx buffers the
+    # body, so concurrent uploads are capped as on the deploy routes. Every other
+    # /report-user request takes `location /` and the server-wide cap.
+    locations += location('~ "^/report-user/api/reports/(players/)?[^/]+/evidence/[^/]+$"', proxy("apis",
+        f"client_max_body_size {REPORT_EVIDENCE_CAP}; {uploads}"))
     # Both badges host forms reach this already rewritten under /badges. The admin
     # check is a bearer token the app reads after nginx buffers the body, so
     # concurrent uploads are capped as on the deploy routes.
@@ -301,8 +309,10 @@ def render(table, cfg, mime):
     # Keep the Sites .data regex after every API regex.
     locations += location(r"~ \.data$", proxy("sites"))
     for prefix in prefixes:
-        if prefix not in ("/admin", "/server"):
-            locations += pair(prefix, "sites")
+        if prefix in ("/admin", "/server"):
+            continue
+        # The Cast not-found page is the exact /cast; /cast/ stays the gatekeeper's (root-aliases.nix).
+        locations += location("= /cast", proxy("sites")) if prefix == "/cast" else pair(prefix, "sites")
     for path in ("/", "/favicon.ico", "/dcl-sdk-types.json", "/docs/index.md", "/_root.data",
                  "/terms", "/privacy", "/content-policy", "/ethics", "/rewards", "/rewards-terms",
                  "/referral", "/referral-terms", "/credits-terms", "/security", "/brand"):

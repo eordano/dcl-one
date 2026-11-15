@@ -1,6 +1,9 @@
+import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
+import http from 'node:http'
 import path from 'node:path'
 import fs from 'node:fs'
+import { exitWithParent, inside, realpath } from './driver-common.mjs'
 
 const projectDir = path.resolve(process.argv[2])
 const mode = process.argv[3] || 'serve'
@@ -28,8 +31,20 @@ function pathToPosix(v) {
   return v.replace(/\\/g, '/')
 }
 
+// The file system the editor's data layer works on: every path it names is
+// resolved against the scene folder and must stay inside it, symlinks
+// followed, whatever the client sends. A call gets the path that was checked,
+// not the name it was checked under. A removal (`entry`) gets the entry in its
+// real folder, since `rm` removes a link and not what the link points to.
 function makeFsInterface(workdir) {
-  const resolve = (p) => (path.isAbsolute(p) ? p : path.resolve(workdir, p))
+  const root = fs.realpathSync(workdir)
+  const resolve = (p, entry = false) => {
+    const named = path.resolve(workdir, p)
+    const real = realpath(named)
+    const used = entry ? path.join(realpath(path.dirname(named)), path.basename(named)) : real
+    if (!inside(root, real) || !inside(root, used)) throw new Error(`Path ${JSON.stringify(p)} is outside the project`)
+    return used
+  }
   return {
     dirname: (v) => pathToPosix(path.dirname(v)),
     basename: (v) => pathToPosix(path.basename(v)),
@@ -50,15 +65,13 @@ function makeFsInterface(workdir) {
       await fs.promises.writeFile(resolved, content)
     },
     async rm(filePath) {
-      await fs.promises.rm(resolve(filePath))
+      await fs.promises.rm(resolve(filePath, true))
     },
     async rmdir(dirPath) {
-      await fs.promises.rm(resolve(dirPath), { recursive: true })
+      await fs.promises.rm(resolve(dirPath, true), { recursive: true })
     },
     async readdir(dirPath) {
-      if (dirPath.indexOf('/../') !== -1) throw new Error('The usage of /../ is not allowed')
-      const root = dirPath === '.' || dirPath === './' || dirPath === ''
-      const resolved = root ? workdir : dirPath
+      const resolved = resolve(dirPath)
       const entries = await fs.promises.readdir(resolved)
       return Promise.all(
         entries.map(async (name) => {
@@ -151,6 +164,7 @@ async function dumpCrdt() {
 }
 
 async function serve() {
+  const admitUpgrade = admission()
   const inspector = req('@dcl/inspector')
   const { createRpcServer } = req('@dcl/rpc')
   const codegen = req('@dcl/rpc/dist/codegen')
@@ -176,18 +190,75 @@ async function serve() {
       async () => host.rpcMethods
     )
   })
-  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  const wss = new WebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    verifyClient: (info, done) => done(admitUpgrade(info.req), 403)
+  })
   wss.on('connection', (ws) => {
     const transport = WebSocketTransport(ws)
     rpcServer.attachTransport(transport, { fs: fsInterface, engine: host.engine })
     ws.on('error', () => ws.close())
   })
-  wss.on('listening', () => {
-    process.stdout.write(JSON.stringify({ ready: true, port: wss.address().port }) + '\n')
+  // An error before the server listens fails the start; one after it ends
+  // the host with exit code 1.
+  const port = await new Promise((resolve, reject) => {
+    wss.once('error', reject)
+    wss.once('listening', () => {
+      wss.off('error', reject)
+      wss.on('error', (e) => {
+        console.error('the data-layer server failed:', e && e.stack ? e.stack : String(e))
+        process.exit(1)
+      })
+      resolve(wss.address().port)
+    })
   })
-  process.stdin.resume()
-  process.stdin.on('end', () => process.exit(0))
-  process.stdin.on('close', () => process.exit(0))
+  await refusesWithoutSecret(port)
+  process.stdout.write(JSON.stringify({ ready: true, port }) + '\n')
+  exitWithParent()
+}
+
+// The one client of this port is the CLI, which relays its own /data-layer
+// socket here: it sends the secret of this launch in a header and no Origin.
+// A browser always sends an Origin, and a program of another user does not
+// have the secret, so an upgrade from either gets a 403. The secret comes in
+// the environment, and leaves it before any other code is loaded.
+const SECRET_ENV = 'DCL_SCENE_CLI_DATA_LAYER_SECRET'
+const SECRET_HEADER = 'x-dcl-data-layer-secret'
+
+function admission() {
+  const secret = Buffer.from(process.env[SECRET_ENV] || '')
+  delete process.env[SECRET_ENV]
+  if (!secret.length) throw new Error(`${SECRET_ENV} is not set: only dcl-scene-cli start --data-layer starts this host`)
+  return (request) => {
+    const given = Buffer.from(String(request.headers[SECRET_HEADER] ?? ''))
+    return (
+      request.headers.origin === undefined && given.length === secret.length && crypto.timingSafeEqual(given, secret)
+    )
+  }
+}
+
+// The rule is applied by a package this script only calls (the `ws` beside
+// the editor, or the scene's), and one that does not ask `verifyClient` admits
+// every upgrade. So the host asks for an upgrade without the secret before it
+// reports its port: any answer but the 403 stops it.
+function refusesWithoutSecret(port) {
+  const open = new Error('the data-layer server does not refuse an upgrade without the launch secret')
+  const headers = {
+    Connection: 'Upgrade',
+    Upgrade: 'websocket',
+    'Sec-WebSocket-Version': '13',
+    'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64')
+  }
+  return new Promise((resolve, reject) => {
+    const probe = http.get({ host: '127.0.0.1', port, headers })
+    probe.on('response', (res) => {
+      res.resume()
+      res.statusCode === 403 ? resolve() : reject(open)
+    })
+    probe.on('upgrade', () => reject(open))
+    probe.on('error', reject)
+  })
 }
 
 const run = mode === 'dump-crdt' ? dumpCrdt : serve

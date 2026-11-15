@@ -31,6 +31,7 @@ separate from the current runtime described here.
 | `gatekeeper::admission` | `serve` | scene, server-scene, world (`world_mint`) and island tokens; the Pulse room authority (`relay_authority`) |
 | `gatekeeper::moderation`, `removal` | `serve` | bans, warnings, scene admins, durable ban kicks, disabled-place cleanup, room metadata repair |
 | `gatekeeper::voice`, `streaming`, `streaming_jobs` | `serve` | private and community voice; stream access, LiveKit Ingress, streaming expiry; `/cast/*` answers 501 |
+| `gatekeeper::reports` | `serve` | the player report intake at `/report-user` (`/api/reports/players/presign`, the evidence `PUT`s, `/api/reports/players`); the moderator token reads `/api/reports` |
 | `gatekeeper::webhook`, `events` | `serve` | the one LiveKit webhook; a typed nine-field `RoomEvent` to `RoomEventSink` and `RoomEventStore` |
 | `gatekeeper::bus` | `serve` | `serve`'s one NATS link |
 | `presence`, `topology` | every `serve` | `/live-data`, `/wallet/{w}/connected-world`, capacity counts from LiveKit occupancy; social online from Pulse's topology |
@@ -40,7 +41,8 @@ separate from the current runtime described here.
 Outside: access, room resolution and storage (worlds); privacy, friendships, roles, notification
 records and `/mls/*` (social); the scene runtime; LiveKit. Dropped: the relay to Decentraland's
 Pulse (a mirror advertises Decentraland's Pulse in `/about`),
-player report routes, `POST /auth/challenge`, `/auth/livekit-token` and
+the player report routes under the gatekeeper's own mount (the intake is the
+`/report-user` area), `POST /auth/challenge`, `/auth/livekit-token` and
 `/heartbeat`. Room recovery uses `cluster_change`, `cluster_lookup` and
 `takeover_completed`; hints do not own unfinished work.
 

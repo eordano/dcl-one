@@ -5,6 +5,7 @@ use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -912,21 +913,39 @@ pub(crate) fn finish<T: Send + 'static>(
     }
 }
 
-pub(crate) fn spawn_browser(url: &str) {
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-    let spawned = std::process::Command::new(program)
+/// The program of the system that opens a URL with the application
+/// registered for it.
+pub(crate) const OPENER: &str = if cfg!(target_os = "macos") {
+    "open"
+} else if cfg!(target_os = "windows") {
+    "explorer"
+} else {
+    "xdg-open"
+};
+
+/// Starts [`OPENER`] on `url`. `Ok` says that the opener process started,
+/// not that an application opened the URL.
+pub(crate) fn spawn_opener(url: &str) -> std::io::Result<std::process::Child> {
+    spawn_apart(OPENER, url)
+}
+
+/// Starts `program` on `url` with no stream of this process and, on Unix, in
+/// a process group of its own: a Ctrl-C in the terminal goes to the group of
+/// the CLI, and not to the opener or to an application that the opener runs.
+fn spawn_apart(program: &str, url: &str) -> std::io::Result<std::process::Child> {
+    let mut command = std::process::Command::new(program);
+    command
         .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    if spawned.is_err() {
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    command.spawn()
+}
+
+pub(crate) fn spawn_browser(url: &str) {
+    if spawn_opener(url).is_err() {
         ux::note("could not open a browser automatically \u{2014} open the URL above manually");
     }
 }
@@ -961,14 +980,6 @@ fn timeout_error(timeout: Duration, url: &str) -> anyhow::Error {
     .into()
 }
 
-pub fn linker_bind_host() -> String {
-    std::env::var("DCL_SCENE_CLI_LINKER_HOST")
-        .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "127.0.0.1".to_string())
-}
-
 /// The run's outcome. `timeout` is the wait for a signature only: once a
 /// signature starts the run, the wait lasts until the run ends.
 pub(crate) async fn await_outcome(
@@ -993,7 +1004,106 @@ pub(crate) async fn await_outcome(
     })
 }
 
-pub async fn run(dep: LinkerDeploy, opts: LinkerOptions) -> Result<Published> {
+/// Where the signing server of `deploy` listens and whom its signing routes
+/// answer. Resolved once for a run: the listener, the printed origin and the
+/// gates of the routes all read this value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SigningBind {
+    /// `--host`, then `DCL_SCENE_CLI_LINKER_HOST`, then IPv4 loopback.
+    pub addr: IpAddr,
+    /// Remote signing: the signing routes answer a peer that is not this
+    /// machine. `DCL_SCENE_CLI_LINKER_HOST` is the switch, an address that
+    /// is not loopback; `--host` alone never opens them, and a listener on
+    /// loopback keeps them closed.
+    pub remote: bool,
+    /// The variable set to `0.0.0.0` on this command line would turn remote
+    /// signing on. False for `--host` with a loopback address: the flag wins
+    /// over the variable, and no other machine reaches that listener.
+    pub openable: bool,
+}
+
+impl SigningBind {
+    /// The default, and a run whose signing routes another server hosts.
+    pub const LOCAL: Self = SigningBind {
+        addr: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        remote: false,
+        openable: true,
+    };
+
+    /// `flag` is `--host`, `variable` the address of
+    /// `DCL_SCENE_CLI_LINKER_HOST`. With remote signing off the routes admit
+    /// a loopback peer and a loopback `Host` only, so a listener on one
+    /// other address would refuse each caller: that `--host` is an error.
+    fn resolve(flag: Option<IpAddr>, variable: Option<IpAddr>) -> Result<Self> {
+        let addr = flag.or(variable).unwrap_or(Self::LOCAL.addr);
+        let remote = variable.is_some_and(|v| !v.is_loopback()) && !addr.is_loopback();
+        if !remote && !addr.is_loopback() && !addr.is_unspecified() {
+            return Err(UserError::new(
+                format!("--host {addr} needs remote signing, and remote signing is off"),
+                TrySteps::one(
+                    "pass --host 0.0.0.0 to open the preview to other devices and sign on this machine",
+                )
+                .and(format!(
+                    "or set DCL_SCENE_CLI_LINKER_HOST={addr} to sign from other devices too"
+                )),
+            )
+            .why(format!(
+                "the signing routes answer this machine only, through a loopback address; a server on {addr} alone would refuse each request"
+            ))
+            .usage()
+            .into());
+        }
+        Ok(SigningBind {
+            addr,
+            remote,
+            openable: !flag.is_some_and(|flag| flag.is_loopback()),
+        })
+    }
+
+    /// The note under the signing URL on a signature from another device.
+    /// `None` when the command line keeps the listener on a loopback
+    /// address: no value of the variable opens that run. `None` too with
+    /// remote signing on one address: the URL names that address.
+    pub(crate) fn other_device_note(self) -> Option<&'static str> {
+        match (self.remote, self.openable) {
+            (true, _) if self.addr.is_unspecified() => {
+                Some("from another device, replace localhost with this machine's address")
+            }
+            (true, _) => None,
+            (false, true) => {
+                Some("to sign from another device, re-run with DCL_SCENE_CLI_LINKER_HOST=0.0.0.0")
+            }
+            (false, false) => None,
+        }
+    }
+}
+
+/// [`SigningBind`] of this run, from `--host` and the environment.
+pub fn signing_bind(flag: Option<IpAddr>) -> Result<SigningBind> {
+    let variable = match std::env::var("DCL_SCENE_CLI_LINKER_HOST") {
+        // The one name that is not an address.
+        Ok(host) if host.trim().eq_ignore_ascii_case("localhost") => Some(SigningBind::LOCAL.addr),
+        Ok(host) if !host.trim().is_empty() => Some(host.trim().parse().map_err(|_| {
+            UserError::new(
+                format!(
+                    "DCL_SCENE_CLI_LINKER_HOST is not an IP address: {}",
+                    host.trim()
+                ),
+                TrySteps::one("set it to an address, for example 0.0.0.0")
+                    .and("or remove the variable to sign on this machine"),
+            )
+        })?),
+        _ => None,
+    };
+    SigningBind::resolve(flag, variable)
+}
+
+/// `signing` is where the signing server listens: see [`signing_bind`].
+pub async fn run(
+    dep: LinkerDeploy,
+    opts: LinkerOptions,
+    signing: SigningBind,
+) -> Result<Published> {
     let dir = dep.dir.clone();
     let (state, rx) = new_state(dep);
     if let Some(host) = opts.host {
@@ -1002,7 +1112,7 @@ pub async fn run(dep: LinkerDeploy, opts: LinkerOptions) -> Result<Published> {
     }
     crate::start::serve_signing(
         &dir,
-        opts.port,
+        (signing, opts.port),
         opts.open_browser,
         opts.timeout,
         opts.programmatic,
@@ -1140,14 +1250,137 @@ mod tests {
         sign_as(state, signer.address(), sig, entity_id).await
     }
 
+    /// The opener is not in the process group of the CLI, so the Ctrl-C that
+    /// a terminal sends to that group does not reach it.
+    #[cfg(unix)]
     #[test]
-    fn linker_bind_host_defaults_to_loopback() {
+    fn the_opener_runs_in_a_process_group_of_its_own() {
+        let mut child = spawn_apart("sleep", "600").unwrap();
+        let pid = child.id() as libc::pid_t;
+        let (group, own) = unsafe { (libc::getpgid(pid), libc::getpgid(0)) };
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(group, pid, "the opener leads a group of its own");
+        assert_ne!(group, own);
+    }
+
+    #[test]
+    fn the_deploy_server_listens_on_the_flag_then_the_variable_then_loopback() {
         let _env = crate::deploy::ENV_LOCK.blocking_lock();
+        let lan: IpAddr = "192.0.2.7".parse().unwrap();
+        let every = IpAddr::from([0, 0, 0, 0]);
+        let local = IpAddr::from([127, 0, 0, 1]);
+        let bind = |flag| signing_bind(flag).unwrap();
+        let on = |addr, remote| SigningBind {
+            addr,
+            remote,
+            openable: true,
+        };
         crate::remove_test_env("DCL_SCENE_CLI_LINKER_HOST");
-        assert_eq!(linker_bind_host(), "127.0.0.1");
+        assert_eq!(bind(None), SigningBind::LOCAL);
+        assert_eq!(
+            bind(Some(every)),
+            on(every, false),
+            "the flag moves the listener and opens no signing route"
+        );
         crate::set_test_env("DCL_SCENE_CLI_LINKER_HOST", "0.0.0.0");
-        assert_eq!(linker_bind_host(), "0.0.0.0");
+        assert_eq!(bind(None), on(every, true));
+        assert_eq!(bind(Some(lan)), on(lan, true), "the flag wins");
+        assert_eq!(
+            bind(Some(local)),
+            SigningBind {
+                openable: false,
+                ..on(local, false)
+            },
+            "no other machine reaches a loopback listener"
+        );
+        crate::set_test_env("DCL_SCENE_CLI_LINKER_HOST", "192.0.2.7");
+        assert_eq!(bind(None), on(lan, true));
+        crate::set_test_env("DCL_SCENE_CLI_LINKER_HOST", "::1");
+        assert_eq!(
+            bind(None),
+            on(std::net::Ipv6Addr::LOCALHOST.into(), false),
+            "a loopback address is not the switch"
+        );
+        for name in ["localhost", " LocalHost "] {
+            crate::set_test_env("DCL_SCENE_CLI_LINKER_HOST", name);
+            assert_eq!(bind(None), SigningBind::LOCAL, "{name:?}");
+        }
+        crate::set_test_env("DCL_SCENE_CLI_LINKER_HOST", "not-an-address");
+        for flag in [None, Some(local)] {
+            let err = signing_bind(flag).unwrap_err();
+            let text = crate::ux::render(&err, false, false);
+            assert!(text.contains("is not an IP address"), "{text}");
+            assert!(!text.contains("--host"), "the flag does not help: {text}");
+            assert!(!crate::ux::usage_error(&err));
+        }
         crate::remove_test_env("DCL_SCENE_CLI_LINKER_HOST");
+    }
+
+    /// `--host` with one address that is not loopback, while remote signing
+    /// is off: the gates would refuse each caller, so the run does not start.
+    #[test]
+    fn a_host_the_gates_would_refuse_is_a_usage_error() {
+        let lan: IpAddr = "192.0.2.7".parse().unwrap();
+        for variable in [None, Some(IpAddr::from([127, 0, 0, 1]))] {
+            let err = SigningBind::resolve(Some(lan), variable).unwrap_err();
+            assert!(crate::ux::usage_error(&err));
+            let text = crate::ux::render(&err, false, false);
+            assert!(
+                text.contains("--host 192.0.2.7 needs remote signing"),
+                "{text}"
+            );
+            assert!(text.contains("\u{2192} try: pass --host 0.0.0.0"), "{text}");
+            assert!(
+                text.contains("DCL_SCENE_CLI_LINKER_HOST=192.0.2.7"),
+                "{text}"
+            );
+        }
+    }
+
+    /// The note on a signature from another device is true for the run. The
+    /// note that names the variable is there only when the variable, on the
+    /// same command line, turns remote signing on: `--host` with a loopback
+    /// address wins over the variable, so that run has no note. The note on
+    /// `localhost` is there only when the listener is on every address.
+    #[test]
+    fn the_note_on_another_device_is_true_for_the_run() {
+        const RERUN: &str =
+            "to sign from another device, re-run with DCL_SCENE_CLI_LINKER_HOST=0.0.0.0";
+        let local = IpAddr::from([127, 0, 0, 1]);
+        let every = IpAddr::from([0, 0, 0, 0]);
+        let lan: IpAddr = "192.0.2.7".parse().unwrap();
+        let bind = |flag, variable| SigningBind::resolve(flag, variable).unwrap();
+        for (flag, variable) in [
+            (None, None),
+            (None, Some(local)),
+            (Some(every), None),
+            (Some(every), Some(local)),
+        ] {
+            let note = bind(flag, variable).other_device_note();
+            assert_eq!(note, Some(RERUN), "{flag:?} {variable:?}");
+            assert!(bind(flag, Some(every)).remote, "{flag:?}: the note is true");
+        }
+        for variable in [None, Some(local), Some(every), Some(lan)] {
+            let run = bind(Some(local), variable);
+            assert_eq!(run.other_device_note(), None, "{variable:?}");
+            assert!(!bind(Some(local), Some(every)).remote);
+        }
+        for flag in [None, Some(every)] {
+            let note = bind(flag, Some(every)).other_device_note();
+            assert_eq!(
+                note,
+                Some("from another device, replace localhost with this machine's address"),
+                "{flag:?}"
+            );
+        }
+        // Remote signing on one address: the URL names it, so there is no
+        // `localhost` to replace.
+        for (flag, variable) in [(Some(lan), every), (None, lan), (Some(lan), lan)] {
+            let run = bind(flag, Some(variable));
+            assert!(run.remote, "{flag:?} {variable}");
+            assert_eq!(run.other_device_note(), None, "{flag:?} {variable}");
+        }
     }
 
     #[tokio::test]

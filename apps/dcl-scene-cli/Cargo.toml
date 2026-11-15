@@ -70,6 +70,8 @@ libc = { workspace = true }
 dcl-preview-tunnel.workspace = true
 alloy = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+# A folder of one test: random name, owner-only.
+tempfile = "3"
 
 [features]
 default = ["rolldown"]

@@ -1,9 +1,9 @@
 //! The filesystem-free core of the SDK7 scene toolchain: composite
 //! normalization, jsonSchema CRDT encoding, native `main.crdt` and
-//! `entity-names.ts` generation. Everything here reads scene files through
-//! [`SceneFiles`] and touches neither `std::fs` nor the network, so the same
-//! code serves `dcl-scene-cli` on the desktop and a browser web worker on
-//! `wasm32-unknown-unknown`.
+//! `entity-names.ts` generation, the production form of the loader stub.
+//! Everything here reads scene files through [`SceneFiles`] and touches
+//! neither `std::fs` nor the network, so the same code serves `dcl-scene-cli`
+//! on the desktop and a browser web worker on `wasm32-unknown-unknown`.
 
 pub mod composite_norm;
 pub mod crdt_gen;
@@ -80,6 +80,24 @@ pub(crate) fn read_composite_text(files: &dyn SceneFiles, rel: &str) -> Result<S
         .read(rel)
         .ok_or_else(|| format!("reading {rel}: not readable"))?;
     String::from_utf8(bytes).map_err(|e| format!("reading {rel}: {e}"))
+}
+
+/// The loader stub (`main` of a built scene) without its comment lines,
+/// blank lines and indentation, for a production build. `dcl-scene-cli` and
+/// `dcl-scene-build` both write it, so their outputs agree. Nothing is
+/// renamed and no line is joined: the chunks are direct-eval'd inside this
+/// scope, so its identifiers are part of the contract, and the statements
+/// rely on their line ends.
+pub fn compact_loader(stub: &str) -> String {
+    let mut out = String::with_capacity(stub.len());
+    for line in stub.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]

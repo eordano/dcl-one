@@ -1,0 +1,60 @@
+/* Figma: Spinner & Skeleton Animation / Skeleton. The sheen is the generated preview's 1500 ms sweep. */
+@layer dcl.components {
+  .root {
+    position: relative;
+    display: inline-block;
+    box-sizing: border-box;
+    overflow: hidden;
+    width: 200px;
+    height: 112px;
+    border-radius: var(--dcl-radius-md);
+    background: var(--dcl-brand-purple-dark);
+  }
+
+  .root::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      var(--dcl-brand-purple-dark) 0%,
+      var(--dcl-brand-purple) 50%,
+      var(--dcl-brand-purple-dark) 100%
+    );
+    transform: translateX(-100%);
+    animation: sheen 1500ms linear infinite;
+  }
+
+  /* Not in Figma: the decentraland-ui2 (MUI) Skeleton on dark surfaces, grey with the MUI pulse. */
+  .neutral {
+    background: rgba(240, 240, 240, 0.13);
+    animation: pulse 2s ease-in-out 0.5s infinite;
+  }
+
+  .neutral::after {
+    content: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .root::after {
+      animation: none;
+      transform: translateX(100%);
+    }
+
+    .neutral {
+      animation: none;
+    }
+  }
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes sheen {
+  to {
+    transform: translateX(100%);
+  }
+}

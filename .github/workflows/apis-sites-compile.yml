@@ -1,0 +1,290 @@
+name: APIs + Sites / Compile
+# Compiles the APIs and the Sites apps while the web build of the calling workflow runs, and saves
+# them under the cache keys that the image build restores. It reads nothing from the web build.
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  arches:
+    # PRs build amd64 only unless an input that can differ by architecture changes.
+    if: github.event_name != 'workflow_run'
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+          sparse-checkout: .github
+          persist-credentials: false
+      - id: select
+        run: |
+          both='[{"arch":"amd64","runner":"ubuntu-26.04"},{"arch":"arm64","runner":"ubuntu-26.04-arm"}]'
+          matrix=$both
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git diff --quiet HEAD^1 HEAD -- \
+              'flake.*' 'rust-toolchain*' .cargo infra/packages infra/containers/images.nix \
+              'services/catalyst/rust-toolchain*' 'services/catalyst/Cargo.*' 'services/catalyst/**/Cargo.toml' \
+              'library/**/Cargo.toml' apps/dcl-scene-cli/Cargo.toml \
+              apps/sites/package.json apps/sites/pnpm-lock.yaml apps/sites/pnpm-workspace.yaml apps/sites/.npmrc \
+              'tooling/image-*' .github/workflows/apis-sites-images.yml \
+              .github/workflows/apis-sites-compile.yml; then
+            matrix='[{"arch":"amd64","runner":"ubuntu-26.04"}]'
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Image architectures: $matrix"
+  packages:
+    needs: arches
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.arches.outputs.matrix) }}
+    # No concurrency group: the calling workflow cancels a superseded pull request run, and a main
+    # run finishes.
+    runs-on: ${{ matrix.runner == 'ubuntu-26.04' && (vars.RUNNER_LINUX_X86 || 'ubuntu-26.04')
+      || matrix.runner == 'ubuntu-26.04-arm' && (vars.RUNNER_LINUX_ARM || 'ubuntu-26.04-arm')
+      || matrix.runner }}
+    # The limit of the image build, which did this work before.
+    timeout-minutes: 100
+    steps:
+      - name: Preserve disk headroom on small runners
+        run: |
+          df -h /
+          available=$(df --output=avail -B1 / | tail -n 1)
+          if [ "$available" -lt "$((50 * 1024 * 1024 * 1024))" ]; then
+            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
+          else
+            echo "Skipping SDK cleanup: at least 50 GiB available"
+          fi
+          df -h /
+          free -m
+      - name: Fetch Sites media and shared fonts from Git LFS
+        run: git config --global lfs.fetchinclude 'apps/sites/content/**,library/ui/apps/sites/assets/**,library/ui/foundations/typography/fonts/**'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Identify exact Nix cache inputs
+        id: cache-keys
+        run: python3 tooling/image-cache.py keys --arch '${{ matrix.arch }}'
+      - name: Look for the compiled APIs package
+        id: apis-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/apis-nix
+          # The image build restores the entry; this job only needs to know that it exists.
+          lookup-only: true
+          key: ${{ steps.cache-keys.outputs.apis-key }}
+          restore-keys: ${{ steps.cache-keys.outputs.apis-main-key }}
+      - name: Look for the compiled Sites app
+        id: sites-app-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/sites-app-nix
+          lookup-only: true
+          key: ${{ steps.cache-keys.outputs.sites-app-key }}
+          restore-keys: ${{ steps.cache-keys.outputs.sites-app-main-key }}
+      - name: Decide which packages already have an exact entry
+        id: compiled
+        env:
+          APIS: ${{ steps.cache-keys.outputs.apis-key }} ${{ steps.apis-cache.outputs.cache-matched-key }}
+          SITES_APP: ${{ steps.cache-keys.outputs.sites-app-key }} ${{ steps.sites-app-cache.outputs.cache-matched-key }}
+        run: |
+          # An entry under the exact derivation digest leaves the image build nothing to compile.
+          exact() { [ -n "$2" ] && [ "${2##*-}" = "${1##*-}" ] && echo true || echo false; }
+          for group in APIS SITES_APP; do
+            read -r primary matched <<< "${!group}"
+            name=${group,,}
+            echo "${name//_/-}=$(exact "$primary" "$matched")" >> "$GITHUB_OUTPUT"
+          done
+          cat "$GITHUB_OUTPUT"
+      - name: Decide what this job compiles
+        id: plan
+        env:
+          SAVE: ${{ steps.cache-keys.outputs.save }}
+          APIS: ${{ steps.compiled.outputs.apis }}
+          SITES_APP: ${{ steps.compiled.outputs.sites-app }}
+        run: |
+          # A compiled package reaches the image build only through the cache. A run that cannot
+          # save an entry (a rerun, a ref that only reads the main entries) compiles in the image build.
+          work=false
+          if [ "$SAVE" = true ] && [ "$GITHUB_RUN_ATTEMPT" = 1 ] && { [ "$APIS" != true ] || [ "$SITES_APP" != true ]; }; then
+            work=true
+          fi
+          echo "work=$work" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+      - name: Restore Catalyst dependency cache
+        if: steps.plan.outputs.work == 'true' && steps.compiled.outputs.apis != 'true'
+        id: catalyst-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/catalyst-nix
+          key: ${{ steps.cache-keys.outputs.catalyst-key }}
+          # Only PRs receive a stale dependency prefix, as in the image build.
+          restore-keys: |
+            ${{ steps.cache-keys.outputs.catalyst-main-key }}
+            ${{ steps.cache-keys.outputs.catalyst-main-prefix }}
+      - name: Restore Sites dependency cache
+        if: steps.plan.outputs.work == 'true' && steps.compiled.outputs.sites-app != 'true'
+        id: sites-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/sites-nix
+          key: ${{ steps.cache-keys.outputs.sites-key }}
+          restore-keys: |
+            ${{ steps.cache-keys.outputs.sites-main-key }}
+            ${{ steps.cache-keys.outputs.sites-main-prefix }}
+      - name: Decide which caches a successful build saves
+        id: cache-saves
+        if: steps.plan.outputs.work == 'true'
+        env:
+          CATALYST: ${{ steps.cache-keys.outputs.catalyst-key }} ${{ steps.catalyst-cache.outputs.cache-matched-key }}
+          SITES: ${{ steps.cache-keys.outputs.sites-key }} ${{ steps.sites-cache.outputs.cache-matched-key }}
+          APIS: ${{ steps.cache-keys.outputs.apis-key }} ${{ steps.apis-cache.outputs.cache-matched-key }}
+          SITES_APP: ${{ steps.cache-keys.outputs.sites-app-key }} ${{ steps.sites-app-cache.outputs.cache-matched-key }}
+          # A dependency archive skipped for an exact compiled hit was neither restored nor built.
+          SKIPPED: ${{ steps.compiled.outputs.apis == 'true' && 'CATALYST' || '' }} ${{ steps.compiled.outputs.sites-app == 'true' && 'SITES' || '' }}
+        run: |
+          # An entry is saved when the restored one, if any, is not this exact derivation set.
+          saves() { [ "${2##*-}" != "${1##*-}" ] && echo true || echo false; }
+          for group in CATALYST SITES APIS SITES_APP; do
+            read -r primary matched <<< "${!group}"
+            case " $SKIPPED " in
+              *" $group "*) save=false ;;
+              *) save=$(saves "$primary" "$matched") ;;
+            esac
+            name=${group,,}
+            echo "${name//_/-}=$save" >> "$GITHUB_OUTPUT"
+          done
+          cat "$GITHUB_OUTPUT"
+      - name: Import cached store paths
+        if: steps.plan.outputs.work == 'true'
+        run: |
+          for cache in .cache/catalyst-nix .cache/sites-nix; do
+            if [ -f "$cache/nix-cache-info" ]; then
+              # Import canonical names; --all can enumerate hash-x aliases.
+              shopt -s nullglob
+              narinfo=("$cache"/*.narinfo)
+              paths=()
+              if [ ${#narinfo[@]} -gt 0 ]; then
+                mapfile -t paths < <(sed -n 's/^StorePath: //p' "${narinfo[@]}")
+              fi
+              if [ ${#paths[@]} -gt 0 ]; then
+                nix copy --no-check-sigs --from "file://$PWD/$cache" "${paths[@]}"
+              fi
+            fi
+            # Imported paths live in /nix/store. Export only current closures after the build.
+            rm -rf "$cache"
+          done
+          df -h /
+      - name: Build the complete Sites toolchain and dependencies
+        if: steps.plan.outputs.work == 'true' && steps.compiled.outputs.sites-app != 'true'
+        # runtime-deps, unlike the fixed-output sites-deps, rebuilds when the lockfile changes.
+        run: nix build .#sites-toolchain .#sites-runtime-deps --no-link -L
+      - name: Compile the APIs and the Sites apps
+        if: steps.plan.outputs.work == 'true'
+        env:
+          APIS: ${{ steps.compiled.outputs.apis }}
+          SITES_APP: ${{ steps.compiled.outputs.sites-app }}
+        run: |
+          # The same flake reference as the image build, so that build finds these derivations.
+          targets=()
+          if [ "$APIS" != true ]; then targets+=('git+file:.?lfs=1#catalyst'); fi
+          if [ "$SITES_APP" != true ]; then
+            targets+=('git+file:.?lfs=1#sites-app' 'git+file:.?lfs=1#sites-app-polygon-credits')
+          fi
+          nix build "${targets[@]}" --no-link -L
+          df -h /
+      - name: Allow cache uploads only from current first attempts
+        id: cache-writer
+        if: steps.plan.outputs.work == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          allowed=false
+          if [ "$GITHUB_RUN_ATTEMPT" = 1 ]; then
+            ref=${GITHUB_REF#refs/}
+            expected=$GITHUB_SHA
+            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+              ref=${ref%/merge}/head
+              expected=$PR_HEAD_SHA
+            fi
+            if [ -n "$expected" ] && current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$ref" --jq .object.sha); then
+              if [ "$current" = "$expected" ]; then allowed=true; fi
+            else
+              echo '::warning::Cannot verify the current ref; skipping cache uploads'
+            fi
+          fi
+          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
+      - name: Export the Catalyst dependencies
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.catalyst == 'true'
+        run: |
+          mkdir -p .cache/catalyst-nix
+          nix copy --to "file://$PWD/.cache/catalyst-nix?compression=zstd&compression-level=3" \
+            .#catalyst-deps .#catalyst-vendor
+          du -sh .cache/catalyst-nix
+      - name: Save the Catalyst dependencies
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.catalyst == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/catalyst-nix
+          key: ${{ steps.cache-keys.outputs.catalyst-key }}
+      - name: Export the Sites dependencies
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.sites == 'true'
+        run: |
+          mkdir -p .cache/sites-nix
+          nix copy --to "file://$PWD/.cache/sites-nix?compression=zstd&compression-level=3" \
+            .#sites-deps .#sites-runtime-deps .#sites-toolchain
+          du -sh .cache/sites-nix
+      - name: Save the Sites dependencies
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.sites == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/sites-nix
+          key: ${{ steps.cache-keys.outputs.sites-key }}
+      - name: Export the compiled APIs package
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.apis == 'true'
+        run: |
+          cache_drv=$(nix eval --raw .#catalyst.drvPath)
+          image_drv=$(nix eval --raw --impure 'git+file:.?lfs=1#catalyst.drvPath')
+          if [ "$cache_drv" != "$image_drv" ]; then
+            echo '::error::Catalyst derivation differs between cache and image refs'
+            exit 1
+          fi
+          mkdir -p .cache/apis-nix
+          # Runtime closure only: no extra Cargo target tree or dependency build cache.
+          nix copy --to "file://$PWD/.cache/apis-nix?compression=zstd&compression-level=3" .#catalyst
+          du -sh .cache/apis-nix
+      - name: Save the compiled APIs package
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.apis == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/apis-nix
+          key: ${{ steps.cache-keys.outputs.apis-key }}
+      - name: Export the compiled Sites app
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.sites-app == 'true'
+        run: |
+          cache_drv=$(nix eval --raw .#sites-app.drvPath)
+          image_drv=$(nix eval --raw --impure 'git+file:.?lfs=1#sites-app.drvPath')
+          if [ "$cache_drv" != "$image_drv" ]; then
+            echo '::error::Sites app derivation differs between cache and image refs'
+            exit 1
+          fi
+          mkdir -p .cache/sites-app-nix
+          # Runtime closures only: both compiled apps, their production dependencies and Node.
+          # The Polygon credits app differs from the compared one by build environment alone.
+          nix copy --to "file://$PWD/.cache/sites-app-nix?compression=zstd&compression-level=3" \
+            .#sites-app .#sites-app-polygon-credits
+          du -sh .cache/sites-app-nix
+      - name: Save the compiled Sites app
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.sites-app == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/sites-app-nix
+          key: ${{ steps.cache-keys.outputs.sites-app-key }}

@@ -20,6 +20,7 @@
 - [Explorer tests through the console](adr/2026-10-29-explorer-tests-through-the-console.md)
 - [Vendored Basis Universal transcoder](adr/2026-11-04-vendored-basisu.md)
 - [Shared UI library](adr/2026-10-30-shared-ui-library.md)
+- [Shared UI import name](adr/2026-11-09-shared-ui-import-name.md)
 - [Explorer HUD UI in `library/ui/apps/hud`](adr/2026-11-10-shared-explorer-hud-ui.md)
 - [Explorer vendored Bevy (superseded)](adr/2026-11-05-explorer-vendored-bevy.md)
 - [Explorer sources as upstream commits and patches](adr/2026-11-14-explorer-sources-as-patches.md)
@@ -28,6 +29,7 @@
 - [Referral Slack effect budget (proposed)](adr/2026-11-04-referral-slack-effect-budget.md)
 - [Social schema v3 activation (proposed)](adr/2026-11-04-social-schema-v3-activation.md)
 - [Referral reward recovery (proposed)](adr/2026-11-04-social-runtime-boundaries.md)
+- [Scene proxy for browser scenes (proposed)](adr/2026-11-14-scene-proxy.md)
 - [Web app server state](adr/2026-11-04-web-app-server-state.md)
 
 Verify compatibility, readiness and performance claims against evidence at the

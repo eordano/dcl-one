@@ -1039,9 +1039,62 @@ async fn the_access_log_keeps_one_bounded_line_per_request() {
 /// read the port back from the banner.
 #[tokio::test]
 async fn port_zero_is_the_port_the_bind_took() {
-    let (port, listener) = bind_preview_port(Some(0)).await.unwrap();
+    let (port, listener) = bind_preview_port("start", Ipv4Addr::UNSPECIFIED.into(), Some(0))
+        .await
+        .unwrap();
     assert_ne!(port, 0);
     assert_eq!(port, listener.local_addr().unwrap().port());
+}
+
+/// The deploy server listens on the address it is given, and its URLs name
+/// `localhost` for IPv4 loopback and for every address.
+#[tokio::test]
+async fn the_signing_server_binds_the_given_address() {
+    let (port, listener) = bind_preview_port("deploy", Ipv4Addr::LOCALHOST.into(), Some(0))
+        .await
+        .unwrap();
+    let bound = listener.local_addr().unwrap();
+    assert_eq!(bound, SocketAddr::from(([127, 0, 0, 1], port)));
+    let localhost = format!("http://localhost:{port}");
+    assert_eq!(signing_origin(bound), localhost);
+    assert_eq!(
+        signing_origin(SocketAddr::from(([0, 0, 0, 0], port))),
+        localhost
+    );
+    assert_eq!(
+        signing_origin(SocketAddr::from(([192, 0, 2, 7], port))),
+        format!("http://192.0.2.7:{port}")
+    );
+    assert_eq!(
+        signing_origin(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port))),
+        format!("http://[::1]:{port}")
+    );
+}
+
+/// A taken port: the step names `--port` of the command that listens, and
+/// the cause has the same code for each command.
+#[tokio::test]
+async fn a_taken_port_names_the_flag_of_the_command_that_ran() {
+    let held = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .unwrap();
+    let port = held.local_addr().unwrap().port();
+    let next = port.checked_add(1).unwrap_or(8001);
+    for (command, other) in [("deploy", "start"), ("start", "deploy")] {
+        let err = bind_preview_port(command, Ipv4Addr::LOCALHOST.into(), Some(port))
+            .await
+            .unwrap_err();
+        let text = ux::render(&err, false, false);
+        assert!(
+            text.starts_with(&format!("Error: port {port} is already in use\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("dcl-scene-cli {command} --port {next}\n")),
+            "{text}"
+        );
+        assert!(!text.contains(&format!("{other} --port")), "{text}");
+    }
 }
 
 /// `start --port 8123` (the default MCP port) once aimed the scene-log
@@ -1069,14 +1122,101 @@ fn the_scene_log_reader_never_polls_this_server() {
 }
 
 fn state_with_data_layer(public_dir: PathBuf) -> Arc<AppState> {
-    let (_tx, port_rx) = tokio::sync::watch::channel(1234u16);
+    let (_tx, host_rx) = tokio::sync::watch::channel(Default::default());
     std::mem::forget(_tx);
     let mut st = state(vec![]);
     st.data_layer = Some(DataLayerState {
-        port_rx,
+        host_rx,
         public_dir: Some(public_dir),
     });
     Arc::new(st)
+}
+
+fn ready_block(port: u16) -> JoinBlock {
+    JoinBlock {
+        title: "ready".to_string(),
+        position: (4, -2),
+        port,
+        ifaces: Vec::new(),
+        web_explorer: "https://decentraland.org/bevy-web".to_string(),
+        qr: QrMode::Hint,
+        unreachable: Vec::new(),
+        tunnel_hint: false,
+        editor: false,
+        optimized_assets_url: None,
+        deep_link_extra: "&hub=true".to_string(),
+        realm_override: None,
+        native_hud: true,
+        native_bin: None,
+    }
+}
+
+/// `start --json`, the `ready` line with no editor and no client: the links
+/// are the ones of the text form, and the token is the run's bearer.
+#[test]
+fn the_ready_event_names_the_links_and_the_run_token() {
+    let block = ready_block(8123);
+    let st = state(vec![]);
+    let line = serde_json::to_string(&ready_event(
+        &block,
+        &st,
+        [(false, "talk"), (false, "desktop"), (false, "web")],
+    ))
+    .unwrap();
+    assert!(
+        line.starts_with(r#"{"event":"ready","port":8123,"#),
+        "{line}"
+    );
+    let event: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let deep_link = block.local_desktop_link();
+    assert!(deep_link.starts_with("decentraland://"), "{deep_link}");
+    assert!(deep_link.ends_with("&hub=true"), "{deep_link}");
+    assert!(
+        block
+            .compact_body()
+            .lines()
+            .any(|row| row.trim_start().starts_with("desktop:") && row.ends_with(&deep_link)),
+        "the deep link is the one of the desktop: row"
+    );
+    assert_eq!(
+        event,
+        json!({
+            "event": "ready",
+            "port": 8123,
+            "url": "http://127.0.0.1:8123",
+            "editorUrl": null,
+            "webUrl": block.local_web_url(),
+            "deepLink": deep_link,
+            "dataLayerUrl": null,
+            "token": st.token,
+            "clientsOpened": [],
+        })
+    );
+    assert!(!st.token.is_empty());
+}
+
+/// With `--data-layer` the line names the socket, and the editor page only
+/// when an editor UI is installed; `clientsOpened` lists what the run opened.
+#[test]
+fn the_ready_event_names_the_data_layer_and_the_opened_clients() {
+    let block = ready_block(8123);
+    let opened = [(true, "talk"), (false, "desktop"), (true, "web")];
+    let with_ui = state_with_data_layer(PathBuf::from("inspector-public"));
+    let event = serde_json::to_value(ready_event(&block, &with_ui, opened)).unwrap();
+    assert_eq!(event["dataLayerUrl"], "ws://127.0.0.1:8123/data-layer");
+    assert_eq!(event["editorUrl"], "http://127.0.0.1:8123/inspector/");
+    assert_eq!(event["clientsOpened"], json!(["talk", "web"]));
+
+    let (tx, host_rx) = tokio::sync::watch::channel(Default::default());
+    let mut no_ui = state(vec![]);
+    no_ui.data_layer = Some(DataLayerState {
+        host_rx,
+        public_dir: None,
+    });
+    let event = serde_json::to_value(ready_event(&block, &no_ui, opened)).unwrap();
+    drop(tx);
+    assert_eq!(event["dataLayerUrl"], "ws://127.0.0.1:8123/data-layer");
+    assert_eq!(event["editorUrl"], serde_json::Value::Null);
 }
 
 async fn get_asset(st: &Arc<AppState>, path: &str, headers: HeaderMap) -> Response {
@@ -2399,4 +2539,20 @@ async fn open_problems_are_served_and_drawn_by_the_pages() {
     );
     ux::resolve(ux::Topic::Build);
     server.abort();
+}
+
+/// `--multi-instance` and `--skip-auth-screen`: with neither, the link has
+/// both parameters; with a flag, only the parameters of the given flags.
+#[test]
+fn the_link_flags_select_the_parameters_the_deep_link_turns_on() {
+    assert_eq!(
+        link_defaults(false, false),
+        ["multi-instance", "skip-auth-screen"]
+    );
+    assert_eq!(link_defaults(true, false), ["multi-instance"]);
+    assert_eq!(link_defaults(false, true), ["skip-auth-screen"]);
+    assert_eq!(
+        link_defaults(true, true),
+        ["multi-instance", "skip-auth-screen"]
+    );
 }

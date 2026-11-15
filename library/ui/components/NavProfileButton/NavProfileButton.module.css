@@ -1,0 +1,42 @@
+/* As ui2's AvatarButton: 48px (40px on mobile) inside a half-white 2px ring, on its pink until the face loads.
+   The component sets --nav-profile-color from its `color` prop; the mark sits 6px inside the disc. */
+@layer dcl.components {
+  .root {
+    position: relative;
+    display: inline-block;
+    flex: 0 0 auto;
+    box-sizing: content-box;
+    width: 48px;
+    height: 48px;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    border-radius: 50%;
+    background: var(--nav-profile-color, var(--dcl-rarities-mythic));
+  }
+
+  .image {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+  }
+
+  .fallback {
+    position: absolute;
+    inset: 6px;
+    display: block;
+    width: calc(100% - 12px);
+    height: calc(100% - 12px);
+  }
+
+  /* The reference bar's own mobile query (ui2 Navbar.styled.ts, MOBILE_BREAKPOINT): 991px and under.
+     The place card uses the reference theme's query, which stops below 991px. */
+  @media (max-width: 991px) {
+    .root {
+      width: 40px;
+      height: 40px;
+    }
+  }
+}

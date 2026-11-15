@@ -26,7 +26,10 @@
       "@noble/*": ["./node_modules/@noble/*"],
       // library/shop has no node_modules of its own: its packages resolve to this app's copy.
       "viem": ["./node_modules/viem"],
-      "vitest": ["./node_modules/vitest"]
+      "vitest": ["./node_modules/vitest"],
+      // The shared UI library, imported as source (docs/ui-standards.md, "Integration").
+      "@dcl/one-ui": ["../../library/ui/index.ts"],
+      "@dcl/one-ui/*": ["../../library/ui/*"]
     },
     "target": "ES2023",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

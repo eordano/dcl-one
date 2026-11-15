@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-10-30
 - Updated: 2026-11-12
+- Amended by: [Shared UI import name](2026-11-09-shared-ui-import-name.md) (how each consumer resolves `@dcl/one-ui`, and where Inter is declared)
 
 ## Context
 

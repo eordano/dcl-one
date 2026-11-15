@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/decentraland/sites",
+  "revision": "17b3535a26901c6e2a4cf209b2ba132bfa6d7da3",
+  "date": "2026-11-06",
+  "app": ".",
+  "buildEnv": {
+    "VITE_REACT_APP_DCL_DEFAULT_ENV": "prod"
+  }
+}

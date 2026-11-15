@@ -398,6 +398,470 @@ fn scene_with_base_url_builds_with_the_vendored_toolchain() {
     assert!(!stderr.contains("ignoreDeprecations"), "{stderr}");
 }
 
+/// init, then code-to-composite: it refuses without `--yes`, converts the
+/// scaffold to a composite the build runs from, and a second run changes nothing.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_converts_the_scaffold_and_survives_a_second_run() {
+    let Some(()) = node_available() else { return };
+    let f = Fixture::new("code-to-composite");
+    let dir = f.dir_arg();
+    let out = run(&["init", "--dir", &dir]);
+    assert!(out.status.success(), "stderr: {}", stderr_of(&out));
+    let out = run_with_path(&["code-to-composite", "--dir", &dir]);
+    assert!(
+        !out.status.success(),
+        "no terminal and no --yes must refuse"
+    );
+    assert!(stderr_of(&out).contains("--yes"), "{}", stderr_of(&out));
+    assert!(!f.path().join("assets/scene/main.composite").exists());
+
+    let out = run_with_path(&["code-to-composite", "--dir", &dir, "-y"]);
+    let stdout = stdout_of(&out);
+    assert!(
+        out.status.success(),
+        "conversion failed\nstdout: {stdout}\nstderr: {}",
+        stderr_of(&out)
+    );
+    assert!(stdout.contains("1 entity in 3 component types"), "{stdout}");
+    assert!(stdout.contains("Commented out 1 source file"), "{stdout}");
+    assert!(
+        stdout.contains("converted to the visual-editor format"),
+        "{stdout}"
+    );
+    let composite = f.json("assets/scene/main.composite");
+    assert_eq!(composite["version"], 1);
+    let names: Vec<&str> = composite["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["core::Transform", "core::MeshRenderer", "core-schema::Name"],
+        "{composite}"
+    );
+    let raw = f.read("assets/scene/main.composite");
+    assert!(
+        raw.contains("\"Box\""),
+        "the cube is named after its mesh: {raw}"
+    );
+    assert!(raw.contains("\"box\""), "{raw}");
+    assert!(
+        std::fs::metadata(f.path().join("main.crdt")).unwrap().len() > 0,
+        "main.crdt is written"
+    );
+    let index = f.read("src/index.ts");
+    assert_eq!(
+        index
+            .matches(dcl_scene_cli::code_to_composite::COMMENT_MARKER)
+            .count(),
+        1,
+        "{index}"
+    );
+    assert!(index.contains("// export function main() {"), "{index}");
+    assert!(index.ends_with("export {}\n"), "{index}");
+    assert!(f.read("assets/scene/entity-names.ts").contains("Box"));
+    assert!(
+        f.path().join("bin/index.js").exists(),
+        "rebuilt from the composite"
+    );
+
+    let out = run_with_path(&["code-to-composite", "--dir", &dir, "--yes"]);
+    let stdout = stdout_of(&out);
+    assert!(
+        out.status.success(),
+        "second conversion failed\nstdout: {stdout}\nstderr: {}",
+        stderr_of(&out)
+    );
+    assert!(stdout.contains("Commented out 0 source files"), "{stdout}");
+    let again = f.json("assets/scene/main.composite");
+    assert_eq!(again, composite, "a converted scene round-trips unchanged");
+    assert_eq!(f.read("src/index.ts"), index, "sources are commented once");
+}
+
+/// Only the build from the composites reads `assets/broken.composite`: it
+/// fails after the sources were commented out, and they come back as they were.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_restores_the_sources_when_the_rebuild_fails() {
+    let Some(()) = node_available() else { return };
+    let f = Fixture::new("code-to-composite-restore");
+    let dir = f.dir_arg();
+    let out = run(&["init", "--dir", &dir]);
+    assert!(out.status.success(), "stderr: {}", stderr_of(&out));
+    let index = f.read("src/index.ts");
+    std::fs::create_dir_all(f.path().join("assets")).unwrap();
+    std::fs::write(f.path().join("assets/broken.composite"), "not json").unwrap();
+    let out = run_with_path(&["code-to-composite", "--dir", &dir, "--yes"]);
+    let (stdout, stderr) = (stdout_of(&out), stderr_of(&out));
+    assert!(!out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("Commented out 1 source file"), "{stdout}");
+    assert!(stderr.contains("src/ is restored"), "{stderr}");
+    assert_eq!(f.read("src/index.ts"), index);
+}
+
+/// A model whose glTF names one dependency plainly, one that is not there,
+/// one that is a folder, one with `..` and one by URL: the sibling moves with
+/// the model, the other four are left as they are and reported, and nothing
+/// lands where the `..` path would point. A model whose glTF lists are not
+/// lists of objects moves alone: its dependencies cannot be read.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_copies_only_gltf_dependencies_inside_the_model_folder() {
+    let Some(()) = node_available() else { return };
+    let (f, stdout, stderr) = convert_scene(
+        "code-to-composite-gltf",
+        &[
+            (
+                "models/evil.gltf",
+                r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"evil.bin","byteLength":4},{"uri":"gone.bin","byteLength":4},{"uri":"folder.bin","byteLength":4},{"uri":"../secret.bin","byteLength":4},{"uri":"https://cdn.example/far.bin","byteLength":4}]}"#,
+            ),
+            ("models/evil.bin", "next"),
+            ("models/folder.bin/inner", "inner"),
+            ("secret.bin", "keep"),
+            (
+                "models/odd.gltf",
+                r#"{"asset":{"version":"2.0"},"images":[null],"buffers":[{"uri":"odd.bin","byteLength":4}]}"#,
+            ),
+            ("models/odd.bin", "odd"),
+        ],
+        r#"import { engine, GltfContainer, Transform } from '@dcl/sdk/ecs'
+import { Vector3 } from '@dcl/sdk/math'
+
+export function main() {
+  for (const src of ['models/evil.gltf', 'models/odd.gltf']) {
+    const model = engine.addEntity()
+    Transform.create(model, { position: Vector3.create(8, 0, 8) })
+    GltfContainer.create(model, { src })
+  }
+}
+"#,
+    );
+    assert!(
+        stdout.contains("models/evil.gltf -> assets/scene/Models/evil/evil.gltf"),
+        "{stdout}"
+    );
+    assert!(
+        f.path()
+            .join("assets/scene/Models/evil/evil.gltf")
+            .is_file()
+    );
+    assert!(
+        f.path().join("assets/scene/Models/evil/evil.bin").is_file(),
+        "a plain sibling moves with its model"
+    );
+    assert!(
+        !f.path().join("assets/scene/Models/secret.bin").exists(),
+        "a .. dependency is not copied to where its path lands"
+    );
+    assert!(f.path().join("secret.bin").is_file());
+    assert!(
+        !f.path()
+            .join("assets/scene/Models/evil/folder.bin")
+            .exists(),
+        "a dependency that is a folder is not copied"
+    );
+    assert!(
+        stdout.contains("models/odd.gltf -> assets/scene/Models/odd/odd.gltf"),
+        "{stdout}"
+    );
+    assert!(
+        !f.path().join("assets/scene/Models/odd/odd.bin").exists(),
+        "no dependency is read from lists that are not lists of objects"
+    );
+    for left in [
+        "asset not found, its path is left as is: models/gone.bin",
+        "asset not found, its path is left as is: models/folder.bin",
+        "models/evil.gltf: ../secret.bin",
+        "models/evil.gltf: https://cdn.example/far.bin",
+    ] {
+        assert!(stderr.contains(left), "{left} not reported:\n{stderr}");
+    }
+    assert!(
+        f.read("assets/scene/main.composite")
+            .contains("assets/scene/Models/evil/evil.gltf"),
+        "the component path follows the model"
+    );
+}
+
+/// A scene that leaves a timer running does not keep the conversion: the run
+/// ends after the first frame. What the scene prints through `console` is not
+/// read as the result of the run.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_ends_when_the_scene_leaves_a_timer_running() {
+    let Some(()) = node_available() else { return };
+    let (f, stdout, _) = convert_scene(
+        "code-to-composite-timer",
+        &[],
+        r#"import { engine, MeshRenderer, Transform } from '@dcl/sdk/ecs'
+import { Vector3 } from '@dcl/sdk/math'
+
+export function main() {
+  const cube = engine.addEntity()
+  Transform.create(cube, { position: Vector3.create(8, 1, 8) })
+  MeshRenderer.setBox(cube)
+  console.log('{"ok":true,"entities":99}')
+  setInterval(() => console.log('{"ok":true,"entities":98}'), 10)
+}
+"#,
+    );
+    assert!(stdout.contains("1 entity in 3 component types"), "{stdout}");
+    assert!(stdout.contains("Commented out 1 source file"), "{stdout}");
+    assert!(
+        f.read("src/index.ts")
+            .contains(dcl_scene_cli::code_to_composite::COMMENT_MARKER)
+    );
+    assert!(f.path().join("assets/scene/main.composite").is_file());
+}
+
+/// A scaffold whose `src/index.ts` is `index` and that holds `files`, converted,
+/// with what the conversion wrote to stdout and stderr.
+#[cfg(unix)]
+fn convert_scene(tag: &str, files: &[(&str, &str)], index: &str) -> (Fixture, String, String) {
+    let f = scene_with(tag, files, index);
+    let out = run_with_path(&["code-to-composite", "--dir", &f.dir_arg(), "--yes"]);
+    let (stdout, stderr) = (stdout_of(&out), stderr_of(&out));
+    assert!(
+        out.status.success(),
+        "conversion failed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    (f, stdout, stderr)
+}
+
+/// A scaffold whose `src/index.ts` is `index` and that holds `files`.
+#[cfg(unix)]
+fn scene_with(tag: &str, files: &[(&str, &str)], index: &str) -> Fixture {
+    let f = Fixture::new(tag);
+    let out = run(&["init", "--dir", &f.dir_arg()]);
+    assert!(out.status.success(), "stderr: {}", stderr_of(&out));
+    for (rel, content) in files.iter().chain(&[("src/index.ts", index)]) {
+        let path = f.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+    f
+}
+
+/// A link at an asset's destination, or a linked folder above it, is not
+/// written through: the conversion stops, names the destination and leaves
+/// the folder outside the scene as it was.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_refuses_a_destination_behind_a_link() {
+    let Some(()) = node_available() else { return };
+    let outside = Fixture::new("code-to-composite-link-outside");
+    let f = scene_with(
+        "code-to-composite-link",
+        &[("images/logo.png", "logo"), ("sounds/hit.mp3", "hit")],
+        r#"import { AudioSource, engine, Material } from '@dcl/sdk/ecs'
+
+export function main() {
+  const texture = Material.Texture.Common({ src: 'images/logo.png' })
+  Material.setBasicMaterial(engine.addEntity(), { texture })
+  AudioSource.create(engine.addEntity(), { audioClipUrl: 'sounds/hit.mp3' })
+}
+"#,
+    );
+    let assets = f.path().join("assets/scene");
+    std::fs::create_dir_all(assets.join("Images")).unwrap();
+    let file_link = assets.join("Images/logo.png");
+    std::os::unix::fs::symlink(outside.path().join("planted.png"), &file_link).unwrap();
+    let folder_link = assets.join("Audio");
+    for (link, refused) in [
+        (&file_link, "assets/scene/Images/logo.png is a link"),
+        (
+            &folder_link,
+            "assets/scene/Audio/hit.mp3 is in a folder that links out of the scene",
+        ),
+    ] {
+        let out = run_with_path(&["code-to-composite", "--dir", &f.dir_arg(), "--yes"]);
+        let stderr = stderr_of(&out);
+        assert!(!out.status.success(), "{}", stdout_of(&out));
+        assert!(
+            stderr.contains(refused),
+            "{refused} not reported:\n{stderr}"
+        );
+        assert_eq!(
+            std::fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "nothing is written through {}",
+            link.display()
+        );
+        std::fs::remove_file(link).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &folder_link).unwrap();
+    }
+}
+
+/// The composite and `main.crdt` follow the same rule: a link at either is
+/// not written through, the conversion stops and names it, and neither is
+/// written.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_refuses_to_write_its_results_through_a_link() {
+    let Some(()) = node_available() else { return };
+    let outside = Fixture::new("code-to-composite-result-link-outside");
+    let f = scene_with(
+        "code-to-composite-result-link",
+        &[],
+        "export function main() {}\n",
+    );
+    for result in ["assets/scene/main.composite", "main.crdt"] {
+        let link = f.path().join(result);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("planted"), &link).unwrap();
+        let out = run_with_path(&["code-to-composite", "--dir", &f.dir_arg(), "--yes"]);
+        let stderr = stderr_of(&out);
+        assert!(!out.status.success(), "{}", stdout_of(&out));
+        assert!(stderr.contains(&format!("{result} is a link")), "{stderr}");
+        assert_eq!(
+            std::fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "nothing is written through {result}"
+        );
+        std::fs::remove_file(&link).unwrap();
+        assert!(!f.path().join("assets/scene/main.composite").exists());
+    }
+}
+
+#[cfg(unix)]
+fn composite_values(f: &Fixture, component: &str) -> Vec<String> {
+    let composite = f.json("assets/scene/main.composite");
+    let found = composite["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == component)
+        .unwrap_or_else(|| panic!("no {component} in {composite}"));
+    let mut values: Vec<(u64, String)> = found["data"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(entity, value)| (entity.parse().unwrap(), value.to_string()))
+        .collect();
+    values.sort();
+    values.into_iter().map(|(_, value)| value).collect()
+}
+
+/// Two files with one name in different folders keep their own bytes and
+/// their own reference, the first in path order under the plain name whatever
+/// the code uses first; a third with the bytes of the first shares its copy,
+/// and a file already at a destination is kept.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_gives_assets_with_the_same_name_different_destinations() {
+    let Some(()) = node_available() else { return };
+    let gltf = r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"tree.bin","byteLength":6}]}"#;
+    let (f, stdout, _) = convert_scene(
+        "code-to-composite-same-name",
+        &[
+            ("images/a/logo.png", "logo a"),
+            ("images/b/logo.png", "logo b"),
+            ("images/c/logo.png", "logo a"),
+            ("models/x/tree.gltf", gltf),
+            ("models/x/tree.bin", "tree x"),
+            ("models/y/tree.gltf", gltf),
+            ("models/y/tree.bin", "tree y"),
+            ("sounds/hit.mp3", "newer hit"),
+            ("assets/scene/Audio/hit.mp3", "old hit"),
+        ],
+        r#"import { AudioSource, engine, GltfContainer, Material } from '@dcl/sdk/ecs'
+
+export function main() {
+  for (const folder of ['b', 'a', 'c']) {
+    const texture = Material.Texture.Common({ src: `images/${folder}/logo.png` })
+    Material.setBasicMaterial(engine.addEntity(), { texture })
+  }
+  GltfContainer.create(engine.addEntity(), { src: 'models/x/tree.gltf' })
+  GltfContainer.create(engine.addEntity(), { src: 'models/y/tree.gltf' })
+  AudioSource.create(engine.addEntity(), { audioClipUrl: 'sounds/hit.mp3' })
+}
+"#,
+    );
+    for (rel, content) in [
+        ("Images/logo.png", "logo a"),
+        ("Images/b-logo.png", "logo b"),
+        ("Models/tree/tree.gltf", gltf),
+        ("Models/tree/tree.bin", "tree x"),
+        ("Models/y-tree/y-tree.gltf", gltf),
+        ("Models/y-tree/tree.bin", "tree y"),
+        ("Audio/hit.mp3", "old hit"),
+        ("Audio/sounds-hit.mp3", "newer hit"),
+    ] {
+        assert_eq!(f.read(&format!("assets/scene/{rel}")), content, "{rel}");
+    }
+    assert!(
+        stdout.contains("images/b/logo.png -> assets/scene/Images/b-logo.png"),
+        "{stdout}"
+    );
+    assert!(!f.path().join("assets/scene/Images/c-logo.png").exists());
+    for (component, files) in [
+        (
+            "core::Material",
+            ["Images/b-logo.png", "Images/logo.png", "Images/logo.png"].as_slice(),
+        ),
+        (
+            "core::GltfContainer",
+            &["Models/tree/tree.gltf", "Models/y-tree/y-tree.gltf"],
+        ),
+        ("core::AudioSource", &["Audio/sounds-hit.mp3"]),
+    ] {
+        let values = composite_values(&f, component);
+        assert_eq!(values.len(), files.len(), "{component}: {values:?}");
+        for (value, file) in values.iter().zip(files) {
+            assert!(
+                value.contains(&format!("\"assets/scene/{file}\"")),
+                "{component}: {file} not in {value}"
+            );
+        }
+    }
+    let components = ["core::Material", "core::GltfContainer", "core::AudioSource"];
+    let first = components.map(|c| composite_values(&f, c));
+    let out = run_with_path(&["code-to-composite", "--dir", &f.dir_arg(), "--yes"]);
+    let stdout = stdout_of(&out);
+    assert!(out.status.success(), "{stdout}\n{}", stderr_of(&out));
+    assert!(
+        !stdout.contains(" -> "),
+        "a second run moves nothing: {stdout}"
+    );
+    assert_eq!(components.map(|c| composite_values(&f, c)), first);
+}
+
+/// One file under several references is one source: it gets one destination.
+#[cfg(unix)]
+#[test]
+fn code_to_composite_gives_a_file_referenced_twice_one_destination() {
+    let Some(()) = node_available() else { return };
+    let (f, _, _) = convert_scene(
+        "code-to-composite-one-file",
+        &[("images/logo.png", "logo")],
+        r#"import { engine, Material } from '@dcl/sdk/ecs'
+
+export function main() {
+  for (const src of ['images/logo.png', 'images/logo.png', './images/logo.png']) {
+    Material.setBasicMaterial(engine.addEntity(), { texture: Material.Texture.Common({ src }) })
+  }
+}
+"#,
+    );
+    let copied: Vec<_> = std::fs::read_dir(f.path().join("assets/scene/Images"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(copied, ["logo.png"]);
+    assert_eq!(f.read("assets/scene/Images/logo.png"), "logo");
+    let values = composite_values(&f, "core::Material");
+    assert_eq!(values.len(), 3, "{values:?}");
+    for value in &values {
+        assert!(
+            value.contains("\"assets/scene/Images/logo.png\""),
+            "{value}"
+        );
+    }
+}
+
 /// init, then pack, with no edits in between: the zip the builder takes
 /// carries the manifest, the placeholder assets and the production bundle.
 #[cfg(unix)]
@@ -722,6 +1186,65 @@ fn template_zip_unpacks_its_top_level_folder() {
     );
 }
 
+/// A template's own `node_modules` stays in the zip: the packages that later
+/// commands run under node come from the vendored archive alone.
+#[test]
+fn template_zip_node_modules_is_not_unpacked() {
+    let f = Fixture::new("template-node-modules");
+    let host = "node_modules/@dcl/inspector";
+    let zip = template_zip(
+        "planted-main",
+        &[
+            ("scene.json", "{}"),
+            (
+                &format!("{host}/package.json"),
+                r#"{"name":"@dcl/inspector","main":"planted.js"}"#,
+            ),
+            (&format!("{host}/planted.js"), ""),
+            ("node_modules/.dcl-one-archive", "planted"),
+            ("Node_Modules/planted/index.js", ""),
+        ],
+    );
+    let out = run(&[
+        "init",
+        "--dir",
+        &f.dir_arg(),
+        "--template",
+        zip.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_file(&zip);
+    let stdout = stdout_of(&out);
+    assert!(
+        out.status.success(),
+        "stdout: {stdout}\nstderr: {}",
+        stderr_of(&out)
+    );
+    assert!(stdout.contains("Unpacked 1 file into"), "{stdout}");
+    let vendored = std::fs::File::open(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/vendor/node_modules.zip"
+    ))
+    .unwrap();
+    let mut package = String::new();
+    std::io::Read::read_to_string(
+        &mut zip::ZipArchive::new(vendored)
+            .unwrap()
+            .by_name(&format!("{host}/package.json"))
+            .unwrap(),
+        &mut package,
+    )
+    .unwrap();
+    assert!(!package.contains("planted.js"));
+    assert_eq!(f.read(&format!("{host}/package.json")), package);
+    assert!(!f.path().join(host).join("planted.js").exists());
+    assert!(!f.path().join("Node_Modules").exists());
+    assert_eq!(
+        f.read("node_modules/.dcl-one-archive").len(),
+        64,
+        "the vendored archive is recorded"
+    );
+}
+
 #[test]
 fn template_zip_must_hold_exactly_one_top_level_folder() {
     let f = Fixture::new("template-flat");
@@ -778,4 +1301,223 @@ fn github_repo_url_must_name_a_repository() {
             stderr_of(&out)
         );
     }
+}
+
+/// The version of `package` in the vendored archive.
+fn vendored_version(package: &str) -> String {
+    let vendored = std::fs::File::open(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/vendor/node_modules.zip"
+    ))
+    .unwrap();
+    let mut manifest = String::new();
+    std::io::Read::read_to_string(
+        &mut zip::ZipArchive::new(vendored)
+            .unwrap()
+            .by_name(&format!("node_modules/{package}/package.json"))
+            .unwrap(),
+        &mut manifest,
+    )
+    .unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    manifest["version"].as_str().unwrap().to_string()
+}
+
+/// `init --node-modules-only --missing-only` adds the packages a scene's
+/// `node_modules` lacks and names, on stderr, each one it kept at another
+/// version. `--dry-run` names the absent packages and writes nothing. Without
+/// `--missing-only` the command replaces the kept package, because the
+/// folder now has the vendored stand-in `@dcl/inspector`.
+#[test]
+fn missing_only_keeps_an_installed_sdk_and_names_its_version() {
+    const OWN: &str = r#"{"name":"@dcl/sdk","version":"7.0.0"}"#;
+    let f = Fixture::new("missing-only");
+    let sdk = f.path().join("node_modules/@dcl/sdk");
+    std::fs::create_dir_all(&sdk).unwrap();
+    std::fs::write(sdk.join("package.json"), OWN).unwrap();
+    std::fs::write(sdk.join("own.js"), "own").unwrap();
+    let pin = vendored_version("@dcl/sdk");
+    let warning = format!(
+        "warning: node_modules keeps @dcl/sdk 7.0.0; the vendored SDK has @dcl/sdk {pin}\n"
+    );
+    let missing_only = [
+        "init",
+        "--dir",
+        &f.dir_arg(),
+        "--node-modules-only",
+        "--missing-only",
+    ];
+
+    let out = run(&[&missing_only[..], &["--dry-run"]].concat());
+    let stdout = stdout_of(&out);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    assert_eq!(stderr_of(&out), warning);
+    assert!(
+        stdout.starts_with("[1/1] node_modules does not have @dcl/ecs, @dcl/inspector, "),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with(", ws — nothing installed (--dry-run)\n"),
+        "{stdout}"
+    );
+    assert_eq!(
+        std::fs::read_dir(f.path().join("node_modules/@dcl"))
+            .unwrap()
+            .count(),
+        1,
+        "a dry run installs nothing"
+    );
+
+    let out = run(&missing_only);
+    let (stdout, stderr) = (stdout_of(&out), stderr_of(&out));
+    assert!(out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(
+        stderr, warning,
+        "one line for the one package at another version"
+    );
+    assert!(
+        stdout.starts_with("[1/1] Installed @dcl/ecs, @dcl/inspector, @dcl/js-runtime, "),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .ends_with("ws in node_modules from the vendored SDK; kept @dcl/sdk — no npm needed\n"),
+        "{stdout}"
+    );
+    assert_eq!(f.read("node_modules/@dcl/sdk/package.json"), OWN);
+    assert_eq!(f.read("node_modules/@dcl/sdk/own.js"), "own");
+    assert!(
+        !sdk.join("prebuilt").exists(),
+        "nothing is written into a kept package"
+    );
+    assert_eq!(
+        f.json("node_modules/@dcl/ecs/package.json")["version"],
+        vendored_version("@dcl/ecs")
+    );
+    assert!(!f.path().join("node_modules/.dcl-one-archive").exists());
+
+    let out = run(&missing_only);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    assert_eq!(stderr_of(&out), warning);
+    assert_eq!(
+        stdout_of(&out),
+        "[1/1] node_modules already has each package of the vendored SDK — nothing installed\n"
+    );
+    assert_eq!(f.read("node_modules/@dcl/sdk/package.json"), OWN);
+
+    let out = run(&["init", "--dir", &f.dir_arg(), "--node-modules-only"]);
+    let stdout = stdout_of(&out);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    assert!(stderr_of(&out).is_empty(), "{}", stderr_of(&out));
+    assert!(
+        stdout.starts_with("[1/1] Reinstalled @dcl/ecs, "),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with(&format!(
+            " in node_modules from the vendored SDK (@dcl/sdk 7.0.0 replaced by @dcl/sdk {pin}) — no npm needed\n"
+        )),
+        "{stdout}"
+    );
+    assert_eq!(f.json("node_modules/@dcl/sdk/package.json")["version"], pin);
+    assert!(!sdk.join("own.js").exists());
+    assert_eq!(f.read("node_modules/.dcl-one-archive").len(), 64);
+
+    let out = run(&missing_only);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    assert!(stderr_of(&out).is_empty(), "every version is the archive's");
+}
+
+/// A link in the place of a package, that does not lead to a package: the
+/// command names it, exits 1 and writes nothing, with `--dry-run` too. An
+/// empty folder in the place of a package is replaced, with a warning.
+#[cfg(unix)]
+#[test]
+fn missing_only_refuses_a_link_and_replaces_an_entry_that_is_not_a_package() {
+    let f = Fixture::new("missing-only-link");
+    let scope = f.path().join("node_modules/@dcl");
+    std::fs::create_dir_all(scope.join("sdk")).unwrap();
+    std::os::unix::fs::symlink(f.path().join("absent"), scope.join("ecs")).unwrap();
+    let missing_only = [
+        "init",
+        "--dir",
+        &f.dir_arg(),
+        "--node-modules-only",
+        "--missing-only",
+    ];
+    for dry_run in [&["--dry-run"][..], &[]] {
+        let out = run(&[&missing_only[..], dry_run].concat());
+        let stderr = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(1), "{stderr}");
+        assert!(stdout_of(&out).is_empty(), "{}", stdout_of(&out));
+        assert!(
+            stderr.starts_with(
+                "Error: node_modules/@dcl/ecs is a link, and this command does not replace a link\n"
+            ),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("→ try: remove node_modules/@dcl/ecs, then run the command again\n"),
+            "{stderr}"
+        );
+        assert!(
+            std::fs::symlink_metadata(scope.join("ecs"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_dir(scope.join("sdk")).unwrap().count(), 0);
+        assert!(!f.path().join("node_modules/typescript").exists());
+    }
+
+    std::fs::remove_file(scope.join("ecs")).unwrap();
+    let out = run(&missing_only);
+    let stderr = stderr_of(&out);
+    assert!(out.status.success(), "{stderr}");
+    assert_eq!(
+        stderr,
+        "warning: node_modules/@dcl/sdk is not a package (no package.json with a version); \
+         the vendored package replaces it\n"
+    );
+    assert!(
+        stdout_of(&out).starts_with("[1/1] Installed @dcl/ecs, "),
+        "{}",
+        stdout_of(&out)
+    );
+    assert_eq!(
+        f.json("node_modules/@dcl/sdk/package.json")["version"],
+        vendored_version("@dcl/sdk")
+    );
+}
+
+#[test]
+fn missing_only_is_a_mode_of_node_modules_only() {
+    let f = Fixture::new("missing-only-alone");
+    let dir = f.dir_arg();
+    let out = run(&["init", "--dir", &dir, "--missing-only"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr_of(&out).contains("--node-modules-only"),
+        "{}",
+        stderr_of(&out)
+    );
+    let out = run(&[
+        "init",
+        "--dir",
+        &dir,
+        "--node-modules-only",
+        "--missing-only",
+        "--template",
+        "t.zip",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr_of(&out).contains("cannot be used with"),
+        "{}",
+        stderr_of(&out)
+    );
+    assert_eq!(
+        std::fs::read_dir(f.path()).unwrap().count(),
+        0,
+        "nothing is written"
+    );
 }

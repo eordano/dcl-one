@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,13 +10,15 @@ import { deflateSync } from "node:zlib";
 import { assertFreshBuild, buildSites, dclOneIdentity, isCommitted, localEnvFiles, stampFile } from "./build.mts";
 import type { Collected, Node } from "./collect.mts";
 import { foreignRequest, guardLoopback } from "./guard.mts";
-import { referencePin, SITES } from "./paths.mts";
+import { referencePin, SITES, UI3 } from "./paths.mts";
 import { decodePng, encodePng, imageSize, pasteTile, placeholderPng, type Rgba } from "./png.mts";
 import { pixelDiff } from "./pixeldiff.mts";
-import { fillMisses, learnable, Recording, savingAfter } from "./recording.mts";
-import { classifyMiss, classifyUnknown, gateFailures, isIdentical } from "./verdict.mts";
-import { fromBrowser, imageSeed, startReplay } from "./servers.mts";
-import { canonicalQuery, fromNodePath, fromShopApi, RECORDED_NODE_PREFIXES, relaysToNode } from "./services.mts";
+import { entryKey, fillMisses, learnable, Recording, savingAfter } from "./recording.mts";
+import { ceilingFailures, classifyMiss, classifyUnknown, gateFailures, isIdentical, lowerCeiling } from "./verdict.mts";
+import { FONTS_DIR, FONTS_MOUNT, FONTS_URL, INTER_CSS, interFontFaces } from "./fonts.mts";
+import { fromBrowser, imageSeed, startReplay, startStatic } from "./servers.mts";
+import { shippedPath } from "./route.mts";
+import { canonicalQuery, cmsQuery, fromNodePath, fromShopApi, RECORDED_NODE_PREFIXES, relaysToNode, resolve } from "./services.mts";
 import { compareStructure, coverByRegions, line } from "./structure.mts";
 
 const solid = (w: number, h: number, rgb: [number, number, number]): Rgba => {
@@ -242,8 +244,70 @@ describe("services", () => {
     assert.ok(RECORDED_NODE_PREFIXES.includes("/camera-reel"));
     for (const prefix of RECORDED_NODE_PREFIXES) assert.ok(relaysToNode(`${prefix}/x`), `${prefix} is answered from a recording the preview never relays to`);
   });
+  it("maps the node's discovery API onto the places and events services, under the same paths", () => {
+    const cases: [string, string, string][] = [
+      ["/api/places", "places", "/api/places"],
+      ["/api/destinations/abc", "places", "/api/destinations/abc"],
+      ["/api/map", "places", "/api/map"],
+      ["/badges/users/0xab/badges", "badges", "/users/0xab/badges"],
+      ["/camera-reel-service/api/users/0xab/images", "camera-reel", "/api/users/0xab/images"],
+      ["/social-api/v1/members/0xab/communities", "social", "/v1/members/0xab/communities"],
+      ["/api/events", "events", "/api/events"],
+      ["/api/schedules", "events", "/api/schedules"],
+      ["/api/placesx", "node", "/api/placesx"],
+      ["/api/cms", "node", "/api/cms"],
+      ["/about", "peer", "/about"],
+      ["/hot-scenes", "realm-provider", "/hot-scenes"],
+      ["/hot-scenes/x", "node", "/hot-scenes/x"],
+      ["/worlds-content-server/world/a.dcl.eth/scenes", "worlds-content", "/world/a.dcl.eth/scenes"],
+      ["/cdn-data/public/current/explorer-alpha-downloads.json", "cdn-data", "/public/current/explorer-alpha-downloads.json"],
+      ["/cms/spaces/ea2ybdmmn1kv/environments/master/blog/posts", "cms", "/spaces/ea2ybdmmn1kv/environments/master/blog/posts"],
+      ["/places/api/places", "places", "/api/places"],
+      ["/places/api/categories", "places", "/api/categories"],
+      ["/events/api/schedules", "events", "/api/schedules"],
+      ["/events/v1/events", "events", "/api/events"],
+      ["/events/v1/events/abc", "events", "/api/events/abc"],
+      ["/events/v1/eventsx", "node", "/events/v1/eventsx"],
+      ["/archipelago-ea-stats/hot-scenes", "realm-provider", "/hot-scenes"],
+    ];
+    for (const [from, service, path] of cases) assert.deepEqual(fromNodePath("GET", from), { service, path }, from);
+  });
+  it("answers the reference's own /api/* from the sites service and lets dcl-one's own go on to its preview", () => {
+    const origin = "http://127.0.0.1:5179";
+    const cases: [string, string, string, "reference" | "dcl-one", ReturnType<typeof resolve>][] = [
+      [`${origin}/api/feature-flags`, "GET", "fetch", "reference", { kind: "api", service: "sites", path: "/api/feature-flags" }],
+      [`${origin}/api/places?limit=1`, "GET", "fetch", "dcl-one", { kind: "own" }],
+      [`${origin}/assets/x.js`, "GET", "script", "reference", { kind: "own" }],
+      ["https://events.decentraland.org/api/events?limit=1", "GET", "fetch", "reference", { kind: "api", service: "events", path: "/api/events" }],
+      ["https://evs.e.decentraland.org/v1/t", "POST", "fetch", "reference", { kind: "blocked" }],
+      ["https://t.contentsquare.net/uxa/x.js", "GET", "script", "reference", { kind: "blocked" }],
+      ["https://explorer-artifacts.decentraland.org/launcher-rust/Decentraland_installer.dmg", "HEAD", "fetch", "dcl-one", { kind: "blocked" }],
+      ["https://download-gateway.decentraland.org/macos/arm64", "GET", "document", "reference", { kind: "blocked" }],
+    ];
+    for (const [url, method, type, side, expected] of cases) assert.deepEqual(resolve(new URL(url), method, origin, type, side), expected, url);
+  });
+  it("records the footer's twemoji flags as an asset and keeps the rest of jsdelivr unknown", () => {
+    const origin = "http://127.0.0.1:5179";
+    const flag = "/gh/twitter/twemoji@latest/assets/svg/1f1ec-1f1e7.svg";
+    assert.deepEqual(resolve(new URL(`https://cdn.jsdelivr.net${flag}`), "GET", origin, "image", "reference"), { kind: "api", service: "twemoji", path: flag });
+    assert.deepEqual(resolve(new URL("https://cdn.jsdelivr.net/npm/x@1/x.js"), "GET", origin, "script", "reference"), { kind: "unknown", host: "cdn.jsdelivr.net" });
+  });
   it("orders and re-encodes a query so equal queries key alike", () => {
     assert.equal(canonicalQuery("?b=2&a=x%20y&a=1"), canonicalQuery("a=1&a=x+y&b=2"));
+  });
+  it("keys a cms read that names the default locale as the read that names none", () => {
+    assert.equal(cmsQuery("?locale=en-US&limit=7&skip=0"), canonicalQuery("limit=7&skip=0"));
+    assert.notEqual(cmsQuery("?locale=es&limit=7&skip=0"), canonicalQuery("limit=7&skip=0"));
+  });
+});
+
+describe("shippedPath", () => {
+  it("names a sites asset on its origin or wrapped in the peer's content path, never a content hash", () => {
+    assert.equal(shippedPath(new URL("https://decentraland.org/epic_icon.svg")), "/epic_icon.svg");
+    assert.equal(shippedPath(new URL("https://peer.decentraland.org/content/contents//dcl-logo.svg")), "/dcl-logo.svg");
+    assert.equal(shippedPath(new URL("https://peer.decentraland.org/content/contents/bafkreiabc")), null);
+    assert.equal(shippedPath(new URL("https://peer.decentraland.org/dcl-logo.svg")), null);
+    assert.equal(shippedPath(new URL("https://cdn-data.decentraland.org/dcl-logo.svg")), null);
   });
 });
 
@@ -291,6 +355,23 @@ describe("gateFailures", () => {
   });
 });
 
+describe("ceilings", () => {
+  const result = (diff: number, structure: { expected?: string }[] = []) =>
+    ({ page: "item", viewport: "mobile", pixels: { diff }, structure, lines: [], sides: { reference: {}, "dcl-one": {} }, misses: [], unknown: [] }) as unknown as Parameters<typeof ceilingFailures>[1][number];
+  it("records the counts once and only lowers them", () => {
+    assert.deepEqual(lowerCeiling(undefined, result(40, [{}, { expected: "a rule" }])), { pixels: 40, structural: 1 });
+    assert.deepEqual(lowerCeiling({ pixels: 40, structural: 1 }, result(52, [])), { pixels: 40, structural: 0 });
+  });
+  it("passes a page at or under its ceiling and fails one above it or not captured", () => {
+    const ceilings = { "item@mobile": { pixels: 40, structural: 1 } };
+    assert.deepEqual(ceilingFailures(ceilings, [result(40, [{}])]), []);
+    assert.deepEqual(ceilingFailures(ceilings, [result(41, [{}, {}])]), [
+      { id: "item@mobile", reasons: ["41 differing pixels, ceiling 40", "2 structural differences, ceiling 1"] },
+    ]);
+    assert.deepEqual(ceilingFailures({ "cart@mobile": { pixels: 0, structural: 0 } }, []), [{ id: "cart@mobile", reasons: ["it was not captured"] }]);
+  });
+});
+
 const node = (id: string, box: [number, number, number, number], extra: Partial<Node> = {}): Node => ({
   id,
   parent: null,
@@ -320,6 +401,13 @@ describe("compareStructure", () => {
     const d = compareStructure(ref, one, { expected: [{ match: /^key:price$/, why: "a rule" }] });
     assert.equal(line(d[0]!), 'key:price: font-weight 600→700, text "20"→"20 Credits"  [expected: a rule]');
   });
+  it("reports a declared key found on neither side, and no expectation covers it", () => {
+    const both = page([node("key:title", [0, 0, 40, 20])]);
+    const d = compareStructure(both, both, { keys: ["title", "schedule"], expected: [{ match: /^key:/, why: "a rule" }] });
+    assert.deepEqual(d.map(line), ["key:schedule: found on neither side"]);
+    const clipped = { ...both, clipped: ["key:schedule"] };
+    assert.deepEqual(compareStructure(clipped, both, { keys: ["title", "schedule"] }).map(line), [], "a key below maxHeight was found");
+  });
   it("lets `only` cover the named property, not another that starts with the same word", () => {
     const ref = page([node("key:footer", [0, 0, 40, 20], { text: "a", ownText: true })]);
     const one = page([node("key:footer", [0, 0, 40, 20], { text: "b", ownText: true, style: { ...node("x", [0, 0, 0, 0]).style, textTransform: "uppercase" } })]);
@@ -341,6 +429,17 @@ describe("imageSeed", () => {
     const id = "bafkreierayvvvos6tnk7ioanae5jjltt5x2jjc6xl46jwj66rsk6bqotpq";
     assert.equal(imageSeed(new URL(`https://profile-images.example/entities/${id}/face.png`)), `profile:${id}/face`);
     assert.equal(imageSeed(new URL(`http://127.0.0.1:5178/profile-images/entities/${id}/face.png`)), `profile:${id}/face`);
+  });
+
+  it("seeds a CMS picture by its asset id", () => {
+    const asset = "760gckxgmBstLrWqgvDAM2";
+    const seed = imageSeed(new URL(`https://cms-images.decentraland.org/ea2ybdmmn1kv/${asset}/0f3c/blog_hero.png?w=1340`));
+    assert.equal(seed, `cms-asset:${asset}`);
+  });
+
+  it("seeds a resized copy like the picture it wraps", () => {
+    const poster = "https://events-assets.example/poster/abc.png";
+    assert.equal(imageSeed(new URL(`http://127.0.0.1:5178/media/convert?width=640&url=${encodeURIComponent(poster)}`)), imageSeed(new URL(poster)));
   });
 });
 
@@ -375,6 +474,51 @@ describe("Recording batched lookups", () => {
       const unknown = await rec.answer({ method: "GET", service: "marketplace", path: "/v3/catalog/items", search: "?id=z-0", side: "t" });
       assert.equal(unknown.status, 404);
       assert.equal(rec.misses.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a profiles batch from one row per address, whichever batch the page composes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "parity-"));
+    try {
+      const rec = new Recording(dir);
+      const profile = (address: string, face: string) => ({ avatars: [{ ethAddress: address, avatar: { snapshots: { face256: face } } }] });
+      const batch = (ids: string[], rows: unknown[]) =>
+        rec.putBody({ key: entryKey("POST", "peer", "/lambdas/profiles", "", { ids }), method: "POST", service: "peer", path: "/lambdas/profiles", query: "", request: { ids }, status: 200, contentType: "application/json" }, Buffer.from(JSON.stringify(rows)));
+      // 0xa redeployed between the two recorded batches: every answer carries its first recorded row.
+      batch(["0xa", "0xb"], [profile("0xa", "one.png"), profile("0xb", "b.png")]);
+      batch(["0xa"], [profile("0xa", "two.png")]);
+      const ask = (ids: string[]) => rec.answer({ method: "POST", service: "peer", path: "/lambdas/profiles", search: "", body: Buffer.from(JSON.stringify({ ids })), side: "t" });
+      assert.deepEqual(JSON.parse((await ask(["0xa"])).body.toString()), [profile("0xa", "one.png")]);
+      assert.deepEqual(JSON.parse((await ask(["0xb", "0xa"])).body.toString()), [profile("0xb", "b.png"), profile("0xa", "one.png")]);
+      // An address no recorded batch asked: the batch misses, as any unrecorded answer does.
+      assert.equal((await ask(["0xa", "0xc"])).status, 404);
+      assert.equal(rec.misses.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+const jsonEntry = (service: "places" | "peer", key: string) => ({ key, method: "GET", service, path: `/${key}`, query: "", status: 200, contentType: "application/json" });
+
+describe("Recording.save", () => {
+  it("keeps the entries and new targets another recording of the set saved since this one loaded", () => {
+    const dir = mkdtempSync(join(tmpdir(), "parity-"));
+    try {
+      const base = new Recording(dir);
+      base.putBody(jsonEntry("places", "a"), Buffer.from("{}"));
+      base.save({ targets: { old: "/o", dropped: "/d" } });
+      const mine = new Recording(dir);
+      const theirs = new Recording(dir);
+      theirs.putBody(jsonEntry("places", "b"), Buffer.from("{}"));
+      theirs.save({ targets: { old: "/o", dropped: "/d", theirs: "/t" } });
+      mine.putBody(jsonEntry("places", "c"), Buffer.from("{}"));
+      mine.save({ targets: { old: "/o", mine: "/m" } });
+      const saved = new Recording(dir);
+      assert.deepEqual([...saved.entries.keys()].sort(), ["a", "b", "c"]);
+      assert.deepEqual(saved.manifest?.targets, { old: "/o", mine: "/m", theirs: "/t" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -414,6 +558,30 @@ describe("fillMisses", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("keeps a twemoji flag's SVG as it is, and only the size of a picture an API route answers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "parity-"));
+    const realFetch = globalThis.fetch;
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36"><path fill="#00247D" d="M0 9h36v18H0z"/></svg>';
+    globalThis.fetch = (async () => new Response(svg, { headers: { "content-type": "image/svg+xml" } })) as typeof fetch;
+    const flag = "/gh/twitter/twemoji@latest/assets/svg/1f1ec-1f1e7.svg";
+    try {
+      const replay = new Recording(dir);
+      await replay.answer({ method: "GET", service: "twemoji", path: flag, search: "", side: "reference" });
+      await replay.answer({ method: "GET", service: "peer", path: "/thumb.svg", search: "", side: "reference" });
+      const { filled } = await fillMisses(replay, new Recording(dir, { live: true, retryDelays: [0, 0] }), () => {});
+      assert.equal(filled, 2);
+      const saved = new Recording(dir);
+      const kept = await saved.answer({ method: "GET", service: "twemoji", path: flag, search: "", side: "reference" });
+      assert.equal(kept.status, 200);
+      assert.equal(kept.contentType, "image/svg+xml");
+      assert.equal(kept.body.toString(), svg);
+      const picture = await saved.answer({ method: "GET", service: "peer", path: "/thumb.svg", search: "", side: "reference" });
+      assert.notEqual(picture.body.toString(), svg);
+    } finally {
+      globalThis.fetch = realFetch;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("never sends a signed write while recording, and a signed read goes out signed again as the test wallet", async () => {
     const dir = mkdtempSync(join(tmpdir(), "parity-"));
     const realFetch = globalThis.fetch;
@@ -436,6 +604,67 @@ describe("fillMisses", () => {
       assert.equal(sent[0]!.headers["x-identity-metadata"], '{"signer":"dcl:marketplace"}', "the page's metadata, kept");
     } finally {
       globalThis.fetch = realFetch;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("a live read follows a redirect only to a listed origin, and signs each hop only for Decentraland's hosts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "parity-"));
+    const realFetch = globalThis.fetch;
+    const sent: { url: string; redirect?: string; headers: Record<string, string> }[] = [];
+    const hops: Record<string, string> = {
+      "https://marketplace-api.decentraland.org/v1/moved": "https://peer.decentraland.org/lambdas/there",
+      "https://marketplace-api.decentraland.org/v1/outside": "https://api.github.com/user",
+      "https://marketplace-api.decentraland.org/v1/away": "https://example.com/collect",
+      "https://marketplace-api.decentraland.org/v1/plain": "http://peer.decentraland.org/lambdas/there",
+    };
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      sent.push({ url: String(url), redirect: init?.redirect, headers: (init?.headers ?? {}) as Record<string, string> });
+      const location = hops[String(url)];
+      if (location) return new Response(null, { status: 302, headers: { location } });
+      return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const signer = async (method: string, path: string, metadata: string) => ({ "x-identity-auth-chain-0": `${method} ${path}`, "x-identity-metadata": metadata });
+      const live = new Recording(dir, { live: true, signer });
+      const signedBy = { "x-identity-auth-chain-0": "page", "x-identity-metadata": "{}" };
+      const read = (path: string) => live.answer({ method: "GET", service: "marketplace", path, search: "", headers: signedBy, side: "t" });
+
+      assert.equal((await read("/v1/moved")).status, 200);
+      assert.deepEqual(sent.map((s) => [s.url, s.redirect, s.headers["x-identity-auth-chain-0"]]), [
+        ["https://marketplace-api.decentraland.org/v1/moved", "manual", "GET /v1/moved"],
+        ["https://peer.decentraland.org/lambdas/there", "manual", "GET /lambdas/there"],
+      ]);
+
+      sent.length = 0;
+      assert.equal((await read("/v1/outside")).status, 200);
+      assert.equal(sent[1]!.url, "https://api.github.com/user");
+      assert.equal(sent[1]!.headers["x-identity-auth-chain-0"], undefined, "a listed host that is not Decentraland's gets no signature");
+      assert.equal(sent[1]!.headers["x-identity-metadata"], undefined);
+
+      for (const path of ["/v1/away", "/v1/plain"]) {
+        sent.length = 0;
+        assert.equal((await read(path)).status, 502);
+        assert.deepEqual(sent.map((s) => s.url), [`https://marketplace-api.decentraland.org${path}`], "the redirect is not followed");
+      }
+      assert.match(live.failures.join("\n"), /GET marketplace \/v1\/away: redirects to example\.com, a host .* does not list; not followed/);
+      live.save();
+      assert.ok(!JSON.parse(readFileSync(join(dir, "index.json"), "utf8")).some((e: { path: string }) => e.path === "/v1/away" || e.path === "/v1/plain"), "a refused redirect is kept nowhere");
+    } finally {
+      globalThis.fetch = realFetch;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("a save holds the set's lock, replaces each file whole, and fails when the lock stays held", () => {
+    const dir = mkdtempSync(join(tmpdir(), "parity-"));
+    try {
+      const rec = new Recording(dir, { lockWaitMs: 0 });
+      rec.putBody({ key: "k", method: "GET", service: "peer", path: "/x", query: "", status: 200, contentType: "application/json" }, Buffer.from("{}"));
+      rec.save();
+      assert.deepEqual(readdirSync(dir).sort(), ["bodies", "images.json", "index.json"], "no lock and no part file stays");
+      mkdirSync(join(dir, ".lock"));
+      assert.throws(() => rec.save(), /\.lock is held/);
+      assert.ok(existsSync(join(dir, ".lock")), "another recorder's lock is not removed");
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -573,6 +802,26 @@ describe("Recording", () => {
       assert.equal(await savingAfter(again, async () => "done", manifest), "done");
       assert.equal(new Recording(dir).manifest?.incomplete, undefined);
       assert.equal(process.listenerCount("SIGINT"), listeners, "the interrupt handler is lifted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the answers and targets another recorder saved while this one ran", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "parity-"));
+    try {
+      const first = new Recording(dir, { live: true });
+      first.save({ set: "t", recordedAt: "2026-10-30T00:00:00.000Z", targets: { gone: "/old" } });
+      const a = new Recording(dir, { live: true });
+      const b = new Recording(dir, { live: true });
+      a.putBody(jsonEntry("peer", "a"), Buffer.from("{}"));
+      a.save({ targets: { gone: "/old", mine: "/a" } });
+      b.putBody(jsonEntry("peer", "b"), Buffer.from("{}"));
+      // b drops a target it loaded (its discover found none) and keeps the one a added meanwhile.
+      b.save({ targets: { theirs: "/b" } });
+      const saved = new Recording(dir);
+      assert.deepEqual([...saved.entries.keys()].sort(), ["a", "b"]);
+      assert.deepEqual(saved.manifest?.targets, { mine: "/a", theirs: "/b" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -731,13 +980,62 @@ describe("referencePin", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   };
-  it("accepts the committed pin and refuses what would reach git or rmSync unchecked", () => {
+  it("accepts the committed pins and refuses what would reach git or rmSync unchecked", () => {
     assert.deepEqual(read({}), pin);
+    assert.deepEqual(referencePin("shop"), referencePin());
+    const sites = referencePin("sites");
+    assert.equal(sites.app, ".");
+    assert.equal(sites.repository, "https://github.com/decentraland/sites");
+    assert.match(sites.revision, /^[0-9a-f]{40}$/);
+    assert.deepEqual(sites.buildEnv, { VITE_REACT_APP_DCL_DEFAULT_ENV: "prod" });
+    assert.equal(read({ app: "." }).app, ".");
+    assert.throws(() => read({ app: "./app" }), /relative path/);
     assert.throws(() => read({ revision: "main" }), /40-hex/);
     assert.throws(() => read({ revision: "../../x" }), /40-hex/);
     assert.throws(() => read({ repository: "--upload-pack=x" }), /repository/);
     assert.throws(() => read({ app: "../outside" }), /relative path/);
     assert.throws(() => read({ buildEnv: { NODE_OPTIONS: "--require x" } }), /VITE_/);
+  });
+});
+
+describe("Inter on the sites reference", () => {
+  it("moves inter.css's rules under the mount and keeps everything else they declare", () => {
+    const css = readFileSync(INTER_CSS, "utf8");
+    const faces = interFontFaces(css);
+    const rules = faces.split("\n");
+    assert.equal(rules.length, (css.match(/@font-face/g) ?? []).length);
+    assert.ok(rules.length >= 3, "a rule per weight at least");
+    for (const rule of rules) {
+      const url = rule.match(/url\("([^"]+)"\)/)?.[1];
+      assert.ok(url?.startsWith(FONTS_MOUNT), rule);
+      assert.ok(existsSync(join(FONTS_DIR, url!.slice(FONTS_MOUNT.length))), `${url} is one of dcl-one's files`);
+    }
+    assert.equal(faces.replaceAll(`url("${FONTS_MOUNT}`, `url("${FONTS_URL}`), (css.match(/@font-face\s*\{[^}]*\}/g) ?? []).join("\n"));
+    assert.throws(() => interFontFaces("body { color: red }"), /no @font-face/);
+  });
+
+  it("has the static server serve a mount's files as its own, 404 what is not there, and keep the SPA fallback", async () => {
+    const dist = mkdtempSync(join(tmpdir(), "parity-dist-"));
+    writeFileSync(join(dist, "index.html"), "<!doctype html>app");
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const port = (probe.address() as { port: number }).port;
+    await new Promise((r) => probe.close(r));
+    const server = await startStatic(dist, port, { [FONTS_MOUNT]: FONTS_DIR });
+    try {
+      const font = await fetch(`http://127.0.0.1:${port}${FONTS_MOUNT}Inter-v20-latin.woff2`);
+      assert.equal(font.status, 200);
+      assert.equal(font.headers.get("content-type"), "font/woff2");
+      assert.equal((await font.arrayBuffer()).byteLength, statSync(join(FONTS_DIR, "Inter-v20-latin.woff2")).size);
+      assert.equal((await fetch(`http://127.0.0.1:${port}${FONTS_MOUNT}missing.woff2`)).status, 404);
+      assert.equal((await fetch(`http://127.0.0.1:${port}${FONTS_MOUNT}`)).status, 404, "the mount's directory itself");
+      const page = await fetch(`http://127.0.0.1:${port}/places/world/x`);
+      assert.equal(page.status, 200);
+      assert.equal(await page.text(), "<!doctype html>app");
+    } finally {
+      await new Promise((r) => server.close(r));
+      rmSync(dist, { recursive: true, force: true });
+    }
   });
 });
 

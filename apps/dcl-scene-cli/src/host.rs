@@ -33,14 +33,8 @@ pub fn spawn_isolate(root: &Path, preview: &str, room: &str) -> Result<Isolate> 
         "the authoritative-server isolate",
         "the host runs the scene under node",
     )?;
-    let dir = crate::scene::work_dir(root)
-        .with_context(|| format!("creating {}", root.join(".dcl-one").display()))?;
-    let harness = dir.join("host-runtime.mjs");
-    std::fs::write(&harness, HOST_TEMPLATE)
-        .with_context(|| format!("writing {}", harness.display()))?;
-    let storage = dir.join("host-storage.mjs");
-    std::fs::write(&storage, HOST_STORAGE_TEMPLATE)
-        .with_context(|| format!("writing {}", storage.display()))?;
+    crate::scene::write_driver(root, "host-storage.mjs", HOST_STORAGE_TEMPLATE)?;
+    let harness = crate::scene::write_driver(root, "host-runtime.mjs", HOST_TEMPLATE)?;
     let mut child = tokio::process::Command::new(&node)
         .arg(&harness)
         .arg(root)
@@ -71,7 +65,7 @@ async fn forward_output(stdout: tokio::process::ChildStdout) {
         } else if let Some(message) = line.strip_prefix("DCL_ONE_MULTIPLAYER:detail:") {
             crate::ux::note_arrow(message);
         } else {
-            println!("{line}");
+            crate::ux::say(&line);
         }
     }
 }

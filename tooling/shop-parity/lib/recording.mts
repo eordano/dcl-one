@@ -2,10 +2,11 @@
 // stored once and served to both sides. Replay never reaches the network; record mode reads the
 // production service on a miss and keeps its answer. Recordings live under state/ and are not committed.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ReferenceId } from "./paths.mts";
 import { imageSize, placeholderPng } from "./png.mts";
-import { canonicalQuery, ORIGINS, type Service } from "./services.mts";
+import { canonicalQuery, cmsQuery, ORIGINS, type Service } from "./services.mts";
 
 export type Entry = {
   key: string;
@@ -25,7 +26,10 @@ export type Manifest = {
   set: string;
   recordedAt: string;
   source: string;
+  /** The shop reference's revision (the first pin; `references` names every pin). */
   reference: string;
+  /** The pinned revision of each reference when the set was recorded. */
+  references?: Partial<Record<ReferenceId, string>>;
   dclOne: string;
   /** Page targets discovered while recording (item URLs and the like). */
   targets: Record<string, string>;
@@ -50,8 +54,42 @@ export function canonicalJson(v: unknown): string {
 
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
 
-/** Decentraland's own hosts: the only ones record mode reads a picture from, to learn its size. */
+/** Decentraland's own hosts: the only ones record mode reads a picture from, to learn its size, and the only ones a signed read goes to. */
 export const learnable = (url: URL) => url.protocol === "https:" && (url.hostname === "decentraland.org" || url.hostname.endsWith(".decentraland.org"));
+/** The hosts a live read may reach, a redirect included. */
+const ORIGIN_HOSTS = new Set(Object.values(ORIGINS).map((o) => new URL(o).host));
+/** The hops one live read follows. A bound on a redirect loop, not a measurement. */
+const REDIRECT_HOPS = 4;
+/** How long a save waits for another recorder's save, and how often it looks. A bound, not a measurement: a save writes three JSON files, and one that waits longer fails with the lock's path instead of hanging. */
+const LOCK_WAIT_MS = 30_000;
+const LOCK_STEP_MS = 50;
+
+/** Runs `work` holding the set's lock, an exclusive directory beside its files, so two recorders' saves never interleave between the merge and the write. */
+function locked<T>(dir: string, waitMs: number, work: () => T): T {
+  const lock = join(dir, ".lock");
+  for (let waited = 0; ; waited += LOCK_STEP_MS) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      if (waited >= waitMs) throw new Error(`${lock} is held: another recorder is saving this set, or one stopped while saving (then remove the directory)`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_STEP_MS);
+    }
+  }
+  try {
+    return work();
+  } finally {
+    rmdirSync(lock);
+  }
+}
+
+/** Write, then rename: a reader sees the file as it was or as it is, never part of it. */
+function writeWhole(file: string, text: string) {
+  const part = `${file}.${process.pid}.part`;
+  writeFileSync(part, text);
+  renameSync(part, file);
+}
 
 export function entryKey(method: string, service: Service, path: string, query: string, request?: unknown): string {
   const base = `${method} ${service} ${path}${query ? `?${query}` : ""}`;
@@ -81,6 +119,12 @@ type Batched = {
   rows: (body: unknown) => unknown[];
   key: (row: unknown) => string | undefined;
   wrap: (rows: unknown[]) => unknown;
+  /**
+   * A row changes between the recorded batches (a profile redeployed while recording): the answer is composed from
+   * the first recorded row per id even when the batch asked was recorded, so the batch a page composes (the
+   * reference coalesces one tick's profile fetches) does not pick the snapshot.
+   */
+  oneRow?: true;
 };
 
 const field = (k: string) => (row: unknown) => {
@@ -118,8 +162,12 @@ const BATCHED: Batched[] = [
       return (a?.ethAddress ?? a?.userId)?.toLowerCase();
     },
     wrap: (rows) => rows,
+    oneRow: true,
   },
 ];
+
+const oneRowBatch = (method: string, service: Service, path: string) =>
+  BATCHED.some((b) => b.oneRow && b.service === service && b.method === method && b.path === path);
 
 /** `signed`: the page sent it signed, with this `x-identity-metadata`, so a fill signs it again the same way. */
 export type Miss = { key: string; service: Service; method: string; path: string; query: string; side: string; request?: unknown; signed?: string };
@@ -128,6 +176,8 @@ export class Recording {
   readonly dir: string;
   readonly entries = new Map<string, Entry>();
   manifest: Manifest | null = null;
+  /** The manifest target keys this recorder loaded: a save keeps the other keys another recorder saved meanwhile. */
+  private loadedTargets = new Set<string>();
   readonly misses: Miss[] = [];
   /** The bytes a missed POST carried, by entry key, so record.mts --fill can send them as they were. */
   readonly missBodies = new Map<string, { body: Buffer; contentType?: string }>();
@@ -141,6 +191,7 @@ export class Recording {
   readonly failures: string[] = [];
   /** The pauses before the second and third attempt when production fails. */
   private readonly retryDelays: number[];
+  private readonly lockWaitMs: number;
   /**
    * Signs a request a page sent signed (an `x-identity-*` chain), as the test wallet, at the real
    * time: the page signed at the fixed clock, which production refuses once a minute has passed.
@@ -153,10 +204,11 @@ export class Recording {
     return !!this.signer;
   }
 
-  constructor(dir: string, opts: { live?: boolean; retryDelays?: number[]; signer?: (method: string, path: string, metadata: string) => Promise<Record<string, string>> } = {}) {
+  constructor(dir: string, opts: { live?: boolean; retryDelays?: number[]; lockWaitMs?: number; signer?: (method: string, path: string, metadata: string) => Promise<Record<string, string>> } = {}) {
     this.dir = dir;
     this.live = !!opts.live;
     this.retryDelays = opts.retryDelays ?? [1000, 3000];
+    this.lockWaitMs = opts.lockWaitMs ?? LOCK_WAIT_MS;
     this.signer = opts.signer;
     const index = join(dir, "index.json");
     if (existsSync(index)) {
@@ -164,6 +216,7 @@ export class Recording {
     }
     const manifest = join(dir, "manifest.json");
     if (existsSync(manifest)) this.manifest = JSON.parse(readFileSync(manifest, "utf8")) as Manifest;
+    this.loadedTargets = new Set(Object.keys(this.manifest?.targets ?? {}));
     const images = join(dir, "images.json");
     if (existsSync(images)) for (const [k, v] of Object.entries(JSON.parse(readFileSync(images, "utf8")))) this.images.set(k, v as { width: number; height: number });
   }
@@ -177,7 +230,7 @@ export class Recording {
     if (!this.live || this.images.has(seed)) return;
     try {
       let next = new URL(url);
-      for (let hop = 0; hop < 4 && learnable(next); hop++) {
+      for (let hop = 0; hop < REDIRECT_HOPS && learnable(next); hop++) {
         const res = await fetch(next, { redirect: "manual", signal: AbortSignal.timeout(20_000) });
         const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
         if (location) {
@@ -207,6 +260,11 @@ export class Recording {
     this.hits.get(key)!.add(side);
   }
 
+  /**
+   * One read of a production service. A redirect is followed by hand, and only to a host `ORIGINS` lists; the
+   * test wallet's signature is made again for each hop and goes to Decentraland's hosts alone. A redirect to
+   * any other host is not followed: it is listed, and the 502 it answers with is kept nowhere.
+   */
   private async fetchLive(method: string, service: Service, path: string, query: string, body?: Buffer, headers?: Record<string, string>): Promise<Answer> {
     const origin = ORIGINS[service];
     if (!origin) return { status: 404, contentType: "application/json", body: Buffer.from(`{"error":"no upstream for ${service}"}`) };
@@ -219,9 +277,29 @@ export class Recording {
       if (attempt > 0) await new Promise((r) => setTimeout(r, Math.max(wait, this.retryDelays[attempt - 1] ?? 0)));
       wait = 0;
       try {
-        // The page's metadata is part of what it signed (a service may check who signs, e.g. the marketplace's `signer`).
-        if (this.signer && headers?.["x-identity-auth-chain-0"]) Object.assign(h, await this.signer(method, new URL(url).pathname, headers["x-identity-metadata"] ?? "{}"));
-        const res = await fetch(url, { method, headers: h, body: method === "GET" || method === "HEAD" || !body ? undefined : new Uint8Array(body), signal: AbortSignal.timeout(30_000) });
+        let next = new URL(url);
+        let verb = method;
+        let res: Response;
+        for (let hop = 0; ; hop++) {
+          const sent = { ...h };
+          const reads = verb === "GET" || verb === "HEAD";
+          if (verb !== method) delete sent["content-type"];
+          // The page's metadata is part of what it signed (a service may check who signs, e.g. the marketplace's `signer`).
+          if (this.signer && headers?.["x-identity-auth-chain-0"] && learnable(next)) Object.assign(sent, await this.signer(verb, next.pathname, headers["x-identity-metadata"] ?? "{}"));
+          res = await fetch(hop === 0 ? url : next.href, { method: verb, headers: sent, body: reads || !body ? undefined : new Uint8Array(body), redirect: "manual", signal: AbortSignal.timeout(30_000) });
+          const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+          if (!location) break;
+          await res.body?.cancel();
+          const target = new URL(location, next);
+          const refused = target.protocol !== "https:" ? `redirects to ${target.origin}, which is not https` : !ORIGIN_HOSTS.has(target.host) ? `redirects to ${target.host}, a host lib/services.mts ORIGINS does not list` : hop + 1 === REDIRECT_HOPS ? `redirects more than ${REDIRECT_HOPS} times` : null;
+          if (refused) {
+            this.failures.push(`${method} ${service} ${path}: ${refused}; not followed`);
+            return { status: 502, contentType: "application/json", body: Buffer.from(JSON.stringify({ error: refused })) };
+          }
+          // As a browser follows it: a 303, or a POST answered 301 or 302, is read again with GET.
+          if (res.status === 303 ? verb !== "HEAD" : (res.status === 301 || res.status === 302) && verb === "POST") verb = "GET";
+          next = target;
+        }
         const answer = { status: res.status, contentType: res.headers.get("content-type") ?? "application/octet-stream", body: Buffer.from(await res.arrayBuffer()) };
         // A server error is the service's moment, not its answer: ask again, and the caller keeps none.
         if (answer.status < 500 || attempt === 2) return answer;
@@ -236,7 +314,7 @@ export class Recording {
   }
 
   private store(e: Omit<Entry, "body">, body: Buffer): Entry {
-    const ext = /json/.test(e.contentType) ? "json" : /css/.test(e.contentType) ? "css" : /font|woff/.test(e.contentType) ? "woff2" : /html/.test(e.contentType) ? "html" : /javascript/.test(e.contentType) ? "js" : "bin";
+    const ext = /json/.test(e.contentType) ? "json" : /svg/.test(e.contentType) ? "svg" : /css/.test(e.contentType) ? "css" : /font|woff/.test(e.contentType) ? "woff2" : /html/.test(e.contentType) ? "html" : /javascript/.test(e.contentType) ? "js" : "bin";
     const name = `${sha(body).slice(0, 24)}.${ext}`;
     mkdirSync(join(this.dir, "bodies"), { recursive: true });
     writeFileSync(join(this.dir, "bodies", name), body);
@@ -245,16 +323,39 @@ export class Recording {
     return entry;
   }
 
+  /**
+   * A set is shared: another recorder may have saved since this one loaded it. Keep the answers and image sizes it
+   * saved that this one lacks, so a save does not drop them.
+   */
+  private mergeSaved() {
+    const index = join(this.dir, "index.json");
+    if (existsSync(index)) for (const e of JSON.parse(readFileSync(index, "utf8")) as Entry[]) if (!this.entries.has(e.key)) this.entries.set(e.key, e);
+    const images = join(this.dir, "images.json");
+    if (existsSync(images)) for (const [k, v] of Object.entries(JSON.parse(readFileSync(images, "utf8")))) if (!this.images.has(k)) this.images.set(k, v as { width: number; height: number });
+  }
+
+  /** The targets another recorder saved since this one loaded the set (keys this one did not start with). */
+  private othersTargets(): Record<string, string> {
+    const file = join(this.dir, "manifest.json");
+    if (!existsSync(file)) return {};
+    const saved = (JSON.parse(readFileSync(file, "utf8")) as Manifest).targets ?? {};
+    return Object.fromEntries(Object.entries(saved).filter(([k]) => !this.loadedTargets.has(k)));
+  }
+
   save(manifest?: Partial<Manifest>) {
     mkdirSync(this.dir, { recursive: true });
-    const list = [...this.entries.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
-    writeFileSync(join(this.dir, "index.json"), `${JSON.stringify(list, null, 1)}\n`);
-    const images = Object.fromEntries([...this.images.entries()].sort(([a], [b]) => (a < b ? -1 : 1)));
-    writeFileSync(join(this.dir, "images.json"), `${JSON.stringify(images, null, 1)}\n`);
-    if (manifest) {
-      this.manifest = { ...(this.manifest ?? ({} as Manifest)), ...manifest, entries: list.length } as Manifest;
-      writeFileSync(join(this.dir, "manifest.json"), `${JSON.stringify(this.manifest, null, 2)}\n`);
-    }
+    locked(this.dir, this.lockWaitMs, () => {
+      this.mergeSaved();
+      const list = [...this.entries.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
+      writeWhole(join(this.dir, "index.json"), `${JSON.stringify(list, null, 1)}\n`);
+      const images = Object.fromEntries([...this.images.entries()].sort(([a], [b]) => (a < b ? -1 : 1)));
+      writeWhole(join(this.dir, "images.json"), `${JSON.stringify(images, null, 1)}\n`);
+      if (manifest) {
+        const targets = manifest.targets && { ...this.othersTargets(), ...manifest.targets };
+        this.manifest = { ...(this.manifest ?? ({} as Manifest)), ...manifest, ...(targets && { targets }), entries: list.length } as Manifest;
+        writeWhole(join(this.dir, "manifest.json"), `${JSON.stringify(this.manifest, null, 2)}\n`);
+      }
+    });
   }
 
   private async rpc(path: string, body: Buffer | undefined, side: string): Promise<Answer> {
@@ -327,7 +428,7 @@ export class Recording {
   async answer(req: { method: string; service: Service; path: string; search: string; body?: Buffer; headers?: Record<string, string>; side: string }): Promise<Answer> {
     const method = req.method.toUpperCase();
     if (req.service === "rpc" && method === "POST") return this.rpc(req.path, req.body, req.side);
-    const query = canonicalQuery(req.search);
+    const query = req.service === "cms" ? cmsQuery(req.search) : canonicalQuery(req.search);
     const request = method === "GET" || method === "HEAD" ? undefined : parseBody(req.body);
     const key = entryKey(method, req.service, req.path, query, request);
     let entry = this.entries.get(key);
@@ -345,7 +446,8 @@ export class Recording {
     }
     if (!entry && this.live && req.service !== "offers" && req.service !== "node") {
       const res = await this.fetchLive(method, req.service, req.path, query, req.body, req.headers);
-      if (/^image\//.test(res.contentType)) {
+      // A twemoji flag is a fixed interface asset (an SVG of a few hundred bytes), not a content picture: kept as it is.
+      if (/^image\//.test(res.contentType) && req.service !== "twemoji") {
         // A picture answered by an API route: keep its size only, never its bytes.
         const size = imageSize(res.body);
         if (size) this.images.set(req.path, size);
@@ -358,7 +460,7 @@ export class Recording {
       }
       entry = this.store({ key, method, service: req.service, path: req.path, query, ...(request === undefined ? {} : { request }), status: res.status, contentType: res.contentType }, res.body);
     }
-    if (!entry) {
+    if (!entry || oneRowBatch(method, req.service, req.path)) {
       const batched = this.fromBatches(method, req.service, req.path, query, request);
       if (batched) {
         this.note(`${method} ${req.service} ${req.path} (by id)`, req.side);

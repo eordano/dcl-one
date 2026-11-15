@@ -1,0 +1,617 @@
+/* Figma: Places / PlaceCard, layout=below, product=web. The pixels follow decentraland.org's grid card
+   (sites@17b3535a src/components/places/PlaceCard/PlaceCard.styled.ts and the decentraland-ui2 badges).
+   Sizes are cqw of the reference's 435.25 px card (N px = N / 435.25 * 100 cqw), so the card scales
+   with its grid cell; a cqw length has no token. */
+@layer dcl.components {
+  /* MUI's CssBaseline sizes every box by its border. */
+  :is(
+    .container,
+    .card,
+    .link,
+    .media,
+    .cover,
+    .body,
+    .title,
+    .swap,
+    .meta,
+    .creator,
+    .avatar,
+    .by,
+    .name,
+    .location,
+    .jump,
+    .topRow,
+    .group,
+    .count,
+    .live,
+    .dot,
+    .icon,
+    .featured,
+    .liveCard,
+    .liveMedia,
+    .liveBar,
+    .liveTitle,
+    .liveSwap,
+    .liveBy,
+    .liveAvatar,
+    .liveByText,
+    .liveJump
+  ) {
+    box-sizing: border-box;
+  }
+
+  .container {
+    container-type: inline-size;
+    width: 100%;
+  }
+
+  .card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border-radius: 5.514cqw;
+    overflow: hidden;
+    cursor: pointer;
+    background-color: var(--dcl-transparencies-black-40);
+    transition: box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .card:hover {
+    box-shadow: 0px 2px 12px 12px rgba(255, 255, 255, 0.3);
+  }
+
+  .card:has(.link:focus-visible) {
+    outline: 2px solid var(--dcl-primary-primary);
+    outline-offset: 2px;
+  }
+
+  /* The reference theme's phone query, breakpoints.down('sm') with sm at 991px (decentraland-ui2 theme):
+     below 991px. The foundations breakpoints are 768 and 1024, so this one has no token. */
+  @media (max-width: 990.98px) {
+    .card {
+      border-radius: var(--dcl-radius-xl);
+    }
+  }
+
+  .media {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 435.25 / 222;
+    padding: 2.757cqw 2.757cqw 0;
+    border-radius: 5.514cqw 5.514cqw 0 0;
+    overflow: hidden;
+    background-color: #2a2435;
+  }
+
+  .cover {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    background-image: var(--cover, none);
+  }
+
+  .skeleton {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 435.25 / 222;
+    border-radius: 0;
+  }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: 2.757cqw;
+    padding: 3.676cqw 5.514cqw 5.514cqw;
+    width: 100%;
+  }
+
+  .title {
+    margin: 0;
+    letter-spacing: 0.00938em;
+    font-size: 4.595cqw;
+    font-weight: 500;
+    line-height: 1.6;
+    color: var(--dcl-neutrals-snow);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .link {
+    color: inherit;
+    text-decoration: none;
+    outline: none;
+  }
+
+  .link::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+  }
+
+  .swap {
+    position: relative;
+    min-height: 10.953cqw;
+  }
+
+  .meta {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2.298cqw;
+    transition: opacity 375ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* The details give way only to a JUMP IN that is there. */
+  .card:hover .meta:has(+ .jump),
+  .card:focus-within .meta:has(+ .jump) {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .creator {
+    display: flex;
+    align-items: center;
+    gap: 2.298cqw;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .avatar {
+    width: 7.352cqw;
+    height: 7.352cqw;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 0.525cqw solid rgba(255, 255, 255, 0.5);
+    background-color: var(--avatar-bg, transparent);
+  }
+
+  .by {
+    min-width: 0;
+    margin: 0;
+    font-size: 3.217cqw;
+    font-weight: 600;
+    line-height: 1.57;
+    letter-spacing: 0.01071em;
+    color: var(--dcl-neutrals-snow);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .name {
+    color: var(--dcl-primary-primary);
+  }
+
+  /* The reference's creator name with a profile is a button: font inherited, letter spacing the UA's. */
+  .nameLink {
+    display: inline-block;
+    position: relative;
+    z-index: 3;
+    color: var(--dcl-primary-primary);
+    letter-spacing: normal;
+    text-decoration: none;
+  }
+
+  .nameLink:hover,
+  .nameLink:active {
+    text-decoration: underline;
+  }
+
+  .nameLink:focus-visible {
+    outline: 2px solid var(--dcl-neutrals-snow);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  .location {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.89cqw;
+    padding: 0.89cqw 1.781cqw 0.89cqw 0.89cqw;
+    border-radius: 1.336cqw;
+    background-color: rgba(255, 255, 255, 0.05);
+    font-size: 3.217cqw;
+    font-weight: 400;
+    line-height: 1.43;
+    color: var(--dcl-neutrals-pearl);
+  }
+
+  .jump {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.952cqw;
+    width: 100%;
+    height: 10.953cqw;
+    border-radius: 2.757cqw;
+    background-color: var(--dcl-primary-primary);
+    color: var(--dcl-neutrals-snow);
+    font-size: 3.809cqw;
+    /* reference Arial 700, line-height normal: no token (the button text styles are Inter) */
+    font-family: Arial, sans-serif;
+    font-weight: 700;
+    line-height: normal;
+    letter-spacing: normal;
+    text-transform: uppercase;
+    text-decoration: none;
+    opacity: 0;
+    transform: translateY(calc(100% + 5.514cqw));
+    pointer-events: none;
+    transition:
+      opacity 375ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 375ms cubic-bezier(0.4, 0, 0.2, 1),
+      background-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .card:hover .jump,
+  .card:focus-within .jump {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .jump:hover,
+  .jump:active {
+    background-color: var(--dcl-primary-primary-dark-1);
+  }
+
+  .jump:focus-visible {
+    outline: 2px solid var(--dcl-neutrals-snow);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .jump {
+      transform: none;
+      transition: opacity 150ms;
+    }
+  }
+
+  /* The Live Now rail's card: sites@17b3535a src/components/places/LiveEventCard/LiveEventCard.styled.ts.
+     Sizes are cqw of the reference's 405.25 px card, each capped at its design px. */
+  .liveCard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border-radius: min(3.948cqw, var(--dcl-radius-lg));
+    overflow: hidden;
+    cursor: pointer;
+    box-shadow: 0px 2px 2px rgba(0, 0, 0, 0.04);
+    transition: box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .liveCard:hover {
+    box-shadow: 0px 2px 12px 12px rgba(255, 255, 255, 0.3);
+  }
+
+  .liveCard:has(.link:focus-visible) {
+    outline: 2px solid var(--dcl-neutrals-snow);
+    outline-offset: 2px;
+  }
+
+  .liveMedia {
+    position: relative;
+    flex: none;
+    padding: min(3.208cqw, 13px);
+    aspect-ratio: 405.25 / 253;
+    max-height: 280px;
+    background-color: #2a2435;
+    background-size: cover;
+    background-position: center;
+    background-image: var(--cover, none);
+  }
+
+  .liveBar {
+    display: flex;
+    flex-direction: column;
+    gap: min(1.974cqw, var(--dcl-space-8));
+    padding: min(2.961cqw, var(--dcl-space-12)) min(2.961cqw, var(--dcl-space-12))
+      min(3.948cqw, var(--dcl-space-16)) min(3.948cqw, var(--dcl-space-16));
+    background-color: var(--dcl-transparencies-black-60);
+  }
+
+  .liveTitle {
+    margin: 0;
+    letter-spacing: 0.00938em;
+    font-size: min(4.935cqw, var(--dcl-font-size-heading-4));
+    font-weight: 500;
+    line-height: 1.6;
+    color: var(--dcl-neutrals-snow);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .liveSwap {
+    position: relative;
+    height: min(11.764cqw, 47.674px);
+  }
+
+  .liveBy {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    gap: min(2.468cqw, 10px);
+    min-width: 0;
+    transition: opacity 375ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .liveCard:hover .liveBy:has(+ .liveJump),
+  .liveCard:focus-within .liveBy:has(+ .liveJump) {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .liveAvatar {
+    width: min(5.675cqw, 23px);
+    height: min(5.675cqw, 23px);
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: min(0.405cqw, 1.643px) solid rgba(255, 255, 255, 0.5);
+    background-color: var(--avatar-bg, transparent);
+  }
+
+  .liveByText {
+    margin: 0;
+    letter-spacing: 0.00938em;
+    font-size: min(3.455cqw, var(--dcl-font-size-body-sm));
+    font-weight: 600;
+    line-height: 1.57;
+    color: var(--dcl-neutrals-snow);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .liveJump {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: min(2.097cqw, 8.496px);
+    width: 100%;
+    padding: 0 min(5.241cqw, 21.241px);
+    border-radius: min(2.961cqw, var(--dcl-radius-md));
+    background-color: var(--dcl-primary-primary);
+    color: var(--dcl-neutrals-snow);
+    font-size: min(4.091cqw, 16.58px);
+    /* reference Arial 700, line-height normal: no token (the button text styles are Inter) */
+    font-family: Arial, sans-serif;
+    font-weight: 700;
+    line-height: normal;
+    letter-spacing: normal;
+    text-transform: uppercase;
+    text-decoration: none;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translateY(calc(100% + min(3.948cqw, 16px)));
+    pointer-events: none;
+    transition:
+      opacity 375ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 375ms cubic-bezier(0.4, 0, 0.2, 1),
+      background-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .liveCard:hover .liveJump,
+  .liveCard:focus-within .liveJump {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .liveJump:hover,
+  .liveJump:active {
+    background-color: var(--dcl-primary-primary-dark-1);
+  }
+
+  .liveJump:focus-visible {
+    outline: 2px solid var(--dcl-neutrals-snow);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .liveJump {
+      transform: none;
+      transition: opacity 150ms;
+    }
+  }
+
+  /* The phone card has no hover: it keeps the By row and a JUMP IN row under it. The query is the
+     reference theme's, as for the grid card. */
+  @media (max-width: 990.98px) {
+    .liveCard {
+      border-radius: var(--dcl-radius-lg);
+    }
+
+    .liveMedia {
+      aspect-ratio: 16 / 10;
+      max-height: none;
+    }
+
+    .liveSwap {
+      height: auto;
+      display: flex;
+      flex-direction: column;
+      gap: min(1.974cqw, var(--dcl-space-8));
+    }
+
+    .liveBy,
+    .liveCard:hover .liveBy:has(+ .liveJump),
+    .liveCard:focus-within .liveBy:has(+ .liveJump) {
+      position: static;
+      opacity: 1;
+    }
+
+    .liveJump {
+      position: relative;
+      height: min(11.764cqw, 47.674px);
+      opacity: 1;
+      transform: none;
+      pointer-events: auto;
+    }
+  }
+
+  .topRow {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: min(1.838cqw, var(--dcl-space-8));
+    width: 100%;
+    pointer-events: none;
+  }
+
+  .group {
+    display: flex;
+    align-items: center;
+    gap: var(--dcl-space-8);
+  }
+
+  .count,
+  .live {
+    display: flex;
+    align-items: center;
+    height: 26px;
+    padding: 0 var(--dcl-space-12);
+    border-radius: var(--dcl-radius-sm);
+    font-size: var(--dcl-font-size-body-xs);
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .count {
+    gap: 6px;
+    background-color: var(--dcl-neutrals-shadow);
+    color: rgb(240, 240, 240);
+  }
+
+  .live {
+    gap: var(--dcl-space-4);
+    background-color: var(--dcl-system-red);
+    color: var(--dcl-neutrals-white);
+    text-transform: uppercase;
+    pointer-events: auto;
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--dcl-system-green);
+  }
+
+  .icon {
+    flex-shrink: 0;
+    width: 1em;
+    height: 1em;
+    font-size: var(--dcl-font-size-body-sm);
+    fill: currentColor;
+    user-select: none;
+  }
+
+  .live .icon {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .live .icon {
+      animation: none;
+    }
+  }
+
+  .featured {
+    display: inline-flex;
+    align-items: center;
+    gap: min(0.919cqw, var(--dcl-space-4));
+    height: min(5.974cqw, 26px);
+    padding: min(1.149cqw, 5px) min(1.379cqw, 6px);
+    border-radius: min(1.838cqw, var(--dcl-radius-sm));
+    /* reference stop #ffbc5b and angle 149.456deg, no token (the light-rainbow gradient is 105deg from #ffbc5b) */
+    background: linear-gradient(
+      149.456deg,
+      #ffbc5b 0%,
+      var(--dcl-brand-ruby) 50.521%,
+      var(--dcl-brand-lavender) 100%
+    );
+    color: var(--dcl-neutrals-snow);
+    font-size: min(3.217cqw, var(--dcl-font-size-body-sm));
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .glyph {
+    display: block;
+    width: auto;
+  }
+
+  .featured .glyph {
+    fill: var(--dcl-neutrals-snow);
+    stroke: var(--dcl-neutrals-snow);
+  }
+
+  .medal {
+    height: min(3.217cqw, 14px);
+  }
+
+  .liveMedal {
+    height: min(3.455cqw, 14px);
+  }
+
+  .pin {
+    height: min(3.446cqw, 15px);
+    fill: var(--dcl-neutrals-pearl);
+  }
+
+  .jumpGlyph {
+    height: min(5.715cqw, 24.874px);
+  }
+
+  .liveJumpGlyph {
+    height: min(6.138cqw, 24.874px);
+  }
+
+  .jumpGlyphFill {
+    fill: var(--dcl-primary-primary);
+  }
+
+  .jumpGlyphEdge {
+    stroke: var(--dcl-neutrals-snow);
+  }
+
+  .jumpGlyphArrow {
+    fill: var(--dcl-neutrals-white);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.3);
+  }
+}

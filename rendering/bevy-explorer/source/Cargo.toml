@@ -16,6 +16,13 @@ name = "headless"
 path = "src/bin/headless.rs"
 required-features = ["headless"]
 
+# The node's profile-image renderer (`make bevy-avatar-render`, apps/bevy-explorer/build-avatar-render.py).
+# Gated behind the `avatar_render` feature, so a build that names no bin skips it.
+[[bin]]
+name = "avatar_render"
+path = "src/bin/avatar_render.rs"
+required-features = ["avatar_render"]
+
 # to build wasm lib:
 # - copy ./assets to deploy/web/assets
 # - copy ./crates/dcl_js/src/modules to deploy/web/modules
@@ -43,6 +50,9 @@ bevy_mesh_picking_backend = ["bevy/bevy_mesh_picking_backend"]
 # handler (bevy's default panics). Pulled in only by this feature, so prod builds
 # (which never enable `headless`) are unaffected.
 headless = ["bevy/configurable_error_handler", "remote"]
+# The avatar renderer's bin and what it needs: media decoding, the scene inspector and the social
+# service client, no HUD.
+avatar_render = ["ffmpeg", "inspect", "social"]
 # POC: render the react-web HUD via CEF offscreen rendering into an in-engine texture (desktop).
 # The CEF framework loads bundle-relative (Contents/Frameworks) with a dev fallback at
 # ~/.local/share/cef; the render-process helper builds as the sibling binary `decentra-bevy-cef`

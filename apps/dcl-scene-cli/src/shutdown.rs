@@ -91,6 +91,13 @@ async fn wait() {
     }
 }
 
+/// A signal arrived in this process. True from the moment a cooperative
+/// listener resolves: the listener claims the signal before it returns, and
+/// the watchdog counts the signal before it takes the claim.
+pub fn signalled() -> bool {
+    CLAIMED.load(Ordering::SeqCst) || SIGNALS.load(Ordering::SeqCst) > 0
+}
+
 /// Kill what would otherwise outlive us, then exit.
 pub fn exit_now(reason: &str) -> ! {
     crate::ux::note_stderr(format!("stopping now: {reason}"));

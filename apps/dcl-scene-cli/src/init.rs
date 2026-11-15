@@ -76,6 +76,34 @@ const LIB_README: &str = include_str!("templates/init/library/README.md");
 const VENDORED_NODE_MODULES: &[u8] = include_bytes!("vendor/node_modules.zip");
 
 const INSTALLED_NOTE: &str = "Installed node_modules from the vendored SDK — no npm needed";
+const KEPT_NOTE: &str = "node_modules was installed by another tool and is kept — nothing to do (remove node_modules, then run this command again, to get the vendored SDK)";
+
+/// The `@dcl/sdk` the vendored node_modules ships: the scene scaffold's pin,
+/// which `blob_tracks_the_scaffold_pin_and_carries_the_ecs_fixes` holds equal
+/// to the archive's manifest.
+fn vendored_sdk_version() -> String {
+    serde_json::from_str::<serde_json::Value>(SCENE_PACKAGE_JSON)
+        .ok()
+        .and_then(|scaffold| {
+            scaffold["devDependencies"]["@dcl/sdk"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .expect("the scene scaffold pins @dcl/sdk")
+}
+
+/// The version of `package` installed under `root`, from its manifest.
+fn installed_version(root: &Path, package: &str) -> Option<String> {
+    manifest_version(
+        &std::fs::read(root.join("node_modules").join(package).join("package.json")).ok()?,
+    )
+}
+
+/// The `version` of a package.json.
+fn manifest_version(raw: &[u8]) -> Option<String> {
+    let manifest: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    manifest["version"].as_str().map(str::to_owned)
+}
 
 pub fn init(opts: &InitOptions) -> Result<()> {
     init_with(opts, false)
@@ -85,19 +113,7 @@ pub fn init(opts: &InitOptions) -> Result<()> {
 /// (`--skip-install`).
 pub fn init_with(opts: &InitOptions, skip_install: bool) -> Result<()> {
     if opts.node_modules_only {
-        let root = dunce::canonicalize(&opts.dir).map_err(|e| {
-            UserError::new(
-                format!("cannot resolve the target directory {}", opts.dir.display()),
-                TrySteps::one("run from inside the scene, or pass --dir <scene>"),
-            )
-            .caused_by(e)
-        })?;
-        let mut steps = ux::Steps::new(1);
-        steps.done(match install_vendored_node_modules(&root)? {
-            true => INSTALLED_NOTE,
-            false => "node_modules already exists — nothing to do",
-        });
-        return Ok(());
+        return install_node_modules(&opts.dir).map(drop);
     }
     let root = prepare_dir(&opts.dir, opts.yes)?;
     let kind = resolve_kind(opts.project)?;
@@ -140,17 +156,84 @@ pub fn init_with(opts: &InitOptions, skip_install: bool) -> Result<()> {
     Ok(())
 }
 
+/// `init --node-modules-only` without `--missing-only`: what
+/// [`refresh_vendored_node_modules`] did. `installed` has the packages
+/// written, and none when the command wrote nothing. `kept` is empty: this
+/// mode does not list the packages of a folder that it keeps.
+pub fn install_node_modules(dir: &Path) -> Result<NodeModulesInstall> {
+    let root = existing_dir(dir)?;
+    let stopped_extraction = extraction_stopped(&root);
+    let pin = vendored_sdk_version();
+    let (note, installed) = match refresh_vendored_node_modules(&root)? {
+        Refresh::Extracted(packages) => (INSTALLED_NOTE.to_string(), packages),
+        Refresh::Replaced {
+            installed,
+            packages,
+        } => (
+            format!(
+                "Reinstalled {} in node_modules from the vendored SDK ({installed} replaced by @dcl/sdk {pin}) — no npm needed",
+                packages.join(", ")
+            ),
+            packages,
+        ),
+        Refresh::Current => (
+            format!("node_modules already holds the vendored @dcl/sdk {pin} — nothing to do"),
+            Vec::new(),
+        ),
+        Refresh::Kept => (KEPT_NOTE.to_string(), Vec::new()),
+    };
+    ux::Steps::new(1).done(note);
+    Ok(NodeModulesInstall {
+        dir: root,
+        dry_run: false,
+        installed,
+        kept: Vec::new(),
+        stopped_extraction,
+    })
+}
+
+/// The folder `init --node-modules-only` installs into.
+fn existing_dir(dir: &Path) -> Result<PathBuf> {
+    dunce::canonicalize(dir).map_err(|e| {
+        UserError::new(
+            format!("cannot resolve the target directory {}", dir.display()),
+            TrySteps::one("run from inside the scene, or pass --dir <scene>"),
+        )
+        .caused_by(e)
+        .into()
+    })
+}
+
 fn node_modules_step(root: &Path, skip_install: bool) -> Result<&'static str> {
     Ok(match skip_install {
         true => "Skipped node_modules (--skip-install)",
         false => match install_vendored_node_modules(root)? {
-            true => INSTALLED_NOTE,
-            false => "Kept the existing node_modules",
+            Some(_) => INSTALLED_NOTE,
+            None => "Kept the existing node_modules",
         },
     })
 }
 
-pub async fn init_remote(opts: &RemoteInitOptions) -> Result<()> {
+/// A package.json dependency that node_modules does not have.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub struct MissingDependency {
+    pub name: String,
+    /// What package.json asks for: a version range, a tag, a URL or a path.
+    /// `None` when the value is not a string.
+    pub range: Option<String>,
+}
+
+/// What `init --template` or `--github-repo` made.
+pub struct RemoteInit {
+    /// The project folder.
+    pub root: PathBuf,
+    /// package.json dependencies the vendored SDK did not install, sorted by
+    /// name; `None` under `--skip-install`, which leaves no node_modules to
+    /// compare with.
+    pub missing: Option<Vec<MissingDependency>>,
+}
+
+pub async fn init_remote(opts: &RemoteInitOptions) -> Result<RemoteInit> {
     let root = prepare_dir(&opts.dir, opts.yes)?;
     let mut steps = ux::Steps::new(3);
     let (bytes, inner, label) = match &opts.source {
@@ -171,21 +254,20 @@ pub async fn init_remote(opts: &RemoteInitOptions) -> Result<()> {
         display_dir(&opts.dir)
     ));
     steps.done(node_modules_step(&root, opts.skip_install)?);
-    if !opts.skip_install {
-        let missing = missing_dependencies(&root);
-        if !missing.is_empty() {
-            ux::note(format!(
-                "the project depends on packages the vendored SDK does not carry: {} \u{2014} npm install adds them",
-                missing.join(", ")
-            ));
-        }
+    let missing = (!opts.skip_install).then(|| missing_dependencies(&root));
+    if let Some(missing) = missing.as_ref().filter(|missing| !missing.is_empty()) {
+        let names: Vec<&str> = missing.iter().map(|m| m.name.as_str()).collect();
+        ux::note(format!(
+            "the project depends on packages the vendored SDK does not carry: {} \u{2014} npm install adds them",
+            names.join(", ")
+        ));
     }
     ux::note("Next steps:");
     if opts.dir != Path::new(".") {
         ux::note(format!("  cd {}", display_dir(&opts.dir)));
     }
     ux::note("  dcl-scene-cli start");
-    Ok(())
+    Ok(RemoteInit { root, missing })
 }
 
 /// A local zip, or one downloaded from an http(s) URL.
@@ -352,8 +434,8 @@ impl GitHubRef {
     }
 }
 
-/// Unpacks the zip's one top-level folder (or `inner` within it) into `root`;
-/// the number of files written.
+/// Unpacks the zip's one top-level folder (or `inner` within it) into `root`,
+/// without its `node_modules`; the number of files written.
 fn unpack_template(bytes: &[u8], root: &Path, inner: Option<&str>) -> Result<usize> {
     unpack_template_within(bytes, root, inner, UNPACKED_LIMIT)
 }
@@ -415,6 +497,12 @@ fn unpack_template_within(
                 "the zip entry {name} would escape the project folder"
             ));
         }
+        // Later commands run the packages in node_modules under node: only
+        // the vendored archive supplies them, never a template.
+        let top = rel_path.iter().next();
+        if top.is_some_and(|top| top.eq_ignore_ascii_case("node_modules")) {
+            continue;
+        }
         let dest = root.join(rel_path);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| write_error(parent, e))?;
@@ -444,29 +532,38 @@ fn unpack_template_within(
     Ok(written)
 }
 
-/// package.json dependencies with no folder under node_modules.
-fn missing_dependencies(root: &Path) -> Vec<String> {
+/// package.json dependencies with no folder under node_modules, each once
+/// and sorted by name. A package that `dependencies` and `devDependencies`
+/// both name has the range of `dependencies`.
+fn missing_dependencies(root: &Path) -> Vec<MissingDependency> {
     let Ok(bytes) = std::fs::read(root.join("package.json")) else {
         return Vec::new();
     };
     let Ok(package) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return Vec::new();
     };
-    let mut missing: Vec<String> = ["dependencies", "devDependencies"]
+    let mut missing = std::collections::BTreeMap::new();
+    for deps in ["dependencies", "devDependencies"]
         .iter()
         .filter_map(|section| package[section].as_object())
-        .flat_map(|deps| deps.keys().cloned())
-        .filter(|name| {
-            !root
+    {
+        for (name, range) in deps {
+            let installed = root
                 .join("node_modules")
                 .join(name)
                 .join("package.json")
-                .is_file()
-        })
-        .collect();
-    missing.sort();
-    missing.dedup();
+                .is_file();
+            if !installed {
+                missing
+                    .entry(name.clone())
+                    .or_insert_with(|| range.as_str().map(str::to_owned));
+            }
+        }
+    }
     missing
+        .into_iter()
+        .map(|(name, range)| MissingDependency { name, range })
+        .collect()
 }
 
 static RESTORE_NODE_MODULES: std::sync::atomic::AtomicBool =
@@ -479,17 +576,17 @@ pub fn set_restore_node_modules(on: bool) {
 
 /// A scene with no node_modules at all (a fresh clone, a copied folder) gets
 /// the vendored SDK before the built-in build looks for it, and a line saying
-/// so. An existing node_modules is never touched, whatever it lacks: that is
-/// an install someone made, and the missing-package error names the fix.
+/// so; so does one whose extraction stopped half way. Any other node_modules
+/// is never touched, whatever it lacks: that is an install someone made, and
+/// the missing-package error names the fix.
 pub fn restore_missing_node_modules(root: &Path) -> Result<()> {
     if !RESTORE_NODE_MODULES.load(std::sync::atomic::Ordering::Relaxed)
-        || root.join("node_modules").exists()
+        || install_vendored_node_modules(root)?.is_none()
     {
         return Ok(());
     }
-    install_vendored_node_modules(root)?;
     ux::note(
-        "node_modules was missing \u{2014} restored it from the vendored SDK (--skip-install keeps a build from doing this)",
+        "node_modules was missing or incomplete \u{2014} restored it from the vendored SDK (--skip-install keeps a build from doing this)",
     );
     let version = |path: PathBuf, keys: &[&str]| -> Option<String> {
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
@@ -514,16 +611,405 @@ pub fn restore_missing_node_modules(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn install_vendored_node_modules(root: &Path) -> Result<bool> {
-    if root.join("node_modules").exists() {
-        return Ok(false);
+type VendoredArchive = zip::ZipArchive<std::io::Cursor<&'static [u8]>>;
+
+fn open_vendored_archive() -> Result<VendoredArchive> {
+    zip::ZipArchive::new(std::io::Cursor::new(VENDORED_NODE_MODULES))
+        .context("opening the vendored node_modules")
+}
+
+/// Extracts the archive where there is no node_modules, or one whose
+/// extraction stopped half way (an empty record), and gives the packages
+/// written.
+fn install_vendored_node_modules(root: &Path) -> Result<Option<Vec<String>>> {
+    if root.join("node_modules").exists() && !extraction_stopped(root) {
+        return Ok(None);
     }
-    let cursor = std::io::Cursor::new(VENDORED_NODE_MODULES);
-    let mut archive = zip::ZipArchive::new(cursor).context("opening the vendored node_modules")?;
+    extract_vendored_archive(root, open_vendored_archive()?).map(Some)
+}
+
+/// An empty record: an extraction started in this node_modules and did not
+/// reach its end, so a package of the archive that is there can lack files.
+fn extraction_stopped(root: &Path) -> bool {
+    std::fs::read(root.join(ARCHIVE_MARKER)).is_ok_and(|record| record.is_empty())
+}
+
+/// Where an extraction records the archive it wrote: the SHA-256 of
+/// `node_modules.zip`, which another archive changes and the pin does not.
+/// The record is empty while the extraction runs.
+const ARCHIVE_MARKER: &str = "node_modules/.dcl-one-archive";
+
+fn vendored_archive_sha256() -> String {
+    use sha2::Digest as _;
+    crate::sdk_cache::hex(sha2::Sha256::digest(VENDORED_NODE_MODULES))
+}
+
+/// Writes the archive's packages in place of any that are there and keeps
+/// everything else in node_modules. Gives the packages written, sorted.
+///
+/// A package that is a link is replaced, the link itself. A scope folder
+/// that is a link is never written through, and neither is a `node_modules`
+/// or a record that is a link: each ends the extraction with an error before
+/// any write.
+fn extract_vendored_archive(root: &Path, mut archive: VendoredArchive) -> Result<Vec<String>> {
+    let modules = root.join("node_modules");
+    let marker = root.join(ARCHIVE_MARKER);
+    let packages = archive_packages(&archive);
+    for entry in ["node_modules", ARCHIVE_MARKER] {
+        refuse_link(&root.join(entry), entry, ARCHIVE_MARKER)?;
+    }
+    for package in &packages {
+        refuse_scope_link(&modules, package)?;
+    }
+    std::fs::create_dir_all(&modules)
+        .and_then(|()| std::fs::write(&marker, ""))
+        .context("starting the vendored archive's record")?;
+    for package in &packages {
+        remove_entry(&modules.join(package))
+            .with_context(|| format!("removing node_modules/{package}"))?;
+    }
     archive
         .extract(root)
         .context("extracting the vendored node_modules")?;
-    Ok(true)
+    std::fs::write(marker, vendored_archive_sha256())
+        .context("recording the vendored archive in node_modules")?;
+    Ok(Vec::from_iter(packages))
+}
+
+/// What `init --node-modules-only` found and did.
+enum Refresh {
+    /// No node_modules, or one whose extraction stopped half way: the archive
+    /// was extracted. Names the packages written.
+    Extracted(Vec<String>),
+    /// node_modules held another `@dcl/sdk` (or none), or the record of
+    /// another archive, or no record and the stand-in `@dcl/inspector` (an
+    /// install of a CLI that wrote no record): the archive's packages were
+    /// replaced; everything else in node_modules was kept. `packages` names
+    /// the replaced ones.
+    Replaced {
+        installed: String,
+        packages: Vec<String>,
+    },
+    /// node_modules already holds this archive's packages.
+    Current,
+    /// No record and no stand-in `@dcl/inspector`: another tool (npm, pnpm)
+    /// installed node_modules, and nothing in it was changed.
+    Kept,
+}
+
+/// The version suffix of the vendored `@dcl/inspector`, a stand-in with no
+/// editor UI. Only this CLI installs it, so it shows an install of this CLI
+/// where node_modules has no record.
+const STAND_IN_INSPECTOR: &str = "-dcl-one-sdk-shim";
+
+fn refresh_vendored_node_modules(root: &Path) -> Result<Refresh> {
+    if let Some(packages) = install_vendored_node_modules(root)? {
+        return Ok(Refresh::Extracted(packages));
+    }
+    let marker = root.join(ARCHIVE_MARKER);
+    if !marker.exists()
+        && !installed_version(root, "@dcl/inspector")
+            .is_some_and(|version| version.ends_with(STAND_IN_INSPECTOR))
+    {
+        return Ok(Refresh::Kept);
+    }
+    let installed = installed_version(root, "@dcl/sdk");
+    let same_sdk = installed == Some(vendored_sdk_version());
+    if same_sdk && std::fs::read_to_string(&marker).ok() == Some(vendored_archive_sha256()) {
+        return Ok(Refresh::Current);
+    }
+    let packages = extract_vendored_archive(root, open_vendored_archive()?)?;
+    Ok(Refresh::Replaced {
+        installed: match installed {
+            Some(version) if same_sdk => format!("@dcl/sdk {version} of another install"),
+            Some(version) => format!("@dcl/sdk {version}"),
+            None => "no @dcl/sdk".to_string(),
+        },
+        packages,
+    })
+}
+
+/// A package that `init --node-modules-only --missing-only` found in
+/// node_modules and did not change.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptPackage {
+    pub name: String,
+    /// From its package.json.
+    pub version: String,
+    /// The version this dcl-scene-cli installs.
+    pub archive_version: Option<String>,
+}
+
+/// What `init --node-modules-only` did, with `--missing-only`
+/// ([`install_missing_node_modules`]) or without ([`install_node_modules`]):
+/// the `--json` document.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeModulesInstall {
+    pub dir: PathBuf,
+    /// `--dry-run`: nothing was written.
+    pub dry_run: bool,
+    /// The packages written, sorted. With `--missing-only`: each package
+    /// that node_modules did not have, an entry that is not a package
+    /// included, and with `dry_run` the packages that a run without it
+    /// writes. Without: each package of the archive, or none when the
+    /// command wrote nothing.
+    pub installed: Vec<String>,
+    /// The packages that were there and stay as they are, sorted. Empty
+    /// without `--missing-only`.
+    pub kept: Vec<KeptPackage>,
+    /// The record of the archive was empty when the command started
+    /// ([`extraction_stopped`]): no package of the archive counts as there,
+    /// and `installed` has them all.
+    pub stopped_extraction: bool,
+}
+
+/// Where [`install_missing_node_modules`] prepares the packages it adds. Each
+/// package then moves to its place in one rename, so node_modules never
+/// holds a part of one. Each run that is not a dry run removes the folder,
+/// the one that a stopped run left too.
+const MISSING_STAGING: &str = ".dcl-one-missing";
+
+/// `init --node-modules-only --missing-only`: writes each package of the
+/// archive that node_modules does not have. A package is there when its
+/// entry has a package.json that can be read and gives a `version` text: it
+/// stays as it is, with a warning on stderr when its version is not the
+/// archive's. An entry that is not that (an empty folder, a folder with no
+/// such file, a file) is installed from the archive as an absent package is,
+/// with a warning on stderr.
+///
+/// A link is never replaced and never written through: an entry that is a
+/// link and does not lead to a package, and a scope folder that is a link
+/// above a package to write, end the run with an error before any write.
+///
+/// The folder stays an install that someone made: this never writes, changes
+/// or removes [`ARCHIVE_MARKER`], so no build replaces a kept package because
+/// of this run. When the record shows an extraction that stopped, no package
+/// of the archive counts as there: each is installed again, the record stays
+/// empty, and the next build does that extraction.
+///
+/// `dry_run` (`--dry-run`) reads and reports the same and writes nothing.
+pub fn install_missing_node_modules(dir: &Path, dry_run: bool) -> Result<NodeModulesInstall> {
+    let root = existing_dir(dir)?;
+    let modules = root.join("node_modules");
+    let stopped_extraction = extraction_stopped(&root);
+    let mut archive = open_vendored_archive()?;
+    let (mut installed, mut kept, mut not_packages) = (Vec::new(), Vec::new(), Vec::new());
+    for name in archive_packages(&archive) {
+        let place = modules.join(&name);
+        let entry = match std::fs::symlink_metadata(&place) {
+            Ok(entry) => Some(entry),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(e).with_context(|| format!("looking for node_modules/{name}"));
+            }
+        };
+        let version = installed_version(&root, &name)
+            .filter(|version| !version.is_empty() && !stopped_extraction);
+        let Some(version) = version else {
+            if entry
+                .as_ref()
+                .is_some_and(|entry| entry.file_type().is_symlink())
+            {
+                return Err(refused_link(&name, stopped_extraction));
+            }
+            refuse_scope_link(&modules, &name)?;
+            if entry.is_some() {
+                not_packages.push(name.clone());
+            }
+            installed.push(name);
+            continue;
+        };
+        kept.push(KeptPackage {
+            archive_version: archive_version(&mut archive, &name),
+            name,
+            version,
+        });
+    }
+    if !dry_run {
+        let staging = modules.join(MISSING_STAGING);
+        let written = match installed.is_empty() {
+            true => Ok(()),
+            false => stage_missing_packages(&modules, &staging, archive, &installed),
+        };
+        let cleared = remove_entry(&staging).context("removing the staging folder");
+        written.and(cleared)?;
+    }
+    if stopped_extraction {
+        ux::note_stderr(format!(
+            "warning: {ARCHIVE_MARKER} is empty: an extraction of the vendored SDK stopped, so each vendored package is installed again; a build or init --node-modules-only does that extraction"
+        ));
+    } else {
+        for name in &not_packages {
+            ux::note_stderr(format!(
+                "warning: node_modules/{name} is not a package (no package.json with a version); the vendored package replaces it"
+            ));
+        }
+    }
+    for package in kept
+        .iter()
+        .filter(|p| Some(&p.version) != p.archive_version.as_ref())
+    {
+        ux::note_stderr(format!(
+            "warning: node_modules keeps {} {}; the vendored SDK has {}",
+            package.name,
+            package.version,
+            match &package.archive_version {
+                Some(version) => format!("{} {version}", package.name),
+                None => format!("{} (no version in its package.json)", package.name),
+            }
+        ));
+    }
+    let kept_names = Vec::from_iter(kept.iter().map(|p| p.name.as_str())).join(", ");
+    let installed_names = installed.join(", ");
+    ux::Steps::new(1).done(match (installed.is_empty(), kept.is_empty()) {
+        (true, _) => {
+            "node_modules already has each package of the vendored SDK — nothing installed"
+                .to_string()
+        }
+        (false, _) if dry_run => format!(
+            "node_modules does not have {installed_names} — nothing installed (--dry-run)"
+        ),
+        (false, true) => format!(
+            "Installed {installed_names} in node_modules from the vendored SDK — no npm needed"
+        ),
+        (false, false) => format!(
+            "Installed {installed_names} in node_modules from the vendored SDK; kept {kept_names} — no npm needed"
+        ),
+    });
+    Ok(NodeModulesInstall {
+        dir: root,
+        dry_run,
+        installed,
+        kept,
+        stopped_extraction,
+    })
+}
+
+/// The version of `package` in the archive, from its manifest.
+fn archive_version(archive: &mut VendoredArchive, package: &str) -> Option<String> {
+    use std::io::Read;
+    let mut raw = Vec::new();
+    let mut manifest = archive
+        .by_name(&format!("node_modules/{package}/package.json"))
+        .ok()?;
+    manifest.read_to_end(&mut raw).ok()?;
+    manifest_version(&raw)
+}
+
+/// A package link that `--missing-only` would have to replace. After an
+/// extraction that stopped, `init --node-modules-only` does that extraction
+/// and replaces the link.
+fn refused_link(name: &str, stopped_extraction: bool) -> anyhow::Error {
+    let remove = TrySteps::one(format!(
+        "remove node_modules/{name}, then run the command again"
+    ));
+    let (steps, why) = match stopped_extraction {
+        true => (
+            remove.and("or run dcl-scene-cli init --node-modules-only, which replaces each vendored package"),
+            "an extraction of the vendored SDK stopped in this node_modules, so the command installs each vendored package again",
+        ),
+        false => (
+            remove,
+            "the link does not lead to a package: a package.json with a version",
+        ),
+    };
+    UserError::new(
+        format!("node_modules/{name} is a link, and this command does not replace a link"),
+        steps,
+    )
+    .why(why)
+    .into()
+}
+
+/// Writes the archive below `staging` as an extraction writes it below a
+/// scene, then moves each of `packages` to node_modules. An entry that is in
+/// the place of a package moves into `staging` first, as it is, and goes with
+/// that folder: nothing is written into it or through it.
+fn stage_missing_packages(
+    modules: &Path,
+    staging: &Path,
+    mut archive: VendoredArchive,
+    packages: &[String],
+) -> Result<()> {
+    remove_entry(staging).context("removing an old staging folder")?;
+    let staged = staging.join("node_modules");
+    std::fs::create_dir_all(&staged).context("making the staging folder")?;
+    archive
+        .extract(staging)
+        .context("extracting the vendored node_modules")?;
+    let make_parent = |path: &Path| path.parent().map_or(Ok(()), std::fs::create_dir_all);
+    for name in packages {
+        let place = modules.join(name);
+        let old = staging.join("replaced").join(name);
+        make_parent(&place)
+            .and_then(|()| match std::fs::symlink_metadata(&place) {
+                Ok(_) => make_parent(&old).and_then(|()| std::fs::rename(&place, &old)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e),
+            })
+            .and_then(|()| std::fs::rename(staged.join(name), &place))
+            .with_context(|| format!("writing node_modules/{name}"))?;
+    }
+    Ok(())
+}
+
+/// The packages the archive installs under node_modules: `<name>` or
+/// `@<scope>/<name>`, each the whole directory the archive would write.
+fn archive_packages(archive: &VendoredArchive) -> std::collections::BTreeSet<String> {
+    archive
+        .file_names()
+        .filter_map(|name| name.ok())
+        .filter_map(|name| {
+            let rel = name.strip_prefix("node_modules/")?;
+            let mut parts = rel.split('/');
+            let first = parts.next().filter(|s| !s.is_empty())?;
+            Some(match first.starts_with('@') {
+                true => format!("{first}/{}", parts.next().filter(|s| !s.is_empty())?),
+                false => first.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// A scope folder that is a link, above the package `name` to write.
+fn refuse_scope_link(modules: &Path, name: &str) -> Result<()> {
+    let Some((scope, _)) = name.split_once('/') else {
+        return Ok(());
+    };
+    refuse_link(
+        &modules.join(scope),
+        &format!("node_modules/{scope}"),
+        &format!("node_modules/{name}"),
+    )
+}
+
+/// `path` that is a link, at or above `target`, which the command has to
+/// write. `shown` and `target` are the paths as the error names them.
+fn refuse_link(path: &Path, shown: &str, target: &str) -> Result<()> {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
+    if !is_link {
+        return Ok(());
+    }
+    Err(UserError::new(
+        format!("{shown} is a link, and this command does not replace a link"),
+        TrySteps::one(format!("remove {shown}, then run the command again")),
+    )
+    .why(format!(
+        "the command has to write {target}, and it does not write through a link"
+    ))
+    .into())
+}
+
+fn remove_entry(path: &Path) -> std::io::Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    match meta.is_dir() {
+        true => std::fs::remove_dir_all(path),
+        false => std::fs::remove_file(path),
+    }
 }
 
 /// Is a full `@dcl/inspector` (with the editor UI) present? The base blob ships
@@ -948,6 +1434,735 @@ mod tests {
             descriptor.matches("requestStream:").count(),
             22,
             "the DataService descriptor must declare all 22 methods"
+        );
+    }
+
+    /// The tree has no record and the stand-in `@dcl/inspector`: a CLI that
+    /// wrote no record installed it, and the command replaces its packages.
+    #[test]
+    fn node_modules_only_replaces_another_sdk_and_keeps_the_rest() {
+        let t = crate::scene::Tmp::new("init-refresh");
+        t.write(
+            "node_modules/@dcl/sdk/package.json",
+            r#"{"name":"@dcl/sdk","version":"7.0.0"}"#,
+        );
+        t.write(
+            "node_modules/@dcl/inspector/package.json",
+            r#"{"name":"@dcl/inspector","version":"0.0.0-dcl-one-sdk-shim"}"#,
+        );
+        t.write("node_modules/@dcl/sdk/stale.js", "");
+        t.write("node_modules/my-lib/index.js", "");
+        match refresh_vendored_node_modules(&t.0).unwrap() {
+            Refresh::Replaced {
+                installed,
+                packages,
+            } => {
+                assert_eq!(installed, "@dcl/sdk 7.0.0");
+                let archive = archive_packages(&open_vendored_archive().unwrap());
+                assert_eq!(packages, Vec::from_iter(archive));
+            }
+            _ => panic!("another @dcl/sdk is replaced"),
+        }
+        assert_eq!(
+            installed_version(&t.0, "@dcl/sdk"),
+            Some(vendored_sdk_version())
+        );
+        assert!(!t.0.join("node_modules/@dcl/sdk/stale.js").exists());
+        assert!(t.0.join("node_modules/my-lib/index.js").exists());
+        assert!(matches!(
+            refresh_vendored_node_modules(&t.0).unwrap(),
+            Refresh::Current
+        ));
+        // An extraction that stopped half way left an empty record: a build
+        // or `init` does it again; node_modules without one stays as it is.
+        std::fs::write(t.0.join(ARCHIVE_MARKER), "").unwrap();
+        t.write("node_modules/@dcl/sdk/stale.js", "");
+        restore_missing_node_modules(&t.0).unwrap();
+        assert!(!t.0.join("node_modules/@dcl/sdk/stale.js").exists());
+        assert!(t.0.join("node_modules/my-lib/index.js").exists());
+        assert_eq!(
+            std::fs::read_to_string(t.0.join(ARCHIVE_MARKER)).unwrap(),
+            vendored_archive_sha256()
+        );
+        std::fs::remove_file(t.0.join(ARCHIVE_MARKER)).unwrap();
+        t.write("node_modules/@dcl/sdk/stale.js", "");
+        restore_missing_node_modules(&t.0).unwrap();
+        assert!(t.0.join("node_modules/@dcl/sdk/stale.js").exists());
+        let fresh = crate::scene::Tmp::new("init-refresh-fresh");
+        assert!(matches!(
+            refresh_vendored_node_modules(&fresh.0).unwrap(),
+            Refresh::Extracted(_)
+        ));
+    }
+
+    /// A node_modules with no record and no stand-in `@dcl/inspector` is the
+    /// install of another tool: the command changes no byte of it, whatever
+    /// `@dcl/sdk` it has.
+    #[test]
+    fn node_modules_only_keeps_an_install_of_another_tool() {
+        fn tree(dir: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
+            let mut entries = Vec::from_iter(std::fs::read_dir(dir).unwrap());
+            entries.sort_by_key(|entry| entry.as_ref().unwrap().path());
+            for entry in entries {
+                let path = entry.unwrap().path();
+                match path.is_dir() {
+                    true => tree(&path, files),
+                    false => files.push((path.clone(), std::fs::read(path).unwrap())),
+                }
+            }
+        }
+        let pin = vendored_sdk_version();
+        for (tag, sdk, inspector) in [
+            ("npm", pin.as_str(), Some("7.46.1")),
+            ("npm-old", "7.0.0", Some("7.46.1")),
+            ("npm-bare", "7.0.0", None),
+        ] {
+            let t = crate::scene::Tmp::new(&format!("init-refresh-{tag}"));
+            let manifest = |name: &str, version: &str| {
+                t.write(
+                    &format!("node_modules/{name}/package.json"),
+                    format!(r#"{{"name":"{name}","version":"{version}"}}"#),
+                );
+            };
+            manifest("@dcl/sdk", sdk);
+            manifest("protobufjs", "7.5.4");
+            manifest("typescript", "5.9.3");
+            if let Some(version) = inspector {
+                manifest("@dcl/inspector", version);
+                t.write("node_modules/@dcl/inspector/public/index.html", "editor");
+            }
+            let mut before = Vec::new();
+            tree(&t.0, &mut before);
+            assert!(matches!(
+                refresh_vendored_node_modules(&t.0).unwrap(),
+                Refresh::Kept
+            ));
+            let mut after = Vec::new();
+            tree(&t.0, &mut after);
+            assert_eq!(before, after, "{tag}");
+            assert_eq!(has_full_inspector(&t.0), inspector.is_some());
+        }
+    }
+
+    #[test]
+    fn node_modules_only_follows_the_archive_under_an_unchanged_pin() {
+        let t = crate::scene::Tmp::new("init-refresh-archive");
+        let pin = vendored_sdk_version();
+        let marker = t.0.join(ARCHIVE_MARKER);
+        let sentinel = t.0.join("node_modules/@dcl/sdk/sentinel.js");
+        assert!(matches!(
+            refresh_vendored_node_modules(&t.0).unwrap(),
+            Refresh::Extracted(_)
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            vendored_archive_sha256()
+        );
+
+        std::fs::write(&sentinel, "").unwrap();
+        assert!(matches!(
+            refresh_vendored_node_modules(&t.0).unwrap(),
+            Refresh::Current
+        ));
+        assert!(sentinel.exists(), "this archive's packages are left alone");
+
+        // Another archive under the same pin, then the same packages with no
+        // record: the vendored `@dcl/inspector` is the stand-in, so this is
+        // the install of a CLI that wrote no record.
+        for other in [Some("0".repeat(64)), None] {
+            match other {
+                Some(hash) => std::fs::write(&marker, hash).unwrap(),
+                None => std::fs::remove_file(&marker).unwrap(),
+            }
+            std::fs::write(&sentinel, "").unwrap();
+            match refresh_vendored_node_modules(&t.0).unwrap() {
+                Refresh::Replaced { installed, .. } => {
+                    assert_eq!(installed, format!("@dcl/sdk {pin} of another install"))
+                }
+                _ => panic!("another archive's packages are replaced"),
+            }
+            assert!(!sentinel.exists());
+            assert_eq!(
+                std::fs::read_to_string(&marker).unwrap(),
+                vendored_archive_sha256()
+            );
+        }
+
+        t.write(
+            "node_modules/@dcl/sdk/package.json",
+            r#"{"name":"@dcl/sdk","version":"7.0.0"}"#,
+        );
+        match refresh_vendored_node_modules(&t.0).unwrap() {
+            Refresh::Replaced { installed, .. } => assert_eq!(installed, "@dcl/sdk 7.0.0"),
+            _ => panic!("another @dcl/sdk is replaced, whatever the record says"),
+        }
+        assert_eq!(installed_version(&t.0, "@dcl/sdk"), Some(pin));
+    }
+
+    /// The install replaces a package that is a link, the link itself, and
+    /// writes through no scope folder that is a link: it stops before a write
+    /// and names the link. A build that would repair node_modules stops in
+    /// the same way.
+    #[cfg(unix)]
+    #[test]
+    fn node_modules_only_refuses_a_scope_folder_that_is_a_link() {
+        use std::os::unix::fs::symlink as link;
+        let elsewhere = crate::scene::Tmp::new("init-link-target");
+        elsewhere.write("scope/sdk/own.js", "own");
+        elsewhere.write("ecs/own.js", "own");
+        let target_is_as_it_was = || {
+            let files = |rel: &str| std::fs::read_dir(elsewhere.0.join(rel)).unwrap().count();
+            assert_eq!(
+                (files("scope"), files("scope/sdk"), files("ecs")),
+                (1, 1, 1)
+            );
+        };
+
+        let t = crate::scene::Tmp::new("init-scope-link");
+        let modules = t.0.join("node_modules");
+        std::fs::create_dir_all(&modules).unwrap();
+        link(elsewhere.0.join("scope"), modules.join("@dcl")).unwrap();
+        // The record of another archive: the command has packages to replace.
+        let other = "0".repeat(64);
+        std::fs::write(t.0.join(ARCHIVE_MARKER), &other).unwrap();
+        let refused = |err: anyhow::Error| {
+            let text = ux::render(&err, false, false);
+            assert!(text.contains("node_modules/@dcl is a link"), "{text}");
+            assert!(text.contains("remove node_modules/@dcl"), "{text}");
+            assert!(!modules.join("typescript").exists(), "no file is written");
+            target_is_as_it_was();
+        };
+        refused(refresh_vendored_node_modules(&t.0).err().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(t.0.join(ARCHIVE_MARKER)).unwrap(),
+            other
+        );
+        // An empty record makes a build do the extraction: the same stop,
+        // and the record stays empty.
+        std::fs::write(t.0.join(ARCHIVE_MARKER), "").unwrap();
+        refused(restore_missing_node_modules(&t.0).unwrap_err());
+        assert!(std::fs::read(t.0.join(ARCHIVE_MARKER)).unwrap().is_empty());
+
+        let t = crate::scene::Tmp::new("init-package-link");
+        std::fs::create_dir_all(t.0.join("node_modules/@dcl")).unwrap();
+        std::fs::write(t.0.join(ARCHIVE_MARKER), &other).unwrap();
+        let place = t.0.join("node_modules/@dcl/ecs");
+        link(elsewhere.0.join("ecs"), &place).unwrap();
+        assert!(matches!(
+            refresh_vendored_node_modules(&t.0).unwrap(),
+            Refresh::Replaced { .. }
+        ));
+        assert!(!std::fs::symlink_metadata(&place).unwrap().is_symlink());
+        assert!(place.join("package.json").is_file());
+        target_is_as_it_was();
+    }
+
+    /// The record is not written through a link: a `node_modules` or a record
+    /// that is a link stops the install before a write and the error names
+    /// it. What the link leads to stays as it was.
+    #[cfg(unix)]
+    #[test]
+    fn node_modules_only_refuses_a_record_or_a_node_modules_that_is_a_link() {
+        use std::os::unix::fs::symlink as link;
+        let other = "0".repeat(64);
+        let elsewhere = crate::scene::Tmp::new("init-record-link-target");
+        elsewhere.write("record", &other);
+        elsewhere.write("modules/.dcl-one-archive", &other);
+        let refused = |root: &Path, name: &str| {
+            let err = refresh_vendored_node_modules(root).err().unwrap();
+            let text = ux::render(&err, false, false);
+            assert!(text.contains(&format!("{name} is a link")), "{text}");
+            assert!(text.contains(&format!("remove {name}")), "{text}");
+            assert_eq!(
+                Vec::from_iter(tree(&elsewhere.0)),
+                [
+                    (
+                        "modules/.dcl-one-archive".to_string(),
+                        other.clone().into_bytes()
+                    ),
+                    ("record".to_string(), other.clone().into_bytes()),
+                ],
+                "the target of the link is as it was"
+            );
+        };
+
+        // The record of another archive behind a link: there are packages
+        // to replace, and the record would be the first write.
+        let t = crate::scene::Tmp::new("init-record-link");
+        std::fs::create_dir_all(t.0.join("node_modules")).unwrap();
+        link(elsewhere.0.join("record"), t.0.join(ARCHIVE_MARKER)).unwrap();
+        refused(&t.0, ARCHIVE_MARKER);
+        assert!(!t.0.join("node_modules/typescript").exists());
+
+        // node_modules itself is a link, to a folder and to nothing.
+        let t = crate::scene::Tmp::new("init-modules-link");
+        link(elsewhere.0.join("modules"), t.0.join("node_modules")).unwrap();
+        refused(&t.0, "node_modules");
+        std::fs::remove_file(t.0.join("node_modules")).unwrap();
+        link(elsewhere.0.join("absent"), t.0.join("node_modules")).unwrap();
+        refused(&t.0, "node_modules");
+        assert!(!elsewhere.0.join("absent").exists());
+        let err = restore_missing_node_modules(&t.0).unwrap_err();
+        assert!(ux::render(&err, false, false).contains("node_modules is a link"));
+    }
+
+    /// Every file below `dir`, by its path from there, with its bytes.
+    fn tree(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        let mut files = std::collections::BTreeMap::new();
+        let mut folders = vec![dir.to_path_buf()];
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+                let path = entry.path();
+                match path.is_dir() {
+                    true => folders.push(path),
+                    false => {
+                        let rel = path.strip_prefix(dir).unwrap().display().to_string();
+                        files.insert(rel, std::fs::read(&path).unwrap());
+                    }
+                }
+            }
+        }
+        files
+    }
+
+    fn all_archive_packages() -> Vec<String> {
+        Vec::from_iter(archive_packages(&open_vendored_archive().unwrap()))
+    }
+
+    #[test]
+    fn missing_only_installs_the_absent_packages_and_changes_no_other() {
+        let t = crate::scene::Tmp::new("init-missing");
+        t.write(
+            "node_modules/@dcl/sdk/package.json",
+            r#"{"name":"@dcl/sdk","version":"7.0.0"}"#,
+        );
+        t.write("node_modules/@dcl/sdk/own.js", "own");
+        t.write(
+            "node_modules/typescript/package.json",
+            r#"{"name":"typescript","version":"5.0.0"}"#,
+        );
+        t.write("node_modules/typescript/lib/own.js", "own");
+        t.write("node_modules/my-lib/index.js", "");
+        let modules = t.0.join("node_modules");
+        let own = || {
+            (
+                tree(&modules.join("@dcl/sdk")),
+                tree(&modules.join("typescript")),
+            )
+        };
+        let before = own();
+
+        let made = install_missing_node_modules(&t.0, false).unwrap();
+        assert_eq!(made.dir, dunce::canonicalize(&t.0).unwrap());
+        let mut expected = all_archive_packages();
+        expected.retain(|name| name != "@dcl/sdk" && name != "typescript");
+        assert_eq!(expected.len(), 9);
+        assert_eq!(made.installed, expected);
+        let compiler = archive_version(&mut open_vendored_archive().unwrap(), "typescript");
+        assert!(compiler.is_some() && compiler.as_deref() != Some("5.0.0"));
+        assert_eq!(
+            made.kept,
+            [
+                KeptPackage {
+                    name: "@dcl/sdk".to_string(),
+                    version: "7.0.0".to_string(),
+                    archive_version: Some(vendored_sdk_version()),
+                },
+                KeptPackage {
+                    name: "typescript".to_string(),
+                    version: "5.0.0".to_string(),
+                    archive_version: compiler,
+                },
+            ]
+        );
+        assert!(!made.stopped_extraction);
+        assert_eq!(before, own(), "a package that was there has the same bytes");
+        assert!(modules.join("my-lib/index.js").exists());
+        assert!(!modules.join(MISSING_STAGING).exists());
+        assert!(!t.0.join(ARCHIVE_MARKER).exists(), "no record is written");
+
+        // An added package is the one a full extraction writes.
+        let full = crate::scene::Tmp::new("init-missing-full");
+        refresh_vendored_node_modules(&full.0).unwrap();
+        for package in &made.installed {
+            assert_eq!(
+                tree(&modules.join(package)),
+                tree(&full.0.join("node_modules").join(package)),
+                "{package}"
+            );
+        }
+
+        // A second run finds nothing to install. A build changes nothing.
+        let again = install_missing_node_modules(&t.0, false).unwrap();
+        assert!(again.installed.is_empty(), "{:?}", again.installed);
+        assert_eq!(again.kept.len(), made.installed.len() + 2);
+        restore_missing_node_modules(&t.0).unwrap();
+        assert_eq!(before, own());
+        assert_eq!(
+            installed_version(&t.0, "@dcl/sdk").as_deref(),
+            Some("7.0.0")
+        );
+        assert!(!t.0.join(ARCHIVE_MARKER).exists());
+    }
+
+    /// An entry is a package with a package.json that gives a version text.
+    /// An entry that is not one is replaced as an absent package is
+    /// installed; a dry run reports the same and changes nothing.
+    #[test]
+    fn missing_only_installs_over_an_entry_that_is_not_a_package() {
+        let t = crate::scene::Tmp::new("init-missing-not-package");
+        let modules = t.0.join("node_modules");
+        t.write("node_modules/typescript/lib/own.js", "no manifest");
+        t.write(
+            "node_modules/@dcl/ecs/package.json",
+            r#"{"name":"@dcl/ecs"}"#,
+        );
+        t.write("node_modules/long/package.json", r#"{"version":""}"#);
+        t.write("node_modules/@dcl/sdk", "a file");
+        std::fs::create_dir_all(modules.join("@dcl/js-runtime")).unwrap();
+        t.write("node_modules/my-lib/index.js", "");
+        let before = tree(&t.0);
+        let report = install_missing_node_modules(&t.0, true).unwrap();
+        assert_eq!(report.installed, all_archive_packages());
+        assert!(report.kept.is_empty(), "{:?}", report.kept);
+        assert_eq!(tree(&t.0), before, "a dry run writes no file");
+
+        let made = install_missing_node_modules(&t.0, false).unwrap();
+        assert_eq!(made.installed, report.installed);
+        assert!(made.kept.is_empty() && !made.stopped_extraction);
+        let full = crate::scene::Tmp::new("init-missing-not-package-full");
+        refresh_vendored_node_modules(&full.0).unwrap();
+        for package in &made.installed {
+            assert_eq!(
+                tree(&modules.join(package)),
+                tree(&full.0.join("node_modules").join(package)),
+                "{package}"
+            );
+        }
+        assert!(modules.join("my-lib/index.js").exists());
+        assert!(!modules.join(MISSING_STAGING).exists());
+        assert!(!t.0.join(ARCHIVE_MARKER).exists(), "no record is written");
+    }
+
+    /// A link is not replaced and not written through: the run stops before
+    /// a write, with the dry run too, and names the link.
+    #[cfg(unix)]
+    #[test]
+    fn missing_only_refuses_a_link_that_is_not_a_package() {
+        use std::os::unix::fs::symlink as link;
+        let refused = |t: &crate::scene::Tmp, name: &str| {
+            let modules = t.0.join("node_modules");
+            for dry_run in [true, false] {
+                let err = install_missing_node_modules(&t.0, dry_run).unwrap_err();
+                let text = ux::render(&err, false, false);
+                assert!(
+                    text.contains(&format!("node_modules/{name} is a link")),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&format!("remove node_modules/{name}")),
+                    "{text}"
+                );
+                assert!(!text.contains("--node-modules-only"), "{text}");
+            }
+            assert!(
+                std::fs::symlink_metadata(modules.join(name))
+                    .unwrap()
+                    .is_symlink()
+            );
+            for written in ["@dcl/sdk", "typescript", MISSING_STAGING] {
+                assert!(!modules.join(written).exists(), "{written} is not written");
+            }
+        };
+
+        // A link to nothing, and a link to a folder that is not a package.
+        let t = crate::scene::Tmp::new("init-missing-link");
+        let elsewhere = crate::scene::Tmp::new("init-missing-link-target");
+        elsewhere.write("ecs/own.js", "own");
+        std::fs::create_dir_all(t.0.join("node_modules/@dcl")).unwrap();
+        let place = t.0.join("node_modules/@dcl/ecs");
+        link(elsewhere.0.join("absent"), &place).unwrap();
+        refused(&t, "@dcl/ecs");
+        std::fs::remove_file(&place).unwrap();
+        link(elsewhere.0.join("ecs"), &place).unwrap();
+        refused(&t, "@dcl/ecs");
+        assert_eq!(tree(&elsewhere.0).len(), 1, "the target has its one file");
+
+        // A link to a package is a package that is there: it stays.
+        elsewhere.write("ecs/package.json", r#"{"version":"7.0.0"}"#);
+        let made = install_missing_node_modules(&t.0, false).unwrap();
+        assert_eq!(made.kept[0].name, "@dcl/ecs");
+        assert!(std::fs::symlink_metadata(&place).unwrap().is_symlink());
+        assert_eq!(tree(&elsewhere.0).len(), 2);
+
+        // After an extraction that stopped no package counts as there, so
+        // the link is refused again. The error names the full install, which
+        // replaces a package link.
+        let marker = t.0.join(ARCHIVE_MARKER);
+        std::fs::write(&marker, "").unwrap();
+        let sdk = tree(&t.0.join("node_modules/@dcl/sdk"));
+        for dry_run in [true, false] {
+            let err = install_missing_node_modules(&t.0, dry_run).unwrap_err();
+            let text = ux::render(&err, false, false);
+            assert!(text.contains("node_modules/@dcl/ecs is a link"), "{text}");
+            assert!(text.contains("init --node-modules-only"), "{text}");
+        }
+        assert_eq!(tree(&t.0.join("node_modules/@dcl/sdk")), sdk);
+        assert_eq!(tree(&elsewhere.0).len(), 2);
+        assert!(std::fs::read(&marker).unwrap().is_empty());
+
+        // A scope folder that is a link, above a package to write.
+        let t = crate::scene::Tmp::new("init-missing-scope-link");
+        std::fs::create_dir_all(t.0.join("node_modules")).unwrap();
+        std::fs::create_dir_all(elsewhere.0.join("scope")).unwrap();
+        link(elsewhere.0.join("scope"), t.0.join("node_modules/@dcl")).unwrap();
+        refused(&t, "@dcl");
+        assert_eq!(tree(&elsewhere.0).len(), 2);
+    }
+
+    /// The document of the full install: the packages written, none kept,
+    /// and the empty record that the command found.
+    #[test]
+    fn node_modules_only_reports_the_packages_it_wrote() {
+        let t = crate::scene::Tmp::new("init-full-report");
+        let archive = all_archive_packages();
+
+        let made = install_node_modules(&t.0).unwrap();
+        assert_eq!(made.dir, dunce::canonicalize(&t.0).unwrap());
+        assert_eq!(made.installed, archive);
+        assert!(made.kept.is_empty() && !made.dry_run && !made.stopped_extraction);
+
+        // This archive's packages are there: nothing is written.
+        let again = install_node_modules(&t.0).unwrap();
+        assert!(again.installed.is_empty(), "{:?}", again.installed);
+        assert!(again.kept.is_empty() && !again.stopped_extraction);
+
+        // Another SDK in a folder that has a record: each package is written.
+        t.write(
+            "node_modules/@dcl/sdk/package.json",
+            r#"{"name":"@dcl/sdk","version":"7.0.0"}"#,
+        );
+        let replaced = install_node_modules(&t.0).unwrap();
+        assert_eq!(replaced.installed, archive);
+        assert!(replaced.kept.is_empty() && !replaced.stopped_extraction);
+
+        // An empty record: the document says so, and the extraction runs.
+        std::fs::write(t.0.join(ARCHIVE_MARKER), "").unwrap();
+        let repaired = install_node_modules(&t.0).unwrap();
+        assert!(repaired.stopped_extraction && !repaired.dry_run);
+        assert_eq!(repaired.installed, archive);
+        assert!(repaired.kept.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(t.0.join(ARCHIVE_MARKER)).unwrap(),
+            vendored_archive_sha256()
+        );
+
+        // The install of another tool (no record, no stand-in
+        // `@dcl/inspector`) is kept: the command writes no package.
+        let other = crate::scene::Tmp::new("init-full-report-other");
+        other.write(
+            "node_modules/@dcl/sdk/package.json",
+            r#"{"name":"@dcl/sdk","version":"7.0.0"}"#,
+        );
+        let before = tree(&other.0);
+        let kept = install_node_modules(&other.0).unwrap();
+        assert!(kept.installed.is_empty(), "{:?}", kept.installed);
+        assert!(kept.kept.is_empty() && !kept.stopped_extraction);
+        assert_eq!(tree(&other.0), before);
+    }
+
+    /// The record of an extraction belongs to the full install: a
+    /// `--missing-only` run neither makes one nor changes one, and removes
+    /// the staging folder that a stopped run left.
+    #[test]
+    fn missing_only_leaves_the_archive_record_as_it_is() {
+        let t = crate::scene::Tmp::new("init-missing-record");
+        let marker = t.0.join(ARCHIVE_MARKER);
+        let own = t.0.join("node_modules/@dcl/sdk/own.js");
+
+        let made = install_missing_node_modules(&t.0, false).unwrap();
+        assert!(made.kept.is_empty(), "{:?}", made.kept);
+        assert_eq!(
+            installed_version(&t.0, "@dcl/sdk"),
+            Some(vendored_sdk_version())
+        );
+        assert!(!marker.exists(), "a new node_modules gets no record");
+        std::fs::write(&own, "").unwrap();
+        restore_missing_node_modules(&t.0).unwrap();
+        assert!(own.exists(), "a build leaves a folder without a record");
+
+        // A stopped run left its staging folder. A dry run keeps it; a run
+        // removes it, with a package to install and with none.
+        let staging = t.0.join("node_modules").join(MISSING_STAGING);
+        let leave_staging = || {
+            t.write(
+                &format!("node_modules/{MISSING_STAGING}/node_modules/@dcl/ecs/part.js"),
+                "",
+            )
+        };
+        leave_staging();
+        let report = install_missing_node_modules(&t.0, true).unwrap();
+        assert!(report.installed.is_empty(), "{:?}", report.installed);
+        assert!(staging.exists(), "a dry run removes nothing");
+        let made = install_missing_node_modules(&t.0, false).unwrap();
+        assert!(made.installed.is_empty(), "{:?}", made.installed);
+        assert!(
+            !staging.exists(),
+            "a run with nothing to install removes it"
+        );
+        assert!(own.exists());
+        for record in ["another archive".to_string(), vendored_archive_sha256()] {
+            leave_staging();
+            std::fs::write(&marker, &record).unwrap();
+            std::fs::remove_dir_all(t.0.join("node_modules/@dcl/ecs")).unwrap();
+            let made = install_missing_node_modules(&t.0, false).unwrap();
+            assert_eq!(made.installed, ["@dcl/ecs"]);
+            assert!(!made.stopped_extraction);
+            assert!(!t.0.join("node_modules/@dcl/ecs/part.js").exists());
+            assert!(!t.0.join("node_modules").join(MISSING_STAGING).exists());
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), record);
+            assert!(own.exists());
+        }
+
+        // An empty record shows an extraction that stopped half way: a
+        // package of the archive that is there can lack files, so not one
+        // counts as there. The dry run reports the same; the run writes each
+        // package again and not the record.
+        std::fs::write(&marker, "").unwrap();
+        let ecs = t.0.join("node_modules/@dcl/ecs");
+        let manifest = std::fs::read(ecs.join("package.json")).unwrap();
+        std::fs::remove_dir_all(&ecs).unwrap();
+        std::fs::create_dir_all(&ecs).unwrap();
+        std::fs::write(ecs.join("package.json"), manifest).unwrap();
+        t.write("node_modules/my-lib/index.js", "");
+        let before = tree(&t.0);
+        let report = install_missing_node_modules(&t.0, true).unwrap();
+        assert!(report.stopped_extraction);
+        assert_eq!(report.installed, all_archive_packages());
+        assert!(report.kept.is_empty(), "{:?}", report.kept);
+        assert_eq!(tree(&t.0), before, "a dry run writes no file");
+
+        let made = install_missing_node_modules(&t.0, false).unwrap();
+        assert!(made.stopped_extraction);
+        assert_eq!(made.installed, report.installed);
+        assert_eq!(made.kept, report.kept);
+        assert!(
+            !own.exists(),
+            "each package of the archive is written again"
+        );
+        assert!(tree(&ecs).len() > 1, "the package has its files");
+        assert!(t.0.join("node_modules/my-lib/index.js").exists());
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "");
+        assert!(!t.0.join("node_modules").join(MISSING_STAGING).exists());
+        // With the empty record, a build does that extraction.
+        restore_missing_node_modules(&t.0).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            vendored_archive_sha256()
+        );
+    }
+
+    /// What a parent program needs for "outdated" and "update": the dry run
+    /// reports an older `@dcl/sdk` with the two versions and writes nothing,
+    /// and `init --node-modules-only` then replaces that package, but not in
+    /// the install of another tool.
+    #[test]
+    fn a_dry_run_reports_an_older_sdk_and_node_modules_only_replaces_it() {
+        let empty = crate::scene::Tmp::new("init-dry-run-empty");
+        let report = install_missing_node_modules(&empty.0, true).unwrap();
+        assert!(report.dry_run && report.kept.is_empty());
+        assert!(report.installed.contains(&"@dcl/sdk".to_string()));
+        assert!(!empty.0.join("node_modules").exists(), "nothing is made");
+
+        let t = crate::scene::Tmp::new("init-dry-run");
+        t.write(
+            "node_modules/@dcl/sdk/package.json",
+            r#"{"name":"@dcl/sdk","version":"7.0.0"}"#,
+        );
+        t.write("node_modules/my-lib/index.js", "");
+        let modules = t.0.join("node_modules");
+        let older = KeptPackage {
+            name: "@dcl/sdk".to_string(),
+            version: "7.0.0".to_string(),
+            archive_version: Some(vendored_sdk_version()),
+        };
+        let before = tree(&t.0);
+        let report = install_missing_node_modules(&t.0, true).unwrap();
+        assert_eq!(report.kept, [older]);
+        assert!(report.installed.contains(&"@dcl/ecs".to_string()));
+        assert_eq!(tree(&t.0), before, "a dry run writes no file");
+        assert!(!modules.join(MISSING_STAGING).exists());
+        assert!(!modules.join("@dcl/ecs").exists());
+
+        // The run that writes gives the same two lists.
+        let made = install_missing_node_modules(&t.0, false).unwrap();
+        assert!(!made.dry_run);
+        assert_eq!(made.installed, report.installed);
+        assert_eq!(made.kept, report.kept);
+        let report = install_missing_node_modules(&t.0, true).unwrap();
+        assert!(report.installed.is_empty(), "{:?}", report.installed);
+        assert!(
+            report.kept.contains(&made.kept[0]),
+            "the SDK is still older"
+        );
+
+        // The run installed the stand-in `@dcl/inspector`, so the folder is
+        // an install of this CLI: the full install replaces the older SDK.
+        let full_install = |dir: &Path| {
+            let opts = InitOptions {
+                dir: dir.to_path_buf(),
+                project: None,
+                yes: false,
+                node_modules_only: true,
+            };
+            init_with(&opts, false).unwrap();
+            let report = install_missing_node_modules(dir, true).unwrap();
+            assert!(report.installed.is_empty(), "{:?}", report.installed);
+            let sdk = report.kept.into_iter().find(|p| p.name == "@dcl/sdk");
+            sdk.unwrap()
+        };
+        let sdk = full_install(&t.0);
+        assert_eq!(Some(&sdk.version), sdk.archive_version.as_ref());
+        assert_eq!(sdk.version, vendored_sdk_version());
+        assert!(modules.join("my-lib/index.js").exists());
+
+        // A full `@dcl/inspector` that another tool installed is a kept
+        // package. The folder has no record and no stand-in, so the full
+        // install keeps it too, and the SDK stays older.
+        let other = crate::scene::Tmp::new("init-dry-run-other");
+        for name in ["@dcl/sdk", "@dcl/inspector"] {
+            other.write(
+                &format!("node_modules/{name}/package.json"),
+                r#"{"version":"7.0.0"}"#,
+            );
+        }
+        let made = install_missing_node_modules(&other.0, false).unwrap();
+        assert_eq!(made.kept.len(), 2, "{:?}", made.kept);
+        let before = tree(&other.0);
+        assert_eq!(full_install(&other.0).version, "7.0.0");
+        assert_eq!(tree(&other.0), before);
+    }
+
+    /// The packages that `init --node-modules-only` replaces; the README
+    /// names the same eleven.
+    #[test]
+    fn archive_packages_are_the_top_level_node_modules_entries() {
+        let packages = archive_packages(&open_vendored_archive().unwrap());
+        assert_eq!(
+            Vec::from_iter(packages),
+            [
+                "@dcl/ecs",
+                "@dcl/inspector",
+                "@dcl/js-runtime",
+                "@dcl/rpc",
+                "@dcl/sdk",
+                "@protobufjs/utf8",
+                "long",
+                "mitt",
+                "protobufjs",
+                "typescript",
+                "ws",
+            ]
         );
     }
 

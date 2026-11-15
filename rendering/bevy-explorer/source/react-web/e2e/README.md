@@ -15,6 +15,11 @@ that a blocked scene leaves its neighbour free to finish, and that queued and
 active calls respect caller abort signals. Install Chromium with `npx playwright install chromium`
 or set `CHROME_BIN` to an installed Chromium executable.
 
+The scene request routing test runs with `node --test react-web/e2e/scene-routes.test.mjs`
+from the Explorer source directory and needs no browser. It checks how the page
+reads the node's routing map and how a worker re-addresses a request to a listed
+host.
+
 Per-domain tests that drive the **live** app — the React HUD, the bevy engine (in a
 same-origin iframe), and the super-user bridge scene — and assert each API call
 round-trips over the bridge. The player is driven with **bevy console commands**

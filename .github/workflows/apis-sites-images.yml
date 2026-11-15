@@ -61,7 +61,8 @@ jobs:
               'services/catalyst/rust-toolchain*' 'services/catalyst/Cargo.*' 'services/catalyst/**/Cargo.toml' \
               'library/**/Cargo.toml' apps/dcl-scene-cli/Cargo.toml \
               apps/sites/package.json apps/sites/pnpm-lock.yaml apps/sites/pnpm-workspace.yaml apps/sites/.npmrc \
-              'tooling/image-*' .github/workflows/apis-sites-images.yml; then
+              'tooling/image-*' .github/workflows/apis-sites-images.yml \
+              .github/workflows/apis-sites-compile.yml; then
             matrix='[{"arch":"amd64","runner":"ubuntu-26.04"}]'
           fi
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"

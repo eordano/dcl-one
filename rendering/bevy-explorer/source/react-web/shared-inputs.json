@@ -764,6 +764,10 @@
           "kind": "regular"
         },
         {
+          "name": "link.helpers.ts",
+          "kind": "regular"
+        },
+        {
           "name": "package.json",
           "kind": "regular"
         },
@@ -786,6 +790,10 @@
         {
           "name": "test",
           "kind": "directory"
+        },
+        {
+          "name": "text-styles.ts",
+          "kind": "regular"
         },
         {
           "name": "tsconfig.json",
@@ -4211,7 +4219,11 @@
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/engine/sandbox_host.js",
-      "sha256": "c3dde5bf9d513b85bc441a731faf69ccbe032666950d64203689f98b6c3b2434"
+      "sha256": "4754c708f977eb0060092883485861864f850435c087c02ecc703d724583ac25"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/deploy/web/engine/scene_fetch.js",
+      "sha256": "a3fd68c0d07343b2c17a9e0606c80e6efea13e6b90f10ef54a1809a0e09c65bb"
     },
     {
       "path": "rendering/bevy-explorer/source/deploy/web/package.json",

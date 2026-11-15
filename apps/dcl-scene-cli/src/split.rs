@@ -1,5 +1,6 @@
 use crate::scene::Project;
 use anyhow::{Context, Result};
+pub use dcl_scene_authoring::compact_loader;
 use std::path::{Path, PathBuf};
 
 const LOADER_TEMPLATE: &str = include_str!("templates/split-loader.js");
@@ -227,22 +228,6 @@ pub fn loader_stub(
             &max_composite_entity.to_string(),
         )
         .replace("__DCL_ONE_MP__", if mp { "true" } else { "false" })
-}
-
-/// The stub without its comment lines, blank lines and indentation, for a
-/// production build. Nothing is renamed and no line is joined: the chunks are
-/// direct-eval'd inside this scope, so its identifiers are part of the
-/// contract, and the statements rely on their line ends.
-pub fn compact_loader(stub: &str) -> String {
-    let mut out = String::with_capacity(stub.len());
-    for line in stub.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with("//") {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 pub fn write_loader_stub(outfile: &Path, stub: &str) -> Result<()> {

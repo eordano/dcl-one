@@ -190,7 +190,7 @@ pub async fn run(project: Project, opts: &BuildOptions, script: &str) -> Result<
         .stdin(Stdio::inherit())
         // --json and deploy --programmatic keep stdout for the lines a
         // program parses: the script's own output joins stderr.
-        .stdout(match ux::quiet() {
+        .stdout(match ux::quiet() || ux::events() {
             true => Stdio::from(std::io::stderr()),
             false => Stdio::inherit(),
         })

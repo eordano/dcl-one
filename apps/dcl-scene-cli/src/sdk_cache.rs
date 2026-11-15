@@ -135,7 +135,7 @@ fn stat(path: &Path) -> Option<Stat> {
     })
 }
 
-fn hex(digest: impl AsRef<[u8]>) -> String {
+pub(crate) fn hex(digest: impl AsRef<[u8]>) -> String {
     digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 

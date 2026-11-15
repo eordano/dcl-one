@@ -5,11 +5,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { join } from "node:path";
 import type { Browser, Page } from "playwright-core";
-import { pagePath, type PageSpec, type Side } from "../pages.mts";
 import { launch, VIEWPORTS, type Viewport } from "./browser.mts";
 import type { Box } from "./collect.mts";
 import { captureSide, type SideCapture } from "./capture.mts";
-import { PORTS, referenceDist } from "./paths.mts";
+import { REFERENCE_MOUNTS } from "./fonts.mts";
+import { PORTS, referenceDist, referencePin, referencePort, type ReferenceId } from "./paths.mts";
+import { pathLabel, referenceOf, type PageSpec, type Side } from "./spec.mts";
 import { decodePng, encodePng } from "./png.mts";
 import { pixelDiff, type Band } from "./pixeldiff.mts";
 import type { Miss, Recording } from "./recording.mts";
@@ -30,7 +31,7 @@ export type PageResult = {
   lines: string[];
   masks: { why: string; reference: Box[]; dclOne: Box[] }[];
   regions: { why: string; reference: Box[]; dclOne: Box[] }[];
-  sides: Record<Side, { url: string; error?: string; console: string[]; blocked: string[]; unknown: string[]; height: number }>;
+  sides: Record<Side, { url: string; error?: string; console: string[]; failed: string[]; blocked: string[]; unknown: string[]; height: number }>;
   /** Requests the recording could not answer; `expected` names the page's rule when one covers it. */
   misses: (Miss & { expected?: string })[];
   /** Requests to hosts the harness does not know (answered 404); `expected` as for misses. */
@@ -38,26 +39,46 @@ export type PageResult = {
 };
 
 export type Servers = {
-  origins: Record<Side, string>;
+  /** A side's own origin: dcl-one's preview, or the static server of the reference a page is compared with. */
+  origin(side: Side, reference?: ReferenceId): string;
   /** Hosts dcl-one's server-side render was refused since the last call, once its queued renders end. */
   ssrBlocked(): Promise<string[]>;
   close(): Promise<void>;
 };
 
-/** `now` (epoch ms) fixes the server-side render's clock where the browser's is; its randomness is seeded as the browser's. */
-export async function startServers(recording: Recording, now?: number): Promise<Servers> {
+/**
+ * The installer host the reference's /download links (decentraland-ui2 cdnReleases): the harness deploys dcl-one with
+ * the same host, as a deployment supplies its own (EXPLORER_INSTALLERS_URL); the requests themselves are blocked.
+ */
+const EXPLORER_INSTALLERS = "https://explorer-artifacts.decentraland.org";
+
+/** The download counts JSON the reference reads (sites DOWNLOAD_COUNTS_URL), answered by the replay's recording of it. */
+const DOWNLOAD_COUNTS_PATH = "/cdn-data/public/current/explorer-alpha-downloads.json";
+
+/** The dapps rollout flags the sites server reads (FEATURE_FLAGS_URL; the sign-in page asks them), answered by the replay. */
+const FEATURE_FLAGS_PATH = "/feature-flags";
+
+/**
+ * `now` (epoch ms) fixes the server-side render's clock where the browser's is; its randomness is
+ * seeded as the browser's. One static server per reference the run compares with.
+ */
+export async function startServers(recording: Recording, now?: number, references: ReferenceId[] = ["shop"]): Promise<Servers> {
   const servers: Server[] = [];
   let sites: ChildProcess | null = null;
   try {
-    servers.push(await startStatic(referenceDist(), PORTS.reference()));
+    for (const reference of references) servers.push(await startStatic(referenceDist(referencePin(reference)), referencePort(reference), REFERENCE_MOUNTS[reference]));
     servers.push(await startReplay(recording, PORTS.replay()));
-    sites = await startSites(PORTS.sites(), `http://127.0.0.1:${PORTS.replay()}`, { SHOP_PARITY_SEED: String(SEED), ...(now === undefined ? {} : { SHOP_PARITY_NOW: String(now) }) });
+    sites = await startSites(PORTS.sites(), `http://127.0.0.1:${PORTS.replay()}`, { SHOP_PARITY_SEED: String(SEED), EXPLORER_INSTALLERS_URL: EXPLORER_INSTALLERS, DOWNLOAD_COUNTS_URL: `http://127.0.0.1:${PORTS.replay()}${DOWNLOAD_COUNTS_PATH}`, FEATURE_FLAGS_URL: `http://127.0.0.1:${PORTS.replay()}${FEATURE_FLAGS_PATH}`, ...(now === undefined ? {} : { SHOP_PARITY_NOW: String(now) }) });
   } catch (err) {
     for (const s of servers) s.close();
     throw err;
   }
   return {
-    origins: { reference: `http://127.0.0.1:${PORTS.reference()}`, "dcl-one": `http://127.0.0.1:${PORTS.sites()}` },
+    origin(side, reference = "shop") {
+      if (side === "dcl-one") return `http://127.0.0.1:${PORTS.sites()}`;
+      if (!references.includes(reference)) throw new Error(`the ${reference} reference was not started for this run`);
+      return `http://127.0.0.1:${referencePort(reference)}`;
+    },
     async ssrBlocked() {
       const r = await fetch(`http://127.0.0.1:${PORTS.sites()}/__shop-parity/blocked`, { signal: AbortSignal.timeout(60_000) });
       return (await r.json()) as string[];
@@ -81,7 +102,7 @@ export async function comparePage(
   const caps = {} as Record<Side, SideCapture>;
   for (const side of ["reference", "dcl-one"] as const) {
     caps[side] = await captureSide(browser, spec, vp, side, {
-      origin: servers.origins[side],
+      origin: servers.origin(side, referenceOf(spec)),
       recording,
       now: opts.now,
       seed: SEED,
@@ -111,12 +132,12 @@ export async function comparePage(
   } catch (err) {
     caps.reference.error ??= `pixel diff: ${String(err)}`;
   }
-  const structure = compareStructure(caps.reference.collected, caps["dcl-one"].collected, { tolerance: 1, expected: spec.expected });
+  const structure = compareStructure(caps.reference.collected, caps["dcl-one"].collected, { tolerance: 1, expected: spec.expected, keys: spec.keys.filter((k) => k.absentOn !== (vp.mobile ? "mobile" : "desktop")).map((k) => k.name) });
   coverByRegions(structure, spec.regions ?? [], caps.reference.regionGroups, caps["dcl-one"].regionGroups);
   const sides = Object.fromEntries(
     (["reference", "dcl-one"] as const).map((s) => [
       s,
-      { url: caps[s].url, error: caps[s].error, console: caps[s].console, blocked: [...new Set(caps[s].log.blocked)], unknown: [...new Set(caps[s].log.unknown)], height: caps[s].collected.height },
+      { url: caps[s].url, error: caps[s].error, console: caps[s].console, failed: [...new Set(caps[s].failed)], blocked: [...new Set(caps[s].log.blocked)], unknown: [...new Set(caps[s].log.unknown)], height: caps[s].collected.height },
     ]),
   ) as PageResult["sides"];
   // The server-side render is cut off from the network like the browser: a host it tried counts as unknown.
@@ -125,7 +146,7 @@ export async function comparePage(
     page: spec.id,
     title: spec.title,
     viewport: vp.name,
-    path: pagePath(spec, opts.targets),
+    path: pathLabel(spec, opts.targets),
     identical: false,
     pixels,
     structure,
@@ -151,7 +172,7 @@ export type RunOptions = {
 };
 
 export async function runAll(recording: Recording, specs: PageSpec[], viewports: Viewport[], opts: RunOptions): Promise<{ results: PageResult[]; executable: string }> {
-  const servers = await startServers(recording, opts.now);
+  const servers = await startServers(recording, opts.now, [...new Set(specs.map(referenceOf))]);
   let browser: Browser | undefined;
   let executable = "";
   const results: PageResult[] = [];

@@ -14,8 +14,12 @@ CI uses `build-web.py --shared-build`: Cargo compiles the engine and scene runti
 then the lockfile-matched wasm-bindgen emits two separate modules. `install-web-tools.py`
 checks the release archives' SHA-256 and the binding generator's version against Cargo.lock.
 Optimized builds retain the release compilation settings and run wasm-opt. Unoptimized PR
-builds use 16 codegen units; the larger modules trade download size for compilation speed, and
-they skip the wasm target cache, which main's optimized builds fill with 1-unit artifacts.
+builds use 16 codegen units; the larger modules trade download size for compilation speed. The
+two settings give every crate a different hash, so each has its own wasm target cache. Main
+fills the unoptimized one in the job `web-pr-target`, which runs `build-web.py --no-opt
+--target-only` (the Cargo step alone) and saves one entry for each set of engine inputs. A PR
+restores main's entry; when main has none for the PR's dependencies, the PR saves one entry of
+its own, once.
 Linux web CI takes protoc, clang 21, pkg-config and ALSA/udev development outputs from
 the flake's cached `bevy-web-tools` package and installs no apt build dependencies. Its
 pkg-config search path points to that package. Native Linux packaging retains distribution
@@ -92,6 +96,7 @@ of the compiled engine's cache key, so that build recompiles the WASM.
 | `bevy-explorer-desktop.yml` | Manual Linux/Windows AMD64 packaging | Desktop archives |
 | `bevy-explorer-headless-build.yml` | Reusable platform compilation; Windows and macOS run beside Linux smoke | Engine + sidecar archives; platform npm tarballs |
 | `bevy-explorer-headless.yml` | Publish the four validated platform packages after CI; explicit manual builds include Linux | Headless npm packages; manual prerelease |
+| `apis-sites-compile.yml` | Reusable compilation of the APIs and the Sites apps beside the web producer | Cache entries that the image builds restore |
 | `apis-sites-images.yml` | Reusable image builds after the web producer; publish after complete CI | Tested AMD64/ARM64 APIs and Sites images |
 | `bevy-explorer-images.yml` | Images from a successful main CI run | Web (Linux AMD64/ARM64), headless (Linux AMD64) |
 | `bevy-explorer-rollout-manual.yml` | Roll out a CDN version at `decentraland.zone/play` or `decentraland.org/play` by hand | Rollout records |
@@ -106,11 +111,13 @@ The build jobs (*Test Suite*, *Headless Smoke*, *Clippy*, the web build) start b
 format checks. When one of those checks fails on a pull request from this repository, the *Stop the build jobs*
 job cancels the run; a pull request from a fork runs to the end, because its token cannot cancel a run.
 
-Image builds use `needs` to start after the selected web producer completes. GitHub holds the
-job without allocating a runner; imports and publication receipts use `--wait 0`. This moves
-API compilation after the web producer too, so mixed backend/engine edits need elapsed-time
-measurement as well as runner-minute measurement. Backend-only edits have no web dependency
-work to wait for. Manual/tag image builds require an already available matching producer.
+The *APIs + Sites compile* job starts beside the web producer. It compiles the APIs and the Sites
+apps and saves them to the Actions cache; it reads nothing from the web build. Image builds use
+`needs` to start after that job and after the selected web producer completes. GitHub holds the
+job without allocating a runner; imports and publication receipts use `--wait 0`. The image build
+restores the compiled packages, so it imports the web build and assembles the images. When the
+compile job saved no entry (a rerun, or a `main` that moved before the save), the image build
+compiles the packages itself. Manual/tag image builds require an already available matching producer.
 
 ### Bevy Explorer CI status
 

@@ -1,0 +1,41 @@
+/* Figma: Spinner & Skeleton Animation / Spinner: a 30 px ring, a 4 px track at 40 % and a quarter arc
+   in the primary colour; the four Figma steps are the arc's quarter turns. */
+@layer dcl.components {
+  .root {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 30px;
+    height: 30px;
+    border: 4px solid;
+    border-radius: var(--dcl-radius-full);
+    border-top-color: var(--dcl-primary-primary);
+    transform: rotate(45deg);
+    animation: turn 1s linear infinite;
+  }
+
+  .dark {
+    border-right-color: var(--dcl-transparencies-black-40);
+    border-bottom-color: var(--dcl-transparencies-black-40);
+    border-left-color: var(--dcl-transparencies-black-40);
+  }
+
+  .light {
+    border-right-color: var(--dcl-transparencies-white-40);
+    border-bottom-color: var(--dcl-transparencies-white-40);
+    border-left-color: var(--dcl-transparencies-white-40);
+  }
+
+  /* Not in Figma. The ring is the only sign of progress, so it keeps turning under reduced motion, at a
+     quarter of the speed: one turn in 4 s. */
+  @media (prefers-reduced-motion: reduce) {
+    .root {
+      animation-duration: 4s;
+    }
+  }
+}
+
+@keyframes turn {
+  to {
+    transform: rotate(405deg);
+  }
+}

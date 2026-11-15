@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -20,6 +20,10 @@ function identity(signer: string, daysLeft: number): AuthIdentity {
   };
 }
 
+// The first load of the session module on a busy machine outlasts a test's time limit; later loads reuse it.
+beforeAll(async () => {
+  await import("./session");
+}, 60_000);
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();

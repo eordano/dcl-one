@@ -1372,6 +1372,10 @@ pub async fn serve(
             social: &social,
             builder,
             camera_reel,
+            scene_proxy: Arc::new(crate::scene_proxy::SceneProxy::new(
+                config.node.scene_proxy_hosts.clone(),
+                http_client.clone(),
+            )),
             ops_admin,
             snapshot_gen,
         },

@@ -45,10 +45,18 @@ def server_error(stderr):
     return re.search(r'\bHTTP (?:500|502|503|504)\b', stderr)
 
 
+def rate_limited(stderr):
+    # gh reports "API rate limit exceeded ... (HTTP 403)" and "... secondary rate limit ... (HTTP 403)".
+    # A 403 without those words is a permission error and stays final.
+    return re.search(r'\bHTTP 429\b', stderr) or (
+        re.search(r'\bHTTP 403\b', stderr) and re.search(r'rate limit', stderr, re.IGNORECASE))
+
+
 def read(request, deadline=None, limit=60, attempts=None, transient=server_error):
     # Retry reads within the caller's existing wait budget. Non-waiting imports
     # and final publication checks get only four retries; `attempts` caps the
-    # tries in either mode. No writes are repeated.
+    # tries in either mode. No writes are repeated. A rate limit backs off from
+    # one minute, a server error from two seconds; both double up to a cap.
     attempt = 0
     while True:
         timeout = limit if deadline is None else min(limit, deadline - time.monotonic())
@@ -62,12 +70,14 @@ def read(request, deadline=None, limit=60, attempts=None, transient=server_error
                 print(stderr, file=sys.stderr, end='')
             exhausted = (attempts is not None and attempt + 1 >= attempts) or (
                 attempt >= 4 if deadline is None else time.monotonic() >= deadline)
-            if exhausted or not (isinstance(exc, subprocess.TimeoutExpired) or transient(stderr)):
+            limited = isinstance(exc, subprocess.CalledProcessError) and rate_limited(stderr)
+            if exhausted or not (isinstance(exc, subprocess.TimeoutExpired) or limited or transient(stderr)):
                 raise
-            delay = min(30, 2 ** min(attempt + 1, 5))
+            delay = min(240, 60 * 2 ** min(attempt, 2)) if limited else min(30, 2 ** min(attempt + 1, 5))
             if deadline is not None:
                 delay = min(delay, max(0, deadline - time.monotonic()))
-            print(f'Transient GitHub read failure; retry {attempt + 1} in {delay:g}s.', flush=True)
+            cause = 'GitHub rate limit' if limited else 'Transient GitHub read failure'
+            print(f'{cause}; retry {attempt + 1} in {delay:g}s.', flush=True)
             time.sleep(delay)
             if deadline is not None and time.monotonic() >= deadline:
                 raise
@@ -225,10 +235,18 @@ def producer_ready(job):
             and uploads[0].get('status') == 'completed' and uploads[0].get('conclusion') == 'success')
 
 
+class ProducerEnded(Exception):
+    """The producer job of a run under way ended without an upload; the run can go on for other jobs."""
+
+
 def producer_record(run, pr=None, deadline=None):
     jobs = api(f'actions/runs/{run["id"]}/jobs?per_page=100', deadline)
     selected = [job for job in jobs['jobs'] if job['name'] == PRODUCER]
-    if jobs['total_count'] != len(jobs['jobs']) or len(selected) != 1 or not producer_ready(selected[0]):
+    if jobs['total_count'] != len(jobs['jobs']) or len(selected) != 1:
+        return None
+    if not producer_ready(selected[0]):
+        if run['status'] != 'completed' and selected[0]['status'] == 'completed':
+            raise ProducerEnded(selected[0]['conclusion'])
         return None
     revision = pr['merge'] if run['event'] == 'pull_request' else run['head_sha']
     data = api(f'actions/runs/{run["id"]}/artifacts?per_page=100', deadline)
@@ -324,60 +342,94 @@ def fetch(wait=0, production=False, receipt=None):
     # The newest Bevy run of this commit and why it cannot supply the build: named for a rerun.
     head = pr['head'] if pr else os.environ.get('GITHUB_SHA')
     newest, hint = 0, None
-    candidates = workflow_runs(read_deadline)
+    # History is read newest first, and only as far as the search needs it.
+    history = workflow_runs(read_deadline)
+    candidates, swept, pending = history, False, set()
     while True:
-        pending = set()
-        for run in candidates:
-            # GitHub reuses the run ID on rerun; only this attempt was checked.
-            attempt = (run['id'], run['run_attempt'])
-            if not trusted(run, pr) or attempt in checked:
-                continue
-            failed = run['status'] == 'completed' and run['conclusion'] != 'success'
-            if match_inputs and run['head_sha'] == head and run['id'] >= newest:
-                # A rerun or a newer run of the commit, under way or succeeded, replaces an older failure.
-                newest = run['id']
-                hint = f'did not succeed: {run["id"]} ({run["conclusion"]})' if failed else None
-            if failed:
-                checked.add(attempt)
-                continue
-            revision = pr['merge'] if run['event'] == 'pull_request' else run['head_sha']
-            if revision not in keys:
-                keys[revision] = inputs_at(revision)
-            if keys[revision] is None or (match_inputs and keys[revision] != expected):
-                checked.add(attempt)
-                continue
-            # The tree's own inputs are verified as such; another main build (a change
-            # that touches no engine input) against the commit that built it.
-            producer = None if keys[revision] == expected else revision
-            try:
-                if run['status'] != 'completed':
-                    if not production or receipt is not None:
+        seen, pending, paused, expired = pending, set(), False, False
+        try:
+            for run in candidates:
+                # GitHub reuses the run ID on rerun; only this attempt was checked.
+                attempt = (run['id'], run['run_attempt'])
+                if not trusted(run, pr) or attempt in checked:
+                    continue
+                failed = run['status'] == 'completed' and run['conclusion'] != 'success'
+                if match_inputs and run['head_sha'] == head and run['id'] >= newest:
+                    # A rerun or a newer run of the commit, under way or succeeded, replaces an older failure.
+                    newest = run['id']
+                    hint = (f'The Bevy CI run of this commit did not succeed: {run["id"]} ({run["conclusion"]}). '
+                            'Rerun it, then this job. ') if failed else None
+                if failed:
+                    checked.add(attempt)
+                    continue
+                revision = pr['merge'] if run['event'] == 'pull_request' else run['head_sha']
+                if revision not in keys:
+                    keys[revision] = inputs_at(revision)
+                if keys[revision] is None or (match_inputs and keys[revision] != expected):
+                    checked.add(attempt)
+                    continue
+                # The tree's own inputs are verified as such; another main build (a change
+                # that touches no engine input) against the commit that built it.
+                producer = None if keys[revision] == expected else revision
+                try:
+                    if run['status'] != 'completed':
+                        if not production or receipt is not None:
+                            result = download_run(run, pr, production, receipt, read_deadline, producer=producer)
+                            if result:
+                                print(f'Preparation import: web artifact uploaded in Bevy run {run["id"]}; '
+                                      'remaining CI jobs are still running.', flush=True)
+                                return result
+                        pending.add(run['id'])
+                        if candidates is history and match_inputs and time.monotonic() < deadline:
+                            # This run builds exactly these inputs, so poll it now. Each older run costs
+                            # a read and a shallow fetch; they are read only if this one gives no build.
+                            paused = True
+                            break
+                        continue
+                    checked.add(attempt)
+                    if run['conclusion'] == 'success':
                         result = download_run(run, pr, production, receipt, read_deadline, producer=producer)
                         if result:
-                            print(f'Preparation import: web artifact uploaded in Bevy run {run["id"]}; '
-                                  'remaining CI jobs are still running.', flush=True)
                             return result
-                    pending.add(run['id'])
-                    continue
-                checked.add(attempt)
-                if run['conclusion'] == 'success':
-                    result = download_run(run, pr, production, receipt, read_deadline, producer=producer)
-                    if result:
-                        return result
-                    if run['id'] == newest:
-                        hint = f'succeeded, but its web artifact is unavailable: {run["id"]}'
-            except ValueError as exc:
-                if producer is None:
-                    raise  # the build of these very inputs is corrupt or tampered with
-                # Usually main moved the HUD contract after this build and an older build
-                # still fits; a digest or archive error on a trusted artifact must be seen.
-                print(f'::warning::Skipping Bevy run {run["id"]} ({revision[:8]}): {exc}', flush=True)
-                checked.add(attempt)
-        if not pending or time.monotonic() >= deadline:
-            recovery = ('Refresh main with: gh workflow run bevy-explorer-ci.yml --ref main. '
-                        'Wait for its successful web build, then retry with matching inputs. ')
-            if hint:
-                recovery = f'The Bevy CI run of this commit {hint}. Rerun it, then this job. ' + recovery
+                        if run['id'] == newest:
+                            hint = ('The Bevy CI run of this commit succeeded, but its web artifact is '
+                                    f'unavailable: {run["id"]}. Rerun it, then this job. ')
+                except ProducerEnded as ended:
+                    # A consumer job of the same run waits here: without this the wait lasts to the deadline.
+                    checked.add(attempt)
+                    if run['id'] == newest and str(ended) == 'skipped':
+                        # The run decided that its engine inputs did not change: a rerun skips again.
+                        hint = f'The Bevy CI run of this commit skipped the web build: {run["id"]}. '
+                    elif run['id'] == newest:
+                        hint = (f'The Bevy CI run of this commit did not upload a web build: {run["id"]} ({ended}). '
+                                'Rerun it, then this job. ')
+                except ValueError as exc:
+                    if producer is None:
+                        raise  # the build of these very inputs is corrupt or tampered with
+                    # Usually main moved the HUD contract after this build and an older build
+                    # still fits; a digest or archive error on a trusted artifact must be seen.
+                    print(f'::warning::Skipping Bevy run {run["id"]} ({revision[:8]}): {exc}', flush=True)
+                    checked.add(attempt)
+        except TimeoutError:
+            # The wait ended inside a read: name the runs last seen under way.
+            pending |= seen
+            expired = True
+        if candidates is history and not paused and not expired:
+            swept = True
+        if not pending and not swept and not expired:
+            # The run under way gave no build: go on with the older runs.
+            candidates = history
+            continue
+        if not pending or expired or time.monotonic() >= deadline:
+            recovery = hint or ''
+            if pending:
+                state = 'has not passed' if production and receipt is None else 'has not uploaded its web build'
+                limit = f'after the {wait} s wait' if wait > 0 else 'and this import does not wait'
+                recovery += (f'Bevy CI run {", ".join(map(str, sorted(pending)))} {state} {limit}. '
+                             'Rerun this job when it has. ')
+            else:
+                recovery += ('Refresh main with: gh workflow run bevy-explorer-ci.yml --ref main. '
+                             'Wait for its successful web build, then retry with matching inputs. ')
             if not production:
                 recovery += ('For local development, build with make bevy-web and use '
                              '--from-build apps/bevy-explorer/dist/web. ')

@@ -46,6 +46,9 @@
       "@noble/*": ["./node_modules/@noble/*"],
       // library/shop has no node_modules of its own: its packages resolve to this app's copy.
       "viem": ["./node_modules/viem"],
+      // The shared UI library, imported as source (docs/ui-standards.md, "Integration").
+      "@dcl/one-ui": ["../../library/ui/index.ts"],
+      "@dcl/one-ui/*": ["../../library/ui/*"],
       // The validation seam ui3 owns. Types always resolve to the checking
       // implementation: both expose the same surface, so either type-checks the
       // same, and this keeps zod's types reachable.

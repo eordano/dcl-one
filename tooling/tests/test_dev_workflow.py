@@ -82,6 +82,9 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         # The shards cover every test executable: the matrix lists 1 to n and the script gets i/n.
         self.assertIn('        shard: [1, 2, 3]\n', rust)
         self.assertIn('      CATALYST_TEST_SHARD: ${{ matrix.shard }}/3\n', rust)
+        # One of those shards runs the provisioned Archipelago tests; tooling/dev-regressions.py reads the setting.
+        self.assertIn("      CATALYST_TEST_PROVISIONED_SHARD: '2'\n", rust)
+        self.assertEqual(rust.count('CATALYST_TEST_PROVISIONED_SHARD:'), 1)
         # The dependency cache: the action prunes workspace output before saving, main writes, PRs read.
         self.assertNotIn('actions/cache', rust)
         cache = re.search(r'(?ms)^      - name: Restore the Rust dependency cache\n(.*?)(?=^      - |\Z)', rust).group(1)
@@ -261,6 +264,11 @@ class DevelopmentWorkflowTest(unittest.TestCase):
             {'id': 17, 'ref': 'refs/pull/11/merge', 'key': bevy + 'old'},
             {'id': 18, 'ref': 'refs/pull/11/merge', 'key': bevy + 'new'},
             {'id': 19, 'ref': 'refs/heads/main', 'key': 'v0-rust-e2e-scene-cli-scene-cli-Windows_NT-x64-only'},
+            {'id': 20, 'ref': 'refs/heads/main', 'key': 'bevy-web-unopt-v1-main-' + 'a' * 64 + '-' + '1' * 64},
+            {'id': 21, 'ref': 'refs/heads/main', 'key': 'bevy-web-unopt-v1-main-' + 'b' * 64 + '-' + '2' * 64},
+            {'id': 22, 'ref': 'refs/pull/11/merge', 'key': 'bevy-web-unopt-v1-pr-' + 'a' * 64},
+            {'id': 23, 'ref': 'refs/pull/11/merge', 'key': 'bevy-web-unopt-v1-pr-' + 'c' * 64},
+            {'id': 24, 'ref': 'refs/pull/10/merge', 'key': 'bevy-web-unopt-v1-pr-' + 'a' * 64},
         ]
         def api(args, **kwargs):
             if any(arg.endswith('/actions/caches') for arg in args):
@@ -283,6 +291,9 @@ class DevelopmentWorkflowTest(unittest.TestCase):
             'repos/decentraland/dcl-one/actions/caches/12',
             'repos/decentraland/dcl-one/actions/caches/15',
             'repos/decentraland/dcl-one/actions/caches/17',
+            'repos/decentraland/dcl-one/actions/caches/20',
+            'repos/decentraland/dcl-one/actions/caches/22',
+            'repos/decentraland/dcl-one/actions/caches/24',
         ])
         self.assertEqual(listing.call_count, 3, 'one state lookup per PR, regardless of cache count')
 

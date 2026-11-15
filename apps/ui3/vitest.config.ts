@@ -4,6 +4,8 @@ import react from "@vitejs/plugin-react";
 // @ts-expect-error -- plain JS helper, shared with the two vite configs so the
 import { validateAlias } from "./vite.validate.js";
 
+const ui = (file: string) => fileURLToPath(new URL("../../library/ui/" + file, import.meta.url));
+
 export default defineConfig({
   resolve: {
     alias: [
@@ -14,6 +16,8 @@ export default defineConfig({
       { find: "@hud-host", replacement: fileURLToPath(new URL("./src/play/host.ts", import.meta.url)) },
       { find: "@hud", replacement: fileURLToPath(new URL("../../library/ui/apps/hud", import.meta.url)) },
       { find: "@explorer-core", replacement: fileURLToPath(new URL("../../library/explorer-core", import.meta.url)) },
+      { find: /^@dcl\/one-ui$/, replacement: ui("index.ts") },
+      { find: /^@dcl\/one-ui\//, replacement: ui("") },
     ],
     // library/ has no node_modules of its own: viem, React and the testing packages the shared HUD's test
     // harness imports resolve to ui3's copies.

@@ -1,0 +1,60 @@
+/* Figma: Search Bar / SearchBar. The field follows decentraland.org's blog search (SearchInput);
+   where the reference and Figma differ, the reference wins and the comment names both values. */
+@layer dcl.components {
+  .root {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+
+  .input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: var(--dcl-space-12) 40px var(--dcl-space-12) var(--dcl-space-16);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--dcl-radius-sm); /* reference 8px, Figma radius-md 12px */
+    outline: none;
+    background-color: rgba(255, 255, 255, 0.05);
+    color: rgb(240, 240, 240);
+    /* The reference keeps the browser's control font (Arial, normal line height); Figma names body/md. */
+    font-family: Arial, sans-serif;
+    font-size: var(--dcl-font-size-button-lg);
+    line-height: normal;
+    letter-spacing: normal;
+    transition: all 200ms ease;
+  }
+
+  .input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .input:focus {
+    border-color: rgba(255, 255, 255, 0.25);
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .input:focus-visible {
+    outline: 2px solid var(--dcl-primary-primary);
+    outline-offset: 2px;
+  }
+
+  .clear {
+    position: absolute;
+    top: 50%;
+    right: var(--dcl-space-12);
+    padding: var(--dcl-space-4);
+    border: none;
+    background: none;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: var(--dcl-font-size-heading-2);
+    line-height: 1;
+    cursor: pointer;
+    transform: translateY(-50%);
+    transition: color 200ms ease;
+  }
+
+  .clear:hover {
+    color: rgb(240, 240, 240);
+  }
+}

@@ -206,6 +206,32 @@ def database_url(config, database='catalyst'):
     return f"postgresql://foundation:{config['password']}@127.0.0.1:{config['port'] + 3}/{database}"
 
 
+# Third-party services the scenes on this realm call from their workers: Genesis Plaza's fishing game's Colyseus
+# room and the marketing files bucket. The browser explorer's scene workers reach them through the node's
+# `/_scene/<host>` proxy (services/catalyst/src/scene_proxy.rs), as these hosts answer no CORS preflight.
+# This is the default: a stack names its own list under `scene_proxy_hosts` in settings.json (an empty list forwards
+# to no host).
+SCENE_PROXY_HOSTS = ('us-mia-43272b05.colyseus.cloud', 'marketing-files.decentraland.org')
+
+
+def scene_proxy_hosts(config):
+    hosts = config.get('scene_proxy_hosts', SCENE_PROXY_HOSTS)
+    if isinstance(hosts, str) or not all(isinstance(host, str) and host for host in hosts):
+        raise SystemExit('settings.json: scene_proxy_hosts is a list of host names')
+    return tuple(hosts)
+
+# The engine's headless avatar renderer, as `make bevy-avatar-render` leaves it (apps/bevy-explorer/build-avatar-render.py
+# writes the wrapper that carries its library path). Profile face and body images render here once it is built;
+# FOUNDATION_DEV_AVATAR_RENDER_BIN names one built elsewhere.
+AVATAR_RENDER_BIN = ROOT / 'apps/bevy-explorer/dist/avatar_render'
+
+
+def avatar_render_bin():
+    given = os.environ.get('FOUNDATION_DEV_AVATAR_RENDER_BIN')
+    path = Path(given).expanduser() if given else AVATAR_RENDER_BIN
+    return path if path.is_file() and os.access(path, os.X_OK) else None
+
+
 def livekit_ports(config):
     # LiveKit's signaling (HTTP and WebSocket), then its WebRTC TCP and UDP ports, in the stack's block.
     return config['port'] + 4, config['port'] + 5, config['port'] + 6
@@ -351,6 +377,7 @@ def runtime_env(config):
         'LIVEKIT_HOST': f'ws://127.0.0.1:{livekit_ports(config)[0]}',
         'LIVEKIT_API_KEY': config['LIVEKIT_API_KEY'], 'LIVEKIT_API_SECRET': config['LIVEKIT_API_SECRET'],
         'MODERATOR_TOKEN': config['MODERATOR_TOKEN'],
+        'SCENE_PROXY_HOSTS': ','.join(scene_proxy_hosts(config)),
         # The stack's own nats-server (the `nats` task). The API is the stack's one primary serve (FLEET_JOBS_ENABLED
         # stays on), so it serves /ws and its island subscriber turns Pulse's cluster feed into island credentials;
         # Pulse's heartbeat makes /about's comms block healthy; the realm advertises the connector, as deployed.
@@ -381,6 +408,9 @@ def runtime_env(config):
     })
     for domain in ('CONTENT', 'CREATE', 'DATA', 'SOCIAL', 'WORLDS', 'OPS'):
         env[f'{domain}_WRITES_ENABLED'] = 'true'
+    if renderer := avatar_render_bin():
+        env.update({'PROFILE_IMAGES_RENDER_ENABLED': 'true', 'PROFILE_IMAGES_RENDERER': 'bevy',
+                    'PROFILE_IMAGES_AVATAR_RENDER_BIN': str(renderer)})
     if origin := public(config):
         # Served behind a developer's TLS front at this origin: the realm advertises it, not loopback. The
         # front terminates TLS for Sites (which proxies the API routes), `/ws` to the API and `/rtc` to
@@ -427,8 +457,9 @@ def runtime_env(config):
             'ABGEN_UPSTREAM_AB_CDN': 'https://ab-cdn.decentraland.org',
             # Mirrored place and event images come from the upstream peers' content URLs.
             'MEDIA_CONVERT_REMOTE_SOURCES': 'true',
-            # Avatar faces of profiles this node holds no snapshot files of: no renderer
-            # runs here, so they come from the upstream service into the blob store.
+            # Avatar faces of profiles this node holds no snapshot files of come from the upstream
+            # service into the blob store: the only source until `make bevy-avatar-render` builds the
+            # renderer (avatar_render_bin), the last resort once it has.
             'PROFILE_IMAGES_ORIGIN_URL': 'https://profile-images.decentraland.org',
             # The Shop's catalogue: the marketplace mirrors and the NFT and LAND
             # indexes `catalyst posture show mirror` names, run by the index process.

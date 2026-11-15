@@ -2,11 +2,20 @@
 // reference, dcl-one and diff images and the structural differences, unexpected first.
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { referencePin, type ReferenceId } from "./paths.mts";
 import type { PageResult } from "./run.mts";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
-export type RunInfo = { recording: string; recordedAt: string; reference: string; dclOne: string; chromium: string; startedAt: string };
+export type RunInfo = { recording: string; recordedAt: string; references: Partial<Record<ReferenceId, string>>; dclOne: string; chromium: string; startedAt: string };
+
+/** `decentraland/shop`: the owner and name of a reference's pinned repository. */
+const repository = (id: ReferenceId) => new URL(referencePin(id).repository).pathname.slice(1).replace(/\.git$/, "");
+
+/** `decentraland/shop@3a322cf97490, decentraland/sites@17b3535a2690`: the references a run compared with. */
+export function referencesLabel(references: RunInfo["references"]): string {
+  return (Object.entries(references) as [ReferenceId, string][]).map(([id, rev]) => `${repository(id)}@${rev.slice(0, 12)}`).join(", ");
+}
 
 export function summaryText(results: PageResult[]): string {
   const ok = results.filter((r) => r.identical).length;
@@ -31,6 +40,8 @@ export function writeReport(dir: string, results: PageResult[], info: RunInfo): 
         return notes.length ? `<h4>${s} console</h4><pre>${esc(notes.join("\n"))}</pre>` : "";
       })
       .join("");
+    const failed = (["reference", "dcl-one"] as const).flatMap((s) => (r.sides[s].failed ?? []).map((f) => `${s}: ${f}`));
+    const failedNotes = failed.length ? `<h4>Responses with an error status</h4><pre>${esc(failed.join("\n"))}</pre>` : "";
     const misses = r.misses.length ? `<h4>Requests not in the recording</h4><pre>${esc([...new Set(r.misses.map((m) => `${m.side}: ${m.method} ${m.service} ${m.path}${m.query ? `?${m.query}` : ""}`))].join("\n"))}</pre>` : "";
     const bands = r.pixels.bands.length
       ? `<p class="bands">Where the pixels differ (rows, widest first): ${r.pixels.bands.map((b) => `y ${b.y0}–${b.y1} × x ${b.x0}–${b.x1} (${b.pixels} px)`).join("; ")}</p>`
@@ -49,7 +60,7 @@ ${declared.length ? `<ul class="declared">${declared.map((d) => `<li>${esc(d)}</
 <h3>Structural differences to fix</h3>
 ${unexpected.length ? `<pre class="lines">${esc(unexpected.map((d) => r.lines[r.structure.indexOf(d)]).join("\n"))}</pre>` : "<p>None.</p>"}
 ${expected.length ? `<details><summary>${expected.length} expected (declared deliberate differences)</summary><pre class="lines">${esc(expected.map((d) => r.lines[r.structure.indexOf(d)]).join("\n"))}</pre></details>` : ""}
-${sideNotes}${misses}
+${sideNotes}${misses}${failedNotes}
 </section>`;
   };
   const rows = results
@@ -69,7 +80,7 @@ pre{padding:8px;overflow:auto;max-height:420px;font-size:12px;white-space:pre-wr
 @media (max-width:700px){.shots{grid-template-columns:1fr}}
 </style></head><body>
 <h1>Shop parity: ${ok}/${results.length} page×viewport identical</h1>
-<p class="meta">Reference <code>decentraland/shop@${esc(info.reference.slice(0, 12))}</code> vs dcl-one <code>${esc(info.dclOne)}</code>, recording <code>${esc(info.recording)}</code> (${esc(info.recordedAt)}), Chromium <code>${esc(info.chromium)}</code>, run ${esc(info.startedAt)}. Both sides read the same recorded answers; pictures are deterministic placeholders.</p>
+<p class="meta">Reference <code>${esc(referencesLabel(info.references))}</code> vs dcl-one <code>${esc(info.dclOne)}</code>, recording <code>${esc(info.recording)}</code> (${esc(info.recordedAt)}), Chromium <code>${esc(info.chromium)}</code>, run ${esc(info.startedAt)}. Both sides read the same recorded answers; pictures are deterministic placeholders.</p>
 <table><thead><tr><th>Page</th><th>Viewport</th><th>Verdict</th><th>Pixels</th><th>Ratio</th><th>Structural</th></tr></thead><tbody>${rows}</tbody></table>
 ${results.map(section).join("\n")}
 </body></html>`;

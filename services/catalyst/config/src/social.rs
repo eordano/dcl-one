@@ -497,6 +497,16 @@ pub struct SocialConfig {
     #[arg(long, env = "PLATFORM_USER_MODERATORS", default_value = "")]
     pub platform_user_moderators: String,
 
+    /// Report evidence the node accepts in 24 hours from all wallets and
+    /// addresses, in MiB of declared size: the files it holds and, for a
+    /// quarter hour each, the files a presign declared. At the cap a presign
+    /// is refused and 0 accepts none; one client address takes at most a
+    /// sixteenth of it. The default is a policy, not a measurement: it
+    /// is how much store space the operator gives to reports a day, and no
+    /// load test or disk size produced it.
+    #[arg(long, env = "REPORT_EVIDENCE_DAILY_MIB", default_value_t = 2048)]
+    pub report_evidence_daily_mib: u32,
+
     /// Service token in front of the voice routes, the DM privacy patch and
     /// the world ban status; unset answers 503 on them.
     #[arg(long, env = "COMMS_GATEKEEPER_AUTH_TOKEN", hide_env_values = true)]

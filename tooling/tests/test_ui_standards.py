@@ -1,11 +1,13 @@
 import importlib.util
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location('ui_standards', Path(__file__).parents[1] / 'ui_standards.py')
+SCRIPT = Path(__file__).parents[1] / 'ui_standards.py'
+SPEC = importlib.util.spec_from_file_location('ui_standards', SCRIPT)
 ui_standards = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ui_standards)
 
@@ -99,6 +101,67 @@ class UiStandardsTest(unittest.TestCase):
     def test_added_lines_keep_lines_starting_with_plus(self):
         diff = '--- a/x.ts\n+++ b/x.ts\n@@ -0,0 +1,2 @@\n+++i\n+const a = 1\n'
         self.assertEqual(ui_standards.added_lines(diff), ['++i', 'const a = 1'])
+
+
+class TokensReportTest(unittest.TestCase):
+    LENGTHS = ui_standards.token_lengths(
+        '--dcl-space-8: 8px; --dcl-space-16: 16px; --dcl-radius-md: 12px; --dcl-font-size-body-md: 16px;')
+
+    def test_token_lengths_read_the_space_and_radius_tokens_only(self):
+        self.assertEqual(self.LENGTHS, {8.0, 12.0, 16.0})
+
+    def test_stylesheet_report_counts_literals_token_uses_and_drift(self):
+        css = ('/* no token for the hero: reference #0b0a0c */\n'
+               '.hero { background: #0b0a0c url("red.svg"); color: rgba(255, 255, 255, 0.6); border-color: white;\n'
+               '  padding: 16px 10px; border-radius: 12px; font-family: Inter, sans-serif; }\n'
+               '.card { color: var(--dcl-text-primary); gap: var(--dcl-space-8); outline: 1px solid transparent;\n'
+               '  white-space: nowrap; margin: 8px; content: "white"; }\n'
+               '@media (min-width: 768px) { .hero { padding: 0 16px; } }\n')
+        self.assertEqual(ui_standards.stylesheet_report(css, self.LENGTHS),
+                         {'colours': 3, 'lengths': 4, 'fonts': 1, 'tokens': 2, 'drift': 1})
+
+    def test_tokens_report_lists_each_stylesheet_and_the_totals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'a').mkdir()
+            (root / 'node_modules').mkdir()
+            (root / 'a' / 'A.module.css').write_text('.a { color: #fff; }')
+            (root / 'b.css').write_text('.b { gap: 8px; color: var(--dcl-text-primary); }')
+            (root / 'node_modules' / 'x.css').write_text('.x { color: red; }')
+            lines = ui_standards.tokens_report([str(root)], self.LENGTHS)
+            self.assertEqual(len(lines), 4)
+            self.assertIn('a/A.module.css', lines[1])
+            self.assertTrue(lines[3].startswith('total (2 files)'))
+            self.assertEqual(lines[3].split()[-5:], ['1', '1', '0', '1', '0'])
+            result = subprocess.run([sys.executable, str(SCRIPT), '--tokens', str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines()[-1].split()[-5:], ['1', '1', '0', '1', '0'])
+
+    def test_token_floor_counts_tokens_and_primitives_outside_comments(self):
+        primitives = ui_standards.primitive_names(':root { --ink-1: #fff; --panel: #000; /* --gone: 1px; */ }')
+        self.assertEqual(primitives, {'--ink-1', '--panel'})
+        text = '.a { color: var(--dcl-text-default); background: var(--panel); border-color: var(--own); }\n/* var(--ink-1) */'
+        self.assertEqual(ui_standards.floor_counts(text, primitives), {'tokens': 1, 'primitives': 1})
+
+    def test_token_floor_fails_on_fewer_tokens_or_more_primitives(self):
+        floor = {'a.css': {'tokens': 3, 'primitives': 1}}
+        self.assertEqual(ui_standards.floor_issues(floor, {'a.css': {'tokens': 4, 'primitives': 0}}), [])
+        self.assertEqual(len(ui_standards.floor_issues(floor, {'a.css': {'tokens': 2, 'primitives': 2}})), 2)
+        self.assertEqual(ui_standards.floor_issues({}, {'new.css': {'tokens': 0, 'primitives': 1}}),
+                         ['new.css: 1 uses of atoms/primitives.css properties, the ceiling is 0'])
+
+    def test_token_floor_fails_on_an_entry_whose_stylesheet_is_gone(self):
+        floor = {'moved.css': {'tokens': 3, 'primitives': 0}, 'kept.css': {'tokens': 1, 'primitives': 0}}
+        current = {'kept.css': {'tokens': 1, 'primitives': 0}, 'new.css': {'tokens': 0, 'primitives': 0}}
+        self.assertEqual(ui_standards.floor_issues(floor, current),
+                         ['moved.css: the floor records a stylesheet that is not there; run --write-token-floor'])
+
+    def test_recorded_floor_leaves_out_a_stylesheet_with_no_use(self):
+        current = {'a.css': {'tokens': 2, 'primitives': 0}, 'b.css': {'tokens': 0, 'primitives': 1},
+                   'none.css': {'tokens': 0, 'primitives': 0}}
+        recorded = ui_standards.recorded_floor(current)
+        self.assertEqual(sorted(recorded), ['a.css', 'b.css'])
+        self.assertEqual(ui_standards.floor_issues(recorded, current), [])
 
 
 class UiStandardsIntegrationTest(unittest.TestCase):

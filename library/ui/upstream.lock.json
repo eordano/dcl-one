@@ -741,7 +741,7 @@
           ]
         },
         "library/ui/figma/key-guard-allow.json": {
-          "sha256": "9e5e54389442a3e87443683c0d245596335319de69a33af05b2e76e36495d781",
+          "sha256": "99237e5eb3f5ee3066e1c0acfe701df5614105f6f45364409c3ef8ad884ef5cf",
           "fds": null,
           "deviation": "dcl-one-only"
         },

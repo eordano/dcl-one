@@ -1,0 +1,238 @@
+{
+  "apps/sites/src/features/components/chrome/routepending.css": {
+    "primitives": 11,
+    "tokens": 0
+  },
+  "apps/sites/src/features/creator-hub/scene-editor-place-items/device-preview.css": {
+    "primitives": 7,
+    "tokens": 0
+  },
+  "apps/sites/src/features/creator-hub/scene-editor-place-items/sdk-project.css": {
+    "primitives": 3,
+    "tokens": 0
+  },
+  "apps/sites/src/features/docs/docs.css": {
+    "primitives": 11,
+    "tokens": 0
+  },
+  "apps/sites/src/features/explorer/WorldScenes.module.css": {
+    "primitives": 4,
+    "tokens": 0
+  },
+  "apps/sites/src/features/explorer/event-management/EventManagement.module.css": {
+    "primitives": 14,
+    "tokens": 0
+  },
+  "apps/sites/src/features/social/submit-hangout/FeaturedAssetPicker.module.css": {
+    "primitives": 2,
+    "tokens": 0
+  },
+  "apps/sites/src/features/social/submit-hangout/HangoutAssociations.module.css": {
+    "primitives": 1,
+    "tokens": 0
+  },
+  "apps/ui3/src/explorer/pages/eventdetail.css": {
+    "primitives": 21,
+    "tokens": 0
+  },
+  "apps/ui3/src/explorer/pages/passport.css": {
+    "primitives": 25,
+    "tokens": 0
+  },
+  "apps/ui3/src/explorer/pages/placedetail.css": {
+    "primitives": 21,
+    "tokens": 0
+  },
+  "apps/ui3/src/explorer/pages/realmmap.css": {
+    "primitives": 14,
+    "tokens": 0
+  },
+  "apps/ui3/src/explorer/pages/social.css": {
+    "primitives": 3,
+    "tokens": 0
+  },
+  "apps/ui3/src/landings/pages/ldhomepage.css": {
+    "primitives": 5,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/components/itemcard.css": {
+    "primitives": 19,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/frames/accountmenu.css": {
+    "primitives": 8,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/frames/dcltopbar.css": {
+    "primitives": 25,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/frames/profilenavigation.css": {
+    "primitives": 3,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/frames/profiletablayout.css": {
+    "primitives": 12,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/frames/sitelayout.css": {
+    "primitives": 2,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/frames/siteschrome.css": {
+    "primitives": 31,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/siteshome.css": {
+    "primitives": 22,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stcastnotfound.css": {
+    "primitives": 3,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stcaststreamer.css": {
+    "primitives": 12,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stcastwatcher.css": {
+    "primitives": 13,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stcreatorhubdownload.css": {
+    "primitives": 8,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stcreatorhubdownloadsuccess.css": {
+    "primitives": 5,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stinvite.css": {
+    "primitives": 11,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stprofilecommunitiestab.css": {
+    "primitives": 15,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stprofilecreationstab.css": {
+    "primitives": 10,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stprofilemyassetstab.css": {
+    "primitives": 26,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stprofileoverviewtab.css": {
+    "primitives": 12,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stprofilephotostab.css": {
+    "primitives": 10,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stprofileplacestab.css": {
+    "primitives": 15,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stprofilereferralrewardstab.css": {
+    "primitives": 16,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/streport.css": {
+    "primitives": 11,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/streportsuccess.css": {
+    "primitives": 4,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stsocialcommunitydetail.css": {
+    "primitives": 18,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/ststorageenvironment.css": {
+    "primitives": 5,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/ststorageplayers.css": {
+    "primitives": 5,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/ststoragescene.css": {
+    "primitives": 12,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/ststorageselect.css": {
+    "primitives": 5,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stwhatson.css": {
+    "primitives": 20,
+    "tokens": 0
+  },
+  "apps/ui3/src/web/pages/stwhatsoncreateedithangout.css": {
+    "primitives": 13,
+    "tokens": 0
+  },
+  "library/ui/components/Button/Button.module.css": {
+    "primitives": 0,
+    "tokens": 47
+  },
+  "library/ui/components/CardActionButton/CardActionButton.module.css": {
+    "primitives": 0,
+    "tokens": 6
+  },
+  "library/ui/components/JumpInCTA/JumpInCTA.module.css": {
+    "primitives": 0,
+    "tokens": 25
+  },
+  "library/ui/components/NavBar/NavBar.module.css": {
+    "primitives": 0,
+    "tokens": 86
+  },
+  "library/ui/components/NavCreditsBalance/NavCreditsBalance.module.css": {
+    "primitives": 0,
+    "tokens": 4
+  },
+  "library/ui/components/NavMenuItem/NavMenuItem.module.css": {
+    "primitives": 0,
+    "tokens": 3
+  },
+  "library/ui/components/NavMenuTab/NavMenuTab.module.css": {
+    "primitives": 0,
+    "tokens": 9
+  },
+  "library/ui/components/NavNotificationsButton/NavNotificationsButton.module.css": {
+    "primitives": 0,
+    "tokens": 1
+  },
+  "library/ui/components/NavProfileButton/NavProfileButton.module.css": {
+    "primitives": 0,
+    "tokens": 1
+  },
+  "library/ui/components/PlaceCard/PlaceCard.module.css": {
+    "primitives": 0,
+    "tokens": 55
+  },
+  "library/ui/components/SearchBar/SearchBar.module.css": {
+    "primitives": 0,
+    "tokens": 9
+  },
+  "library/ui/components/Skeleton/Skeleton.module.css": {
+    "primitives": 0,
+    "tokens": 5
+  },
+  "library/ui/components/Spinner/Spinner.module.css": {
+    "primitives": 0,
+    "tokens": 8
+  },
+  "library/ui/components/Tabs/Tabs.module.css": {
+    "primitives": 0,
+    "tokens": 21
+  },
+  "library/ui/components/TabsBar/TabsBar.module.css": {
+    "primitives": 0,
+    "tokens": 5
+  }
+}
