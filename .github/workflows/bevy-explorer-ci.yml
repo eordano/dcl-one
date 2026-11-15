@@ -757,7 +757,11 @@ jobs:
       BEVY_SEGMENT_WRITE_KEY: ${{ vars.BEVY_SEGMENT_WRITE_KEY }}
       # Bevy Explorer / Benchmark refuses unoptimized web apps; while its fleet is off ('none'),
       # nothing measures a PR's, so PR builds skip wasm-opt.
-      BEVY_WEB_OPT: ${{ github.event_name == 'pull_request' && vars.BENCHMARK_ENABLED_RUNNERS == 'none' && 'unoptimized' || 'optimized' }}
+      # lab: every build here is unoptimized, as an upstream pull request build is.
+      BEVY_WEB_OPT: unoptimized
+      # lab: none = no target cache; main = the cache the default branch saved; pr = the cache
+      # this pull request saved. The head branch name selects the mode.
+      LAB_WASM_CACHE: ${{ github.event_name != 'pull_request' && 'main' || contains(github.head_ref, 'wasm-main') && 'main' || contains(github.head_ref, 'wasm-pr') && 'pr' || 'none' }}
       # A same-repo PR with the ci:preview label publishes under the pr-<n> dist-tag as a preview,
       # which the CI status comment links (label, then push or reopen); no PR job reads the
       # publication. Fork PRs have no secrets. oddish tags a main/master branch next whatever
@@ -823,7 +827,7 @@ jobs:
       # Main saves optimised builds (codegen-units 1). An unoptimised PR build compiles at 16
       # units, which changes every crate's hash, so that cache would serve it nothing.
       - name: Restore wasm target cache
-        if: steps.engine-cache.outputs.cache-matched-key == '' && env.BEVY_WEB_OPT != 'unoptimized'
+        if: steps.engine-cache.outputs.cache-matched-key == '' && env.LAB_WASM_CACHE != 'none'
         id: wasm-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -832,11 +836,11 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             rendering/bevy-explorer/source/target/
-          key: bevy-explorer-web-${{ hashFiles('rendering/bevy-explorer/source/Cargo.lock', 'rendering/bevy-explorer/source/Cargo.toml',
+          key: bevy-explorer-web-unopt-${{ env.LAB_WASM_CACHE == 'pr' && format('pr{0}-{1}-', github.event.pull_request.number, github.run_id) || 'main-' }}${{ hashFiles('rendering/bevy-explorer/source/Cargo.lock', 'rendering/bevy-explorer/source/Cargo.toml',
             'rendering/bevy-explorer/source/.cargo/config.toml', 'rendering/bevy-explorer/patches/**', 'rendering/bevy-explorer/vendor/**') }}
-          restore-keys: bevy-explorer-web-
+          restore-keys: bevy-explorer-web-unopt-${{ env.LAB_WASM_CACHE == 'pr' && format('pr{0}-', github.event.pull_request.number) || 'main-' }}
       - name: Restore the rebuilt Bevy tree's cached file times
-        if: steps.engine-cache.outputs.cache-matched-key == '' && env.BEVY_WEB_OPT != 'unoptimized'
+        if: steps.engine-cache.outputs.cache-matched-key == '' && env.LAB_WASM_CACHE != 'none'
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" restore target
       - name: Install the web build tools from the flake
         if: steps.engine-cache.outputs.cache-matched-key == ''
@@ -851,10 +855,10 @@ jobs:
       - name: Test the checked shared-input generator
         run: npm run test:shared-inputs --prefix react-web
       - name: Record the rebuilt Bevy tree's file times for the cache
-        if: steps.engine-cache.outputs.cache-matched-key == '' && env.BEVY_WEB_OPT != 'unoptimized'
+        if: steps.engine-cache.outputs.cache-matched-key == '' && env.LAB_WASM_CACHE != 'none'
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" record target
       - name: Save wasm target cache
-        if: github.ref == 'refs/heads/main' && steps.engine-cache.outputs.cache-matched-key == '' && steps.wasm-cache.outputs.cache-hit != 'true'
+        if: ((github.ref == 'refs/heads/main' && env.LAB_WASM_CACHE == 'main') || env.LAB_WASM_CACHE == 'pr') && steps.engine-cache.outputs.cache-matched-key == '' && steps.wasm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

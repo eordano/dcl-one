@@ -218,8 +218,7 @@ class WorkflowTest(unittest.TestCase):
                       '          echo "key=$key" >> "$GITHUB_OUTPUT"\n', job)
         self.assertIn("      - name: Save tested compiled engine\n"
                       "        if: steps.engine-cache.outputs.cache-matched-key == ''\n", job)
-        self.assertIn("      BEVY_WEB_OPT: ${{ github.event_name == 'pull_request' && "
-                      "vars.BENCHMARK_ENABLED_RUNNERS == 'none' && 'unoptimized' || 'optimized' }}\n", job)
+        self.assertIn("      BEVY_WEB_OPT: unoptimized\n", job)  # lab: every build is unoptimized
         self.assertIn('          key: bevy-engine-v1-${{ env.BEVY_WEB_OPT }}-${{ steps.engine-inputs.outputs.key }}\n'
                       '          restore-keys: bevy-engine-v1-optimized-${{ steps.engine-inputs.outputs.key }}\n',
                       job)
