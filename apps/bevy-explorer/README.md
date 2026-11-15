@@ -14,8 +14,12 @@ CI uses `build-web.py --shared-build`: Cargo compiles the engine and scene runti
 then the lockfile-matched wasm-bindgen emits two separate modules. `install-web-tools.py`
 checks the release archives' SHA-256 and the binding generator's version against Cargo.lock.
 Optimized builds retain the release compilation settings and run wasm-opt. Unoptimized PR
-builds use 16 codegen units; the larger modules trade download size for compilation speed, and
-they skip the wasm target cache, which main's optimized builds fill with 1-unit artifacts.
+builds use 16 codegen units; the larger modules trade download size for compilation speed. The
+two settings give every crate a different hash, so each has its own wasm target cache. Main
+fills the unoptimized one in the job `web-pr-target`, which runs `build-web.py --no-opt
+--target-only` (the Cargo steps alone: the two modules and the bindings test build) and saves
+one entry for each set of engine inputs. A PR restores main's entry; when main has none for the
+PR's dependencies, the PR saves one entry of its own, once.
 Linux web CI takes protoc, clang 21, pkg-config and ALSA/udev development outputs from
 the flake's cached `bevy-web-tools` package and installs no apt build dependencies. Its
 pkg-config search path points to that package. Native Linux packaging retains distribution

@@ -243,6 +243,36 @@ class EngineCacheTests(unittest.TestCase):
         self.assertEqual(meta['build_revision'], 'b' * 40)
         self.assertTrue(meta['optimized'])
 
+    def test_target_only_runs_the_cargo_steps_of_a_shared_build_and_nothing_else(self):
+        calls = []
+
+        def command(*args, **kwargs):
+            calls.append((args, kwargs.get('env') or {}))
+
+        def run(*flags):
+            calls.clear()
+            with patch.object(build, 'ROOT', self.root), patch.object(build, 'SOURCE', self.source), \
+                    patch.object(build, 'run', side_effect=command), \
+                    patch.object(sys, 'argv', ['build-web.py', *flags]):
+                build.main()
+            return [args for args, _ in calls]
+
+        cargo = ('cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown',
+                 '--lib', '-p', 'decentra-bevy', '-p', 'dcl_scene_wasm', '--no-default-features',
+                 '--features=decentra-bevy/livekit,decentra-bevy/social')
+        rebuild = (sys.executable, str(self.root / 'tooling/patched-sources.py'), 'materialise', '--quiet')
+        # The bindings script compiles a test build in the same target.
+        bindings = ('bash', './scripts/gen-ts-bindings.sh')
+        self.assertEqual(run('--no-opt', '--target-only'), [rebuild, cargo, bindings])
+        # The settings Cargo hashes are the ones of a pull request's shared build.
+        environment = calls[1][1]
+        self.assertEqual(environment['CARGO_PROFILE_RELEASE_CODEGEN_UNITS'], '16')
+        self.assertEqual(environment['RUSTUP_TOOLCHAIN'], 'nightly-2026-04-15')
+        self.assertEqual(run('--target-only'), [rebuild, cargo, bindings])
+        self.assertNotIn('CARGO_PROFILE_RELEASE_CODEGEN_UNITS', calls[1][1])
+        # The compiled modules of an earlier build stay: this mode packs no engine.
+        self.assertTrue((self.source / 'deploy/web/engine/pkg/webgpu_build_bg.wasm').exists())
+
 
 if __name__ == '__main__':
     unittest.main()
