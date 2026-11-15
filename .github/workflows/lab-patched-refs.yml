@@ -1,0 +1,24 @@
+name: Lab / patched refs token
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/lab-patched-refs.yml
+
+permissions:
+  contents: write
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Push one parentless commit under refs/patched with the workflow token
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git init -q lab && cd lab
+          tree=$(git mktree </dev/null)
+          commit=$(printf 'tree %s\nauthor lab <lab@invalid> 0 +0000\ncommitter lab <lab@invalid> 0 +0000\n\nlab token test\n' "$tree" | git hash-object -t commit -w --stdin)
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" "$commit:refs/patched/lab-token-test"
+          git ls-remote "https://github.com/${GITHUB_REPOSITORY}" 'refs/patched/lab-token-test'

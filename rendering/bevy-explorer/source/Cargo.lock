@@ -1622,6 +1622,7 @@ dependencies = [
 [[package]]
 name = "bevy"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_internal",
  "tracing",
@@ -1630,6 +1631,7 @@ dependencies = [
 [[package]]
 name = "bevy_a11y"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "accesskit",
  "bevy_app",
@@ -1642,6 +1644,7 @@ dependencies = [
 [[package]]
 name = "bevy_animation"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -1674,6 +1677,7 @@ dependencies = [
 [[package]]
 name = "bevy_app"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_derive",
  "bevy_ecs",
@@ -1696,6 +1700,7 @@ dependencies = [
 [[package]]
 name = "bevy_asset"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "async-broadcast",
  "async-fs",
@@ -1737,8 +1742,9 @@ dependencies = [
 [[package]]
 name = "bevy_asset_macros"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -1747,6 +1753,7 @@ dependencies = [
 [[package]]
 name = "bevy_atmosphere"
 version = "0.13.0"
+source = "git+https://github.com/eordano/dcl-one?rev=13e206f516ea7f5f337598c0f695574a998cd515#13e206f516ea7f5f337598c0f695574a998cd515"
 dependencies = [
  "bevy",
  "bevy_atmosphere_macros",
@@ -1756,6 +1763,7 @@ dependencies = [
 [[package]]
 name = "bevy_atmosphere_macros"
 version = "0.8.0"
+source = "git+https://github.com/eordano/dcl-one?rev=13e206f516ea7f5f337598c0f695574a998cd515#13e206f516ea7f5f337598c0f695574a998cd515"
 dependencies = [
  "bevy_macro_utils 0.16.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proc-macro-crate",
@@ -1767,6 +1775,7 @@ dependencies = [
 [[package]]
 name = "bevy_color"
 version = "0.16.2"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_math",
  "bevy_reflect",
@@ -1781,6 +1790,7 @@ dependencies = [
 [[package]]
 name = "bevy_console"
 version = "0.14.0"
+source = "git+https://github.com/eordano/dcl-one?rev=127facdada34f9a91591b8971ba7caba9f8f2f91#127facdada34f9a91591b8971ba7caba9f8f2f91"
 dependencies = [
  "ansi-parser",
  "bevy",
@@ -1794,6 +1804,7 @@ dependencies = [
 [[package]]
 name = "bevy_console_derive"
 version = "0.5.0"
+source = "git+https://github.com/eordano/dcl-one?rev=127facdada34f9a91591b8971ba7caba9f8f2f91#127facdada34f9a91591b8971ba7caba9f8f2f91"
 dependencies = [
  "better-bae",
  "proc-macro2",
@@ -1804,6 +1815,7 @@ dependencies = [
 [[package]]
 name = "bevy_core_pipeline"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -1832,8 +1844,9 @@ dependencies = [
 [[package]]
 name = "bevy_derive"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -1842,6 +1855,7 @@ dependencies = [
 [[package]]
 name = "bevy_diagnostic"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -1867,6 +1881,7 @@ dependencies = [
 [[package]]
 name = "bevy_ecs"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "arrayvec",
  "bevy_ecs_macros",
@@ -1894,8 +1909,9 @@ dependencies = [
 [[package]]
 name = "bevy_ecs_macros"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -1904,6 +1920,7 @@ dependencies = [
 [[package]]
 name = "bevy_ecss"
 version = "0.7.0"
+source = "git+https://github.com/eordano/dcl-one?rev=4febe772d4754ef495fd6da8529b3330ad51c377#4febe772d4754ef495fd6da8529b3330ad51c377"
 dependencies = [
  "ahash",
  "bevy",
@@ -1916,14 +1933,16 @@ dependencies = [
 [[package]]
 name = "bevy_encase_derive"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "encase_derive_impl",
 ]
 
 [[package]]
 name = "bevy_gilrs"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -1939,6 +1958,7 @@ dependencies = [
 [[package]]
 name = "bevy_gizmos"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -1962,8 +1982,9 @@ dependencies = [
 [[package]]
 name = "bevy_gizmos_macros"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -1972,6 +1993,7 @@ dependencies = [
 [[package]]
 name = "bevy_gltf"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "base64 0.22.1",
  "bevy_animation",
@@ -2006,6 +2028,7 @@ dependencies = [
 [[package]]
 name = "bevy_image"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2033,6 +2056,7 @@ dependencies = [
 [[package]]
 name = "bevy_input"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -2050,6 +2074,7 @@ dependencies = [
 [[package]]
 name = "bevy_input_focus"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -2064,6 +2089,7 @@ dependencies = [
 [[package]]
 name = "bevy_internal"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_a11y",
  "bevy_animation",
@@ -2109,6 +2135,7 @@ dependencies = [
 [[package]]
 name = "bevy_kira_audio"
 version = "0.23.0"
+source = "git+https://github.com/eordano/dcl-one?rev=6af5659aeb901c35c53280bf708b93f200c83f03#6af5659aeb901c35c53280bf708b93f200c83f03"
 dependencies = [
  "anyhow",
  "bevy",
@@ -2123,6 +2150,7 @@ dependencies = [
 [[package]]
 name = "bevy_log"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "android_log-sys",
  "bevy_app",
@@ -2140,17 +2168,6 @@ dependencies = [
 [[package]]
 name = "bevy_macro_utils"
 version = "0.16.1"
-dependencies = [
- "parking_lot",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
- "toml_edit 0.22.27",
-]
-
-[[package]]
-name = "bevy_macro_utils"
-version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "052eeebcb8e7e072beea5031b227d9a290f8a7fbbb947573ab6ec81df0fb94be"
 dependencies = [
@@ -2162,8 +2179,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_macro_utils"
+version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
+dependencies = [
+ "parking_lot",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "toml_edit 0.22.27",
+]
+
+[[package]]
 name = "bevy_math"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "approx",
  "bevy_reflect",
@@ -2182,6 +2212,7 @@ dependencies = [
 [[package]]
 name = "bevy_mesh"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_asset",
  "bevy_derive",
@@ -2205,6 +2236,7 @@ dependencies = [
 [[package]]
 name = "bevy_mikktspace"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "glam 0.29.3",
 ]
@@ -2212,6 +2244,7 @@ dependencies = [
 [[package]]
 name = "bevy_pbr"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2244,6 +2277,7 @@ dependencies = [
 [[package]]
 name = "bevy_picking"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2267,6 +2301,7 @@ dependencies = [
 [[package]]
 name = "bevy_platform"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -2283,10 +2318,12 @@ dependencies = [
 [[package]]
 name = "bevy_ptr"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 
 [[package]]
 name = "bevy_reflect"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "assert_type_match",
  "bevy_platform",
@@ -2312,8 +2349,9 @@ dependencies = [
 [[package]]
 name = "bevy_reflect_derive"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2323,6 +2361,7 @@ dependencies = [
 [[package]]
 name = "bevy_remote"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -2344,6 +2383,7 @@ dependencies = [
 [[package]]
 name = "bevy_render"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "async-channel 2.5.0",
  "bevy_app",
@@ -2398,8 +2438,9 @@ dependencies = [
 [[package]]
 name = "bevy_render_macros"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2408,6 +2449,7 @@ dependencies = [
 [[package]]
 name = "bevy_scene"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2427,6 +2469,7 @@ dependencies = [
 [[package]]
 name = "bevy_simple_text_input"
 version = "0.11.1"
+source = "git+https://github.com/eordano/dcl-one?rev=8430ab657796c65612ed63fbe53606405ec5c1a4#8430ab657796c65612ed63fbe53606405ec5c1a4"
 dependencies = [
  "bevy",
  "copypwasmta",
@@ -2437,6 +2480,7 @@ dependencies = [
 [[package]]
 name = "bevy_sprite"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2463,6 +2507,7 @@ dependencies = [
 [[package]]
 name = "bevy_state"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -2477,8 +2522,9 @@ dependencies = [
 [[package]]
 name = "bevy_state_macros"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
- "bevy_macro_utils 0.16.1",
+ "bevy_macro_utils 0.16.1 (git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2487,6 +2533,7 @@ dependencies = [
 [[package]]
 name = "bevy_tasks"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "async-channel 2.5.0",
  "async-executor",
@@ -2509,6 +2556,7 @@ dependencies = [
 [[package]]
 name = "bevy_text"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2537,6 +2585,7 @@ dependencies = [
 [[package]]
 name = "bevy_time"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -2550,6 +2599,7 @@ dependencies = [
 [[package]]
 name = "bevy_transform"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
@@ -2566,6 +2616,7 @@ dependencies = [
 [[package]]
 name = "bevy_ui"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "accesskit",
  "bevy_a11y",
@@ -2600,6 +2651,7 @@ dependencies = [
 [[package]]
 name = "bevy_utils"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "bevy_platform",
  "thread_local",
@@ -2608,6 +2660,7 @@ dependencies = [
 [[package]]
 name = "bevy_window"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "android-activity",
  "bevy_app",
@@ -2626,6 +2679,7 @@ dependencies = [
 [[package]]
 name = "bevy_winit"
 version = "0.16.1"
+source = "git+https://github.com/eordano/dcl-one?rev=ae8e2e2b5d53ee686ab1f90311107addecc82ff5#ae8e2e2b5d53ee686ab1f90311107addecc82ff5"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -3776,6 +3830,7 @@ dependencies = [
 [[package]]
 name = "copypwasmta"
 version = "0.1.0"
+source = "git+https://github.com/eordano/dcl-one?rev=2e6e4801b3e97c1c9f93445770afe74841b7b987#2e6e4801b3e97c1c9f93445770afe74841b7b987"
 dependencies = [
  "async-trait",
  "clipboard-win",
@@ -4569,6 +4624,7 @@ dependencies = [
 [[package]]
 name = "deno_console"
 version = "0.168.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "deno_core",
 ]
@@ -4576,6 +4632,7 @@ dependencies = [
 [[package]]
 name = "deno_core"
 version = "0.307.0"
+source = "git+https://github.com/eordano/dcl-one?rev=9090ec421a3fd73af2aeae13214b5aed695ed532#9090ec421a3fd73af2aeae13214b5aed695ed532"
 dependencies = [
  "anyhow",
  "bincode",
@@ -4612,6 +4669,7 @@ checksum = "a13951ea98c0a4c372f162d669193b4c9d991512de9f2381dd161027f34b26b1"
 [[package]]
 name = "deno_fetch"
 version = "0.192.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "base64 0.21.7",
  "bytes",
@@ -4656,6 +4714,7 @@ dependencies = [
 [[package]]
 name = "deno_net"
 version = "0.160.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "deno_core",
  "deno_permissions",
@@ -4672,6 +4731,7 @@ dependencies = [
 [[package]]
 name = "deno_ops"
 version = "0.183.0"
+source = "git+https://github.com/eordano/dcl-one?rev=9090ec421a3fd73af2aeae13214b5aed695ed532#9090ec421a3fd73af2aeae13214b5aed695ed532"
 dependencies = [
  "proc-macro-rules",
  "proc-macro2",
@@ -4685,6 +4745,7 @@ dependencies = [
 [[package]]
 name = "deno_permissions"
 version = "0.28.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "deno_core",
  "deno_terminal",
@@ -4710,6 +4771,7 @@ dependencies = [
 [[package]]
 name = "deno_tls"
 version = "0.155.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "deno_core",
  "deno_native_certs",
@@ -4736,6 +4798,7 @@ dependencies = [
 [[package]]
 name = "deno_url"
 version = "0.168.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "deno_core",
  "urlpattern",
@@ -4744,6 +4807,7 @@ dependencies = [
 [[package]]
 name = "deno_web"
 version = "0.199.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "async-trait",
  "base64-simd 0.8.0",
@@ -4761,6 +4825,7 @@ dependencies = [
 [[package]]
 name = "deno_webidl"
 version = "0.168.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "deno_core",
 ]
@@ -4768,6 +4833,7 @@ dependencies = [
 [[package]]
 name = "deno_websocket"
 version = "0.173.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "bytes",
  "deno_core",
@@ -4789,6 +4855,7 @@ dependencies = [
 [[package]]
 name = "deno_webstorage"
 version = "0.163.0"
+source = "git+https://github.com/eordano/dcl-one?rev=1d57af6ac3d509986e57023e242438425254d06f#1d57af6ac3d509986e57023e242438425254d06f"
 dependencies = [
  "deno_core",
  "deno_web",
@@ -4884,6 +4951,7 @@ dependencies = [
 [[package]]
 name = "device-info"
 version = "0.1.1"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "core-foundation 0.10.1",
  "jni 0.21.1",
@@ -5069,10 +5137,12 @@ dependencies = [
 [[package]]
 name = "dpi"
 version = "0.1.1"
+source = "git+https://github.com/eordano/dcl-one?rev=5b1638e035fd4af6b7442cb6e170e48c352b7b28#5b1638e035fd4af6b7442cb6e170e48c352b7b28"
 
 [[package]]
 name = "draco-nd-vector"
 version = "0.1.0-alpha.9"
+source = "git+https://github.com/eordano/dcl-one?rev=e733387bdae8e98275968d21e6e2879a6278544b#e733387bdae8e98275968d21e6e2879a6278544b"
 dependencies = [
  "quote",
  "seq-macro",
@@ -5082,6 +5152,7 @@ dependencies = [
 [[package]]
 name = "draco-oxide-core"
 version = "0.1.0-alpha.9"
+source = "git+https://github.com/eordano/dcl-one?rev=e733387bdae8e98275968d21e6e2879a6278544b#e733387bdae8e98275968d21e6e2879a6278544b"
 dependencies = [
  "draco-nd-vector",
  "kiddo",
@@ -5096,6 +5167,7 @@ dependencies = [
 [[package]]
 name = "draco-oxide-decoder"
 version = "0.1.0-alpha.9"
+source = "git+https://github.com/eordano/dcl-one?rev=e733387bdae8e98275968d21e6e2879a6278544b#e733387bdae8e98275968d21e6e2879a6278544b"
 dependencies = [
  "draco-oxide-core",
  "remain",
@@ -5480,6 +5552,7 @@ dependencies = [
 [[package]]
 name = "fastwebsockets"
 version = "0.8.1"
+source = "git+https://github.com/eordano/dcl-one?rev=97acddd5e77961a32669ea9a86594c35f4e308d6#97acddd5e77961a32669ea9a86594c35f4e308d6"
 dependencies = [
  "base64 0.21.7",
  "bytes",
@@ -5537,6 +5610,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-next"
 version = "6.1.1"
+source = "git+https://github.com/eordano/dcl-one?rev=a64d0f7215979d5016e4aba6847ffee59aee36a9#a64d0f7215979d5016e4aba6847ffee59aee36a9"
 dependencies = [
  "bitflags 1.3.2",
  "ffmpeg-sys-next",
@@ -7692,6 +7766,7 @@ dependencies = [
 [[package]]
 name = "libwebrtc"
 version = "0.3.54"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "cxx",
  "jni 0.21.1",
@@ -7753,6 +7828,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 [[package]]
 name = "livekit"
 version = "0.9.7"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "bmrng",
  "bytes",
@@ -7780,6 +7856,7 @@ dependencies = [
 [[package]]
 name = "livekit-api"
 version = "0.9.1"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "http 1.5.0",
  "livekit-protocol",
@@ -7797,6 +7874,7 @@ dependencies = [
 [[package]]
 name = "livekit-common"
 version = "0.1.6"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "livekit-protocol",
 ]
@@ -7804,6 +7882,7 @@ dependencies = [
 [[package]]
 name = "livekit-data-stream"
 version = "0.1.9"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "async-compression",
  "bmrng",
@@ -7825,6 +7904,7 @@ dependencies = [
 [[package]]
 name = "livekit-datatrack"
 version = "0.2.4"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7842,6 +7922,7 @@ dependencies = [
 [[package]]
 name = "livekit-net"
 version = "0.1.4"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
@@ -7858,6 +7939,7 @@ dependencies = [
 [[package]]
 name = "livekit-protocol"
 version = "0.8.2"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -7868,6 +7950,7 @@ dependencies = [
 [[package]]
 name = "livekit-region"
 version = "0.1.1"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "serde",
 ]
@@ -7875,6 +7958,7 @@ dependencies = [
 [[package]]
 name = "livekit-rpc"
 version = "0.1.5"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "livekit-common",
  "livekit-data-stream",
@@ -7890,6 +7974,7 @@ dependencies = [
 [[package]]
 name = "livekit-signaling"
 version = "0.1.7"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "base64 0.21.7",
  "device-info",
@@ -7912,6 +7997,7 @@ dependencies = [
 [[package]]
 name = "livekit-token"
 version = "0.3.1"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "hmac",
  "jsonwebtoken",
@@ -8336,6 +8422,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "24.0.0"
+source = "git+https://github.com/eordano/dcl-one?rev=dc792675d526bbeaac03e91b9585cafc4d4e8c9b#dc792675d526bbeaac03e91b9585cafc4d4e8c9b"
 dependencies = [
  "arrayvec",
  "bit-set 0.8.0",
@@ -8357,6 +8444,7 @@ dependencies = [
 [[package]]
 name = "naga_oil"
 version = "0.17.1"
+source = "git+https://github.com/eordano/dcl-one?rev=a17080ec8c01ea7249d962fe0767b839df4bd8a7#a17080ec8c01ea7249d962fe0767b839df4bd8a7"
 dependencies = [
  "bit-set 0.5.3",
  "codespan-reporting 0.11.1",
@@ -9236,6 +9324,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 [[package]]
 name = "opener"
 version = "0.8.2"
+source = "git+https://github.com/eordano/dcl-one?rev=93b1ddf84cd8409a91852feae9a07f9ebaed520d#93b1ddf84cd8409a91852feae9a07f9ebaed520d"
 dependencies = [
  "bstr",
  "normpath",
@@ -9415,6 +9504,7 @@ dependencies = [
 [[package]]
 name = "parry3d-f64"
 version = "0.25.3"
+source = "git+https://github.com/eordano/dcl-one?rev=a114cf60a5ca193eb77ead6c25144e25d9e38cb7#a114cf60a5ca193eb77ead6c25144e25d9e38cb7"
 dependencies = [
  "approx",
  "arrayvec",
@@ -11507,6 +11597,7 @@ dependencies = [
 [[package]]
 name = "serde_v8"
 version = "0.216.0"
+source = "git+https://github.com/eordano/dcl-one?rev=9090ec421a3fd73af2aeae13214b5aed695ed532#9090ec421a3fd73af2aeae13214b5aed695ed532"
 dependencies = [
  "num-bigint",
  "serde",
@@ -14062,6 +14153,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys"
 version = "0.3.51"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "cc",
  "cxx",
@@ -14075,6 +14167,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys-build"
 version = "0.3.21"
+source = "git+https://github.com/eordano/dcl-one?rev=353cfbb1d9b927cff6d1c518f2aff89179946623#353cfbb1d9b927cff6d1c518f2aff89179946623"
 dependencies = [
  "anyhow",
  "fs2",
@@ -14094,6 +14187,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "wgpu"
 version = "24.0.5"
+source = "git+https://github.com/eordano/dcl-one?rev=dc792675d526bbeaac03e91b9585cafc4d4e8c9b#dc792675d526bbeaac03e91b9585cafc4d4e8c9b"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.1",
@@ -14118,6 +14212,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "24.0.5"
+source = "git+https://github.com/eordano/dcl-one?rev=dc792675d526bbeaac03e91b9585cafc4d4e8c9b#dc792675d526bbeaac03e91b9585cafc4d4e8c9b"
 dependencies = [
  "arrayvec",
  "bit-vec 0.8.0",
@@ -14141,6 +14236,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "24.0.4"
+source = "git+https://github.com/eordano/dcl-one?rev=dc792675d526bbeaac03e91b9585cafc4d4e8c9b#dc792675d526bbeaac03e91b9585cafc4d4e8c9b"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -14185,6 +14281,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "24.0.0"
+source = "git+https://github.com/eordano/dcl-one?rev=dc792675d526bbeaac03e91b9585cafc4d4e8c9b#dc792675d526bbeaac03e91b9585cafc4d4e8c9b"
 dependencies = [
  "bitflags 2.13.1",
  "js-sys",
@@ -14692,6 +14789,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.12"
+source = "git+https://github.com/eordano/dcl-one?rev=5b1638e035fd4af6b7442cb6e170e48c352b7b28#5b1638e035fd4af6b7442cb6e170e48c352b7b28"
 dependencies = [
  "android-activity",
  "atomic-waker",
