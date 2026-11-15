@@ -761,7 +761,9 @@ jobs:
       BEVY_SEGMENT_WRITE_KEY: ${{ vars.BEVY_SEGMENT_WRITE_KEY }}
       # Bevy Explorer / Benchmark refuses unoptimized web apps; while its fleet is off ('none'),
       # nothing measures a PR's, so PR builds skip wasm-opt.
-      BEVY_WEB_OPT: ${{ github.event_name == 'pull_request' && vars.BENCHMARK_ENABLED_RUNNERS == 'none' && 'unoptimized' || 'optimized' }}
+      # lab: every build here is unoptimized, as an upstream pull request build is. The steps of
+      # the pull request target cache run only on a pull request, as they do upstream.
+      BEVY_WEB_OPT: unoptimized
       # A same-repo PR with the ci:preview label publishes under the pr-<n> dist-tag as a preview,
       # which the CI status comment links (label, then push or reopen); no PR job reads the
       # publication. Fork PRs have no secrets. oddish tags a main/master branch next whatever
@@ -829,12 +831,12 @@ jobs:
       # job web-pr-target. A PR restores main's entry for its dependencies; with none, it restores
       # main's newest entry and saves one of its own, once per set of dependencies.
       - name: Identify the wasm dependencies
-        if: steps.engine-cache.outputs.cache-matched-key == '' && env.BEVY_WEB_OPT == 'unoptimized'
+        if: steps.engine-cache.outputs.cache-matched-key == '' && github.event_name == 'pull_request'
         id: wasm-deps
         run: echo "hash=${{ hashFiles('rendering/bevy-explorer/source/Cargo.lock', 'rendering/bevy-explorer/source/Cargo.toml',
             'rendering/bevy-explorer/source/.cargo/config.toml', 'rendering/bevy-explorer/patches/**', 'rendering/bevy-explorer/vendor/**') }}" >> "$GITHUB_OUTPUT"
       - name: Restore the pull request wasm target cache
-        if: steps.engine-cache.outputs.cache-matched-key == '' && env.BEVY_WEB_OPT == 'unoptimized'
+        if: steps.engine-cache.outputs.cache-matched-key == '' && github.event_name == 'pull_request'
         id: wasm-pr-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -882,7 +884,7 @@ jobs:
         # Only when main had no entry for these dependencies, and once: GitHub keeps the entry in
         # the PR's own scope and the hourly cleanup removes it when the PR closes.
         if: >-
-          steps.engine-cache.outputs.cache-matched-key == '' && env.BEVY_WEB_OPT == 'unoptimized' &&
+          steps.engine-cache.outputs.cache-matched-key == '' && github.event_name == 'pull_request' &&
           steps.wasm-pr-cache.outputs.cache-hit != 'true' &&
           !startsWith(steps.wasm-pr-cache.outputs.cache-matched-key, format('bevy-web-unopt-v1-main-{0}-', steps.wasm-deps.outputs.hash))
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -894,7 +896,7 @@ jobs:
             rendering/bevy-explorer/source/target/
           key: ${{ steps.wasm-pr-cache.outputs.cache-primary-key }}
       - name: Save wasm target cache
-        if: github.ref == 'refs/heads/main' && steps.engine-cache.outputs.cache-matched-key == '' && steps.wasm-cache.outputs.cache-hit != 'true'
+        if: false  # lab: no optimised build here
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -1162,8 +1164,7 @@ jobs:
     # It runs on the runner of the web job and with its environment, because Cargo reuses a
     # target only for the same paths, toolchain and variables.
     if: >-
-      needs.changes.outputs.web == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      vars.BENCHMARK_ENABLED_RUNNERS == 'none'
+      needs.changes.outputs.web == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     name: Web target cache for pull requests
     runs-on: ${{ vars.RUNNER_LINUX_X86_UBUNTU_24_04_16CORE || 'ubuntu-24.04' }}
     env:
