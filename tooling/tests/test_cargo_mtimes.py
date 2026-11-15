@@ -101,3 +101,4 @@ class CargoMtimesTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+# lab: a development input, so the smoke job runs
