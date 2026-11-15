@@ -1,0 +1,124 @@
+name: Lab 8 setup dependencies
+on:
+  push:
+    branches: ['lab8/**']
+permissions:
+  contents: read
+env:
+  PACKAGES: >-
+    libasound2-dev libudev-dev libxkbcommon-x11-0 ninja-build clang curl pkg-config
+    libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev
+    libssl-dev libx11-dev libgl1-mesa-dev libxext-dev pulseaudio libasound2-plugins alsa-utils
+    libglib2.0-dev libdrm-dev libgbm-dev libxfixes-dev libxdamage-dev libxrandr-dev libxcomposite-dev
+  GRAPHICS: xvfb libegl1 libgl1-mesa-dri libxcb-xfixes0-dev mesa-vulkan-drivers
+jobs:
+  disk:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04]
+        rep: [1, 2, 3]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Free disk before
+        run: df -h / && df --output=avail -BG / | tail -n 1
+      - name: Size of the SDK folders
+        run: sudo du -sBM /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup 2>/dev/null || true
+      - name: Delete the SDK folders
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
+      - name: Free disk after
+        run: df -h /
+  apt:
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install protoc
+        run: python lab/install-protoc.py
+      - name: Install Linux build dependencies
+        run: sudo python3 lab/install-linux-deps.py $PACKAGES
+      - name: Install xvfb, llvmpipe and lavapipe
+        run: sudo apt install -y $GRAPHICS
+  debs-save:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install and keep the package files
+        run: |
+          sudo python3 lab/install-linux-deps.py $PACKAGES
+          sudo apt-get -o APT::Keep-Downloaded-Packages=true install -y $GRAPHICS
+          mkdir -p "$RUNNER_TEMP/debs"
+          cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/debs/"
+          ls "$RUNNER_TEMP/debs" | wc -l
+          du -sh "$RUNNER_TEMP/debs"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/debs
+          key: lab8-debs-${{ github.run_id }}
+  debs:
+    needs: debs-save
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore the package files
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/debs
+          key: lab8-debs-${{ github.run_id }}
+          fail-on-cache-miss: true
+      - name: Put the package files in the apt archive folder
+        run: sudo cp "$RUNNER_TEMP"/debs/*.deb /var/cache/apt/archives/
+      - name: Install protoc
+        run: python lab/install-protoc.py
+      - name: Install Linux build dependencies
+        run: sudo python3 lab/install-linux-deps.py $PACKAGES
+      - name: Install xvfb, llvmpipe and lavapipe
+        run: sudo apt install -y $GRAPHICS
+  nix-save:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: lab8-nix-${{ github.run_id }}
+          save: true
+          gc-max-store-size: 0
+      - name: Root the shell and the flake inputs
+        run: |
+          mkdir -p .cache/nix-roots
+          nix develop .#explorer --profile .cache/nix-roots/env --command true
+          nix-store --add-root .cache/nix-roots/input -r $(nix flake archive --json | jq -r '.inputs | .. | .path? // empty') > /dev/null
+      - name: Use the shell
+        run: nix develop .#explorer --command bash -c 'clang --version | sed -n 1p; protoc --version; pkg-config --modversion libavcodec alsa libudev; command -v xvfb-run; du -sh /nix/store | cut -f1'
+  nix:
+    needs: nix-save
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: lab8-nix-${{ github.run_id }}
+          save: false
+          gc-max-store-size: 0
+      - name: Root the shell and the flake inputs
+        run: |
+          mkdir -p .cache/nix-roots
+          nix develop .#explorer --profile .cache/nix-roots/env --command true
+          nix-store --add-root .cache/nix-roots/input -r $(nix flake archive --json | jq -r '.inputs | .. | .path? // empty') > /dev/null
+      - name: Use the shell
+        run: nix develop .#explorer --command bash -c 'clang --version | sed -n 1p; protoc --version; pkg-config --modversion libavcodec alsa libudev; command -v xvfb-run'
+      - name: Use the shell again
+        run: nix develop .#explorer --command true
