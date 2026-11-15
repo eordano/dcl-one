@@ -15,6 +15,7 @@ gltf-json = { git = "https://github.com/gltf-rs/gltf", rev = "12fc1b7ce28c7b4c6d
 # https://github.com/robtfm/client-sdk-rust (branch decentraland-0.9.7)
 livekit = { git = "https://github.com/robtfm/client-sdk-rust", rev = "7f9ed8515625f5149dc074d13bd50e451a442a59" }
 livekit-api = { git = "https://github.com/robtfm/client-sdk-rust", rev = "7f9ed8515625f5149dc074d13bd50e451a442a59" }
+livekit-signaling = { git = "https://github.com/robtfm/client-sdk-rust", rev = "7f9ed8515625f5149dc074d13bd50e451a442a59" }
 # https://github.com/robtfm/deno (branch 1_46_hotfix)
 deno_console = { git = "https://github.com/robtfm/deno", rev = "3ee34819c57653610521dc6501ddf8e2cf0c5aaa" }
 deno_fetch = { git = "https://github.com/robtfm/deno", rev = "3ee34819c57653610521dc6501ddf8e2cf0c5aaa" }
