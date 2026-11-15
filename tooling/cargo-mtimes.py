@@ -41,7 +41,7 @@ def entries(root):
         # A submodule entry is a commit, not content of this checkout; a link's time is its own.
         if kind in (b'blob', b'tree') and mode != b'120000':
             result[path.decode('utf-8')] = oid.decode('ascii')
-    changed = subprocess.check_output(['git', 'diff', '--name-only', '-z', 'HEAD'], cwd=root)
+    changed = subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', '-z', 'HEAD'], cwd=root)
     for path in filter(None, changed.split(b'\0')):
         path = path.decode('utf-8')
         while path:

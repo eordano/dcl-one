@@ -93,7 +93,9 @@ sees a `cfg`. Backend functionality that only one caller needs lives next to tha
   `export CEF_PATH="$(cygpath -w ~/.local/share/cef)"` after `just setup-cef`.
 - **A PR runs the Windows and macOS tests only for platform inputs.** A Rust change under
   `rendering/bevy-explorer/source` runs clippy, the native test suite on Linux, the headless smoke
-  test and the web build (`tooling/bevy-ci.py` at the dcl-one root selects them). The suite adds
+  test and the web build (`tooling/bevy-ci.py` at the dcl-one root selects them). A draft does not
+  run the test suite and the headless smoke test: they start when the PR is marked ready for
+  review, or on the next push with the `ci:engine` label. The suite adds
   Windows and macOS when the PR changes the root `Cargo.toml`, a `build*.rs`, `.cargo`, the
   toolchain, `local-harness/benchmark`, `local-harness/web-driver`, a file or folder named
   `windows` or `macos`, the locked package set in `Cargo.lock`, or a CI input outside the engine

@@ -91,6 +91,15 @@ class CargoMtimesTest(unittest.TestCase):
         self.assertEqual(mtimes.restore(self.root, self.target)[0], 0)
         self.assertEqual(self.time('same/a.rs'), now)
 
+    def test_a_moved_file_takes_its_old_folder_out_of_the_record(self):
+        (self.root / 'moved').mkdir()
+        git(self.root, 'mv', 'same/a.rs', 'moved/a.rs')
+        names = mtimes.entries(self.root)
+        # The folder no longer holds the content its tree id names.
+        for name in ('same', 'same/a.rs'):
+            self.assertNotIn(name, names)
+        self.assertIn('same/deep/b.sql', names)
+
     def test_recorded_times_are_whole_seconds(self):
         os.utime(self.root / 'same/a.rs', ns=(OLD + 123456789, OLD + 123456789))
         mtimes.record(self.root, self.target)

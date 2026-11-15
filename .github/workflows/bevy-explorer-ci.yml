@@ -91,7 +91,9 @@
 concurrency:
   group: bevy-explorer-ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.ref }}
   # Main runs finish; runs started meanwhile wait as one pending run (the newest replaces it).
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+  # A run that ready_for_review starts waits too: the development smoke job of the same commit
+  # reads the web build of the run in progress, and that workflow does not run again.
+  cancel-in-progress: ${{ github.event.action != 'ready_for_review' && (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') }}
 name: Bevy Explorer / CI
 jobs:
   source:

@@ -116,7 +116,7 @@ artifacts "bevy-explorer-web-$SHA:11"
 compose
 check "green build badge with only the web app" build.md 'Build-Success!-3fb950'
 check "tests not selected badge" tests.md 'Tests-Not%20selected-lightgrey'
-check "tests headline" tests.md 'No test job was selected: the test inputs are unchanged.'
+check "tests headline" tests.md 'No test job was selected: the test inputs are unchanged, or the pull request is a draft and the tests wait until it is ready for review.'
 
 # 4. Only the tests were selected, and an expired artifact is no download.
 jobs "$(job Changes success 40)" "$(job 'Test Suite (ubuntu-24.04)' success 1500)" \

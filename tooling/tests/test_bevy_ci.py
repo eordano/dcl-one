@@ -95,8 +95,9 @@ class WorkflowTest(unittest.TestCase):
         block = ''.join(lines[:next(i for i, line in enumerate(lines) if line[:1] not in (' ', '#'))])
         self.assertIn("  group: bevy-explorer-ci-${{ github.event.pull_request.number && format('pr-{0}', "
                       "github.event.pull_request.number) || github.ref }}\n", block)
-        self.assertIn("  cancel-in-progress: ${{ github.event_name == 'pull_request' || "
-                      "github.ref != 'refs/heads/main' }}\n", block)
+        # Marking a draft ready does not cancel the run whose web build the smoke job waits for.
+        self.assertIn("  cancel-in-progress: ${{ github.event.action != 'ready_for_review' && "
+                      "(github.event_name == 'pull_request' || github.ref != 'refs/heads/main') }}\n", block)
 
     def test_the_build_jobs_start_beside_the_guards_and_a_failed_check_stops_them(self):
         workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
@@ -486,8 +487,8 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(larger, set())  # lab: this repository maps the larger runners to standard ones
         self.assertEqual(set(conditions.values()), set(ci.HELD_ON_DRAFT))
         # The development smoke job and the images read the web job's output, so a draft still builds it.
-        self.assertNotIn('web', ci.HELD_ON_DRAFT)
-        self.assertNotIn('held', jobs['images'])
+        for name in ('build-deploy-web', 'images'):
+            self.assertNotRegex(jobs[name], r'needs\.changes\.outputs\.(test|headless)\b', name)
         for name, lane in conditions.items():
             self.assertRegex(jobs[name], rf"if: .*needs\.changes\.outputs\.{lane} == 'true'")
         # Marking a draft ready starts the run that the hold skipped.

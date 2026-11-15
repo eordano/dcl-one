@@ -183,7 +183,9 @@ comment links. `release:creator-hub` is read after the merge: the push to
 has the label. A draft PR does not run the Explorer test suite and the headless
 smoke test; they start when the PR is marked ready for review, or on the next
 push with the `ci:engine` label (`tooling/bevy-ci.py`). A draft still builds
-the web engine, because the smoke job and the images need it. The smoke job
+the web engine, because the smoke job and the images need it. The run that
+starts when a draft is marked ready waits for a run of the same PR that is
+still in progress, because the smoke job reads that run's web build. The smoke job
 restores the newest `main` build of the API and gives each unchanged file the
 time it had in that build (`tooling/cargo-mtimes.py`), so Cargo compiles only
 the crates that a changed file reaches.
