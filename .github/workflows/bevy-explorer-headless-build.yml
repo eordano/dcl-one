@@ -23,8 +23,8 @@ jobs:
     concurrency:
       group: headless-build-${{ github.event_name }}-${{ github.ref }}-${{ matrix.platform }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
       cancel-in-progress: true
-    runs-on: ${{ matrix.runner == 'windows-2025' && (vars.RUNNER_WINDOWS_16CORE || 'windows-2025-16core')
-      || matrix.runner == 'macos-15' && (vars.RUNNER_MACOS_XLARGE || 'macos-15-xlarge')
+    runs-on: ${{ matrix.runner == 'windows-2025' && (vars.RUNNER_WINDOWS_16CORE || 'windows-2025')
+      || matrix.runner == 'macos-15' && (vars.RUNNER_MACOS_XLARGE || 'macos-15')
       || matrix.runner == 'ubuntu-22.04' && (vars.RUNNER_LINUX_X86_UBUNTU_22_04 || 'ubuntu-22.04')
       || matrix.runner }}
     steps:
