@@ -149,7 +149,7 @@ jobs:
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_GHA_VERSION: lab6-tests-v1
           # Only with the dependencies restored: the compiler cache then holds the workspace crates only.
-          RUSTC_WRAPPER: ${{ steps.deps.outputs.cache-hit == 'true' && steps.compiler-cache.outcome == 'success' && 'sccache' || '' }}
+          RUSTC_WRAPPER: ''
         run: |
           echo "lab6: deps cache-hit=${{ steps.deps.outputs.cache-hit }} RUSTC_WRAPPER=${RUSTC_WRAPPER:-none}"
           status=0
