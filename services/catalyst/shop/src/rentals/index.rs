@@ -547,12 +547,13 @@ pub async fn status(pool: &PgPool) -> Value {
     })
 }
 
-/// Attaches `rentals-index` when `enabled` (`SHOP_RENTALS_INDEX_ENABLED`)
-/// and a chain-1 JSON-RPC endpoint is configured (`TRADE_RPC_URLS` 1=, or
-/// `ETH_RPC_URL` on mainnet), on the market indexes' cadence and budget.
-/// Run by `catalyst index`; a fresh cursor walks from the contract's deployment.
-pub fn spawn_job(market: &Arc<MarketplaceState>, jobs: &Jobs, enabled: bool) {
-    if !enabled {
+/// Attaches `rentals-index` when a chain-1 JSON-RPC endpoint is configured
+/// (`TRADE_RPC_URLS` 1=, or `ETH_RPC_URL` on mainnet) and `enabled`
+/// (`SHOP_RENTALS_INDEX_ENABLED`) is not `Some(false)`, on the market
+/// indexes' cadence and budget. Run by `catalyst index`; a fresh cursor
+/// walks from the contract's deployment.
+pub fn spawn_job(market: &Arc<MarketplaceState>, jobs: &Jobs, enabled: Option<bool>) {
+    if enabled == Some(false) {
         tracing::info!(
             "rentals index off (SHOP_RENTALS_INDEX_ENABLED=false): rental listings keep the status they were posted with"
         );
@@ -560,9 +561,12 @@ pub fn spawn_job(market: &Arc<MarketplaceState>, jobs: &Jobs, enabled: bool) {
     }
     // The venue is mainnet's: off mainnet ETH_RPC_URL serves another chain.
     let Some(url) = market.venue_rpc_url(1) else {
-        tracing::warn!(
-            "rentals index enabled but no chain-1 JSON-RPC endpoint is configured (TRADE_RPC_URLS 1=, or ETH_RPC_URL on mainnet): it stays off"
-        );
+        let why = "no chain-1 JSON-RPC endpoint is configured (TRADE_RPC_URLS 1=, or ETH_RPC_URL on mainnet)";
+        if enabled == Some(true) {
+            tracing::warn!("rentals index enabled but {why}: it stays off");
+        } else {
+            tracing::info!("rentals index off: {why}");
+        }
         return;
     };
     let settings = market.settings.market.indexes.clone();

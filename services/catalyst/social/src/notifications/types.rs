@@ -328,10 +328,10 @@ impl Default for SubscriptionDetails {
 )]
 pub struct Subscription {
     pub address: String,
-    /// Absent until confirmed, as upstream's `undefined`.
+    /// As upstream: absent without a subscription row, `null` while the row has no confirmed email.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
-    pub email: Option<String>,
+    pub email: Option<Option<String>>,
     #[serde(rename = "unconfirmedEmail")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]

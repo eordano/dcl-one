@@ -18,6 +18,43 @@ fn wei_above_i64_is_exact_until_wire_presentation() {
     assert_eq!(mana_number(amount).unwrap(), 100.0);
 }
 #[test]
+fn the_goal_notice_names_whichever_goal_completed() {
+    let season = Season {
+        id: 7,
+        name: "s".into(),
+        start_date: NaiveDateTime::default(),
+        end_date: NaiveDateTime::default(),
+        max_mana_wei: "0".into(),
+        grace_days: 0,
+    };
+    let owner = "0x00000000000000000000000000000000000000a1";
+    let notice = |goal| {
+        let completed = Completed {
+            goal,
+            season: &season,
+            week: 3,
+            amount: "40000000000000000000",
+        };
+        goal_completed_notification(
+            owner,
+            &completed,
+            "https://cdn.example.org/",
+            NaiveDateTime::default(),
+        )
+        .unwrap()
+    };
+    let (key, photo) = notice(GOAL);
+    assert_eq!(key, format!("{owner}-take-photo-7-3"));
+    assert_eq!(
+        photo.metadata,
+        json!({"goalId":"take-photo","creditsObtained":40.0,"image":"https://cdn.example.org/credits/notification-icon.png","title":"Weekly Goal Completed!","description":"Claim your Credits to unlock them"})
+    );
+    let (other_key, other) = notice("visit-scene");
+    assert_eq!(other_key, format!("{owner}-visit-scene-7-3"));
+    assert_eq!(other.metadata["goalId"], "visit-scene");
+    assert_ne!(other.id, photo.id);
+}
+#[test]
 fn monday_weeks_are_clamped_to_the_season() {
     let date = |v: &str| NaiveDateTime::parse_from_str(v, "%Y-%m-%d %H:%M:%S").unwrap();
     let season = Season {

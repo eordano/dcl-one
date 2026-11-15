@@ -8117,7 +8117,7 @@ async fn permission_edits_notify_each_address_actually_changed() {
         granted.metadata,
         json!({
             "title": "World Permission Granted",
-            "description": "You have been granted deployment permission for a world.",
+            "description": format!("You have been granted deployment permission for world {}.", world.key()),
             "world": world.key(),
             "permissions": ["deployment"],
             "url": "https://builder.example/worlds?tab=dcl",
@@ -8159,7 +8159,10 @@ async fn permission_edits_notify_each_address_actually_changed() {
     let revoked = &notices_of(&f, PERMISSION_REVOKED, &d.address)[0];
     assert_eq!(
         revoked.metadata["description"],
-        "Your streaming permission for a world has been revoked."
+        format!(
+            "Your streaming permission for world {} has been revoked.",
+            world.key()
+        )
     );
     // Granted again within the hour: the latest notice is the grant.
     expect(app, Case::new("put", &streamer).signed(&owner).await, 204).await;

@@ -89,11 +89,15 @@ impl Notices {
             (PERMISSION_REVOKED, "World Permission Revoked")
         };
         let (world, permission) = (world.key(), permission.as_str());
-        // The owner-chosen name stays out of the free text.
-        let description = if granted {
-            format!("You have been granted {permission} permission for a world.")
+        let target = if super::reprocess::matches_world_name_pattern(world) {
+            format!("world {world}")
         } else {
-            format!("Your {permission} permission for a world has been revoked.")
+            "a world".to_string()
+        };
+        let description = if granted {
+            format!("You have been granted {permission} permission for {target}.")
+        } else {
+            format!("Your {permission} permission for {target} has been revoked.")
         };
         // Keyed on the change itself, so a later change is always a new notice.
         let version = now.and_utc().timestamp_micros();
@@ -236,7 +240,7 @@ mod tests {
             out[0].metadata,
             json!({
                 "title": "World Permission Granted",
-                "description": "You have been granted deployment permission for a world.",
+                "description": "You have been granted deployment permission for world foo.dcl.eth.",
                 "world": "foo.dcl.eth",
                 "permissions": ["deployment"],
                 "url": "https://builder.example/worlds?tab=dcl",
@@ -254,8 +258,35 @@ mod tests {
         assert_eq!(out[0].metadata["title"], "World Permission Revoked");
         assert_eq!(
             out[0].metadata["description"],
-            "Your streaming permission for a world has been revoked."
+            "Your streaming permission for world foo.dcl.eth has been revoked."
         );
+    }
+
+    #[test]
+    fn a_name_outside_the_world_name_pattern_stays_out_of_the_text() {
+        let notices = Notices::default();
+        for raw in ["<b>x.dcl.eth", "foo.dcl.eth.com", "x_y.eth", "foo"] {
+            let world = WorldName::parse(raw).unwrap();
+            let changed = |granted| {
+                notices.permission_changed(
+                    granted,
+                    &world,
+                    Permission::Access,
+                    &[WALLET.to_string()],
+                    at(0),
+                )[0]
+                .metadata["description"]
+                    .clone()
+            };
+            assert_eq!(
+                changed(true),
+                "You have been granted access permission for a world."
+            );
+            assert_eq!(
+                changed(false),
+                "Your access permission for a world has been revoked."
+            );
+        }
     }
 
     #[test]

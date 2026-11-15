@@ -319,6 +319,7 @@ pub async fn mana_topup(
             actor: Some("mana-topup"),
             idempotency_key: Some(&idem),
             detail: &detail,
+            studio_name: None,
         })
         .await?;
 

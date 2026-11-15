@@ -1,0 +1,64 @@
+.root {
+  box-sizing: border-box;
+  display: flex;
+  min-height: 100vh;
+  min-height: 100svh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dcl-space-32);
+  padding: var(--dcl-space-48) var(--dcl-space-24);
+  background: var(--dcl-background-web-dark);
+  color: var(--dcl-text-primary);
+}
+
+.logo {
+  width: 3rem;
+  height: 3rem;
+}
+
+.card {
+  box-sizing: border-box;
+  display: flex;
+  width: min(100%, 32.5rem);
+  flex-direction: column;
+  align-items: center;
+  gap: var(--dcl-space-16);
+  padding: var(--dcl-space-48) var(--dcl-space-32);
+  border: 1px solid var(--dcl-border-subtle);
+  border-radius: var(--dcl-radius-lg);
+  background: var(--dcl-bg-surface-raised);
+  text-align: center;
+}
+
+.title {
+  composes: text68656164696e672f6c67 from '../../../foundations/typography/text-styles.module.css';
+  margin: 0;
+}
+
+.message {
+  composes: text626f64792f6d64 from '../../../foundations/typography/text-styles.module.css';
+  margin: 0;
+}
+
+.error {
+  composes: text626f64792f6d64 from '../../../foundations/typography/text-styles.module.css';
+  margin: 0;
+  color: var(--dcl-feedback-error);
+}
+
+.challenge {
+  display: flex;
+  min-height: 4.0625rem;
+  justify-content: center;
+}
+
+.action {
+  width: 100%;
+}
+
+@media (max-width: 767px) {
+  .card {
+    padding: var(--dcl-space-32) var(--dcl-space-16);
+  }
+}

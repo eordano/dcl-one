@@ -33,6 +33,7 @@ use super::console::{
 use crate::shared::writes::DataWrites;
 use crate::shop::credits::admin::{
     normalize_address, validate_idempotency_key, validate_positive_amount, validated_reason,
+    validated_studio_name,
 };
 use crate::shop::credits::admin_store::GrantRequest;
 use crate::shop::credits::errors::ApiError as CreditsError;
@@ -66,7 +67,7 @@ fn opt_string(body: &Value, key: &str) -> Option<String> {
     str_field(body, key).filter(|s| !s.trim().is_empty())
 }
 
-/// `POST /admin/api/credits/grant` `{address, amount, reason?, idempotencyKey?}`.
+/// `POST /admin/api/credits/grant` `{address, amount, reason?, idempotencyKey?, studioName?}`.
 pub async fn credits_grant(
     session: AdminSession,
     State(state): State<SharedState>,
@@ -82,7 +83,11 @@ pub async fn credits_grant(
         let amount = validate_positive_amount(&str_field(&body, "amount").unwrap_or_default())?;
         let reason = validated_reason(&opt_string(&body, "reason"))?;
         let idempotency_key = validate_idempotency_key(&opt_string(&body, "idempotencyKey"))?;
-        let detail = json!({ "address": address, "amount": amount, "reason": reason, "idempotencyKey": idempotency_key, "via": "console" });
+        let studio_name = validated_studio_name(&opt_string(&body, "studioName"))?;
+        let mut detail = json!({ "address": address, "amount": amount, "reason": reason, "idempotencyKey": idempotency_key, "via": "console" });
+        if let Some(studio) = &studio_name {
+            detail["studioName"] = json!(studio);
+        }
         let outcome = cs
             .credits
             .admin_grant_credits(GrantRequest {
@@ -93,6 +98,7 @@ pub async fn credits_grant(
                 actor: Some(&actor),
                 idempotency_key: idempotency_key.as_deref(),
                 detail: &detail,
+                studio_name: studio_name.as_deref(),
             })
             .await?;
         Ok::<_, CreditsError>(Json(json!({ "address": address, "applied": outcome.applied, "available": outcome.available, "replayed": outcome.replayed })))

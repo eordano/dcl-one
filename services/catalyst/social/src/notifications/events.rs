@@ -154,6 +154,12 @@ async fn scan_kind(
     Ok(rows.len() as u64)
 }
 
+/// `Date.prototype.toISOString()`: UTC, millisecond precision, `Z`.
+fn js_iso(t: NaiveDateTime) -> String {
+    t.and_utc()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 fn text<'a>(event: &'a Value, field: &str) -> &'a str {
     event.get(field).and_then(Value::as_str).unwrap_or_default()
 }
@@ -287,11 +293,11 @@ fn metadata(intent: &Intent, recipient: &Recipient, links: &Links) -> Value {
             .and_then(Value::as_i64)
             .unwrap_or(0)
             .max(0);
-        metadata["startsAt"] = json!(start.and_utc().to_rfc3339());
+        metadata["startsAt"] = json!(js_iso(start));
         metadata["endsAt"] = json!(
             Span::try_milliseconds(duration)
                 .and_then(|duration| start.checked_add_signed(duration))
-                .map(|time| time.and_utc().to_rfc3339())
+                .map(js_iso)
         );
     }
     if recipient.community {
@@ -606,6 +612,16 @@ mod tests {
 
     const CDN: &str = "https://cdn.example.org";
 
+    #[test]
+    fn times_read_as_javascript_iso_strings() {
+        let t = chrono::DateTime::from_timestamp_millis(4_084_016_400_123)
+            .unwrap()
+            .naive_utc();
+        assert_eq!(js_iso(t), "2099-06-01T17:00:00.123Z");
+        let micros = t + Span::microseconds(456);
+        assert_eq!(js_iso(micros), "2099-06-01T17:00:00.123Z");
+    }
+
     fn origins(link: &str, assets: &str) -> Links {
         Links {
             base: link.into(),
@@ -815,7 +831,7 @@ mod tests {
             "an RSVP from a non-member keeps the generic notice"
         );
         assert_eq!(
-            metadata["endsAt"], "2099-06-01T19:00:00+00:00",
+            metadata["endsAt"], "2099-06-01T19:00:00.000Z",
             "occurrence duration, not series finish"
         );
         assert_eq!(
@@ -1951,8 +1967,8 @@ mod tests {
             "https://decentraland.org/jump/events?id=ev-1&position=10%2C-20&realm=world.dcl.eth"
         );
         assert_eq!(reminder["attendee"], attendee.address);
-        assert_eq!(reminder["startsAt"], "2099-06-01T18:00:00+00:00");
-        assert_eq!(reminder["endsAt"], "2099-06-01T19:00:00+00:00");
+        assert_eq!(reminder["startsAt"], "2099-06-01T18:00:00.000Z");
+        assert_eq!(reminder["endsAt"], "2099-06-01T19:00:00.000Z");
         let started = Intent {
             kind: "events_started".into(),
             ..intent

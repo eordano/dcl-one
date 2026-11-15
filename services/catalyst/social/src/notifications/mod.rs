@@ -55,13 +55,25 @@ pub use store::{NewNotification, NotificationsStore, insert_notifications};
 
 pub const ADMIN_TOKEN_ENV: &str = "CATALYRST_NOTIFICATIONS_ADMIN_TOKEN";
 
+/// `NOTIFICATIONS_CDN_URL`'s default: upstream's `CDN_URL`.
+pub const DEFAULT_CDN_URL: &str = "https://assets-cdn.decentraland.org";
+
+/// `path` under the notification icons' CDN `base` (upstream `${CDN_URL}<path>`).
+pub fn cdn_asset(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim().trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
 /// The settings `serve` resolves from `Config`; env names are the old
 /// binary's where they map 1:1 (`main.rs` of catalyrst-notifications).
 #[derive(Clone, Debug)]
 pub struct Settings {
     /// `CATALYRST_NOTIFICATIONS_ADMIN_TOKEN`: bearer of `POST /notifications/broadcast`; unset refuses it.
     pub admin_token: Option<String>,
-    /// `SENDGRID_*`, `ACCOUNT_BASE_URL`, `TURNSTILE_SECRET_KEY`, `EMAIL_DOMAIN_BLACKLIST`.
+    /// `SENDGRID_*`, `ACCOUNT_BASE_URL`, `TURNSTILE_SECRET_KEY`, `EMAIL_DOMAIN_BLACKLIST`, the `dapps` flags.
     pub email: EmailConfig,
     /// `SIGNING_KEY`: HMAC key of the e-mail unsubscribe links; unset refuses them.
     pub signing_key: Option<String>,
@@ -80,8 +92,8 @@ pub struct Settings {
     pub first_wear: FirstWearSettings,
     /// `NOTIFICATION_DELIVERY_INTERVAL_SECS` (default 15; floored to 1).
     pub delivery_interval: Duration,
-    /// `NOTIFICATIONS_BROADCAST_HORIZON_DAYS` (default 90): broadcasts older are hidden and pruned.
-    pub broadcast_horizon: Duration,
+    /// `NOTIFICATIONS_BROADCAST_HORIZON_DAYS`: broadcasts older are hidden and pruned; `None` (0, the default) keeps them.
+    pub broadcast_horizon: Option<Duration>,
     /// `NOTIFICATION_DELIVERY_MAX_AGE_SECS` (default 7 days, `None` = never, but
     /// a hold for a missing key still ends): see [`delivery::expire`].
     pub delivery_max_age: Option<Duration>,
@@ -120,7 +132,7 @@ impl Default for Settings {
             first_wear_enabled: false,
             first_wear: FirstWearSettings::default(),
             delivery_interval: Duration::from_secs(15),
-            broadcast_horizon: store::DEFAULT_BROADCAST_HORIZON,
+            broadcast_horizon: None,
             delivery_max_age: Some(delivery::DEFAULT_MAX_AGE),
             events_base_url: "https://decentraland.org".into(),
             events_asset_base_url: "http://localhost/events".into(),
@@ -190,9 +202,15 @@ impl State {
         let max_age = self.settings.delivery_max_age;
         let configured = self.email.notifications_configured();
         let can_sign = self.email.has_signing_key();
+        if self.email.turnstile_secret_without_flag() {
+            tracing::warn!(
+                "TURNSTILE_SECRET_KEY is set but the dapps turnstile-verification flag is off or not loaded: confirm-email runs no challenge"
+            );
+        }
+        let last_held = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         if !configured {
-            tracing::info!(
-                "SENDGRID_API_KEY, SENDGRID_FROM_EMAIL or SENDGRID_NOTIFICATION_TEMPLATE_ID unset: email deliveries are recorded as skipped"
+            tracing::warn!(
+                "SENDGRID_API_KEY, SENDGRID_FROM_EMAIL or SENDGRID_NOTIFICATION_TEMPLATE_ID unset, or SENDGRID_API_URL empty: notification emails stay pending until they are set"
             );
         } else if !self.email.has_signing_key() {
             tracing::error!(
@@ -205,16 +223,31 @@ impl State {
                 .with_jitter(Duration::from_secs(5))
                 .with_error_backoff(Duration::from_secs(300)),
             move |ctx| {
-                let state = state.clone();
+                let (state, last_held) = (state.clone(), last_held.clone());
                 async move {
                     let pool = state.store.pool();
-                    let expired =
-                        delivery::expire(pool, crate::shared::now_utc(), max_age, can_sign).await?;
+                    let expired = delivery::expire(
+                        pool,
+                        crate::shared::now_utc(),
+                        max_age,
+                        configured && can_sign,
+                    )
+                    .await?;
                     if expired > 0 {
                         tracing::warn!(expired, "stale notification deliveries expired unsent");
                     }
                     let summary =
                         delivery::run_pass(pool, &state.email, configured, max_age).await?;
+                    let previous =
+                        last_held.swap(summary.held, std::sync::atomic::Ordering::Relaxed);
+                    if summary.held != previous && summary.held > 0 {
+                        tracing::warn!(
+                            held = summary.held,
+                            sendgrid_configured = configured,
+                            signing_key = can_sign,
+                            "notification emails stay pending until email delivery is configured"
+                        );
+                    }
                     if summary.claimed > 0 {
                         tracing::info!(?summary, "notification deliveries pass");
                         ctx.progress(format!("{summary:?}"));
@@ -227,23 +260,30 @@ impl State {
                 }
             },
         );
+        if !self.email.spawn_disposable_refresh(jobs) {
+            tracing::info!(
+                "DISPOSABLE_EMAIL_DOMAINS_URL empty: no disposable-domain list is fetched"
+            );
+        }
         let store = self.store.clone();
-        jobs.spawn_periodic_leased(
-            "notification-broadcast-retention",
-            PeriodicCfg::every(Duration::from_secs(3600)).with_jitter(Duration::from_secs(60)),
-            move |_ctx| {
-                let store = store.clone();
-                async move {
-                    let pruned = store
-                        .prune_broadcasts(crate::shared::now_utc(), 100)
-                        .await?;
-                    if pruned > 0 {
-                        tracing::info!(pruned, "expired broadcasts pruned");
+        if self.settings.broadcast_horizon.is_some() {
+            jobs.spawn_periodic_leased(
+                "notification-broadcast-retention",
+                PeriodicCfg::every(Duration::from_secs(3600)).with_jitter(Duration::from_secs(60)),
+                move |_ctx| {
+                    let store = store.clone();
+                    async move {
+                        let pruned = store
+                            .prune_broadcasts(crate::shared::now_utc(), 100)
+                            .await?;
+                        if pruned > 0 {
+                            tracing::info!(pruned, "expired broadcasts pruned");
+                        }
+                        Ok(())
                     }
-                    Ok(())
-                }
-            },
-        );
+                },
+            );
+        }
         land_transfers::spawn(self.store.pool().clone(), jobs);
         events::spawn(
             self.store.pool().clone(),

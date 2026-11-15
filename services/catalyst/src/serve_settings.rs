@@ -95,6 +95,7 @@ pub(super) fn credits_settings(config: &Config) -> anyhow::Result<shop::credits:
         trial_mode: config.shop.credits_trial_mode,
         trial_buyers: non_empty(&config.shop.credits_trial_buyers),
         shop_base_url: config.shop.shop_base_url.clone(),
+        notifications_cdn_url: config.social.notifications_cdn_url.clone(),
     })
     .context("CREDITS_* / STRIPE_* / CHECKOUT_* configuration")
 }
@@ -139,6 +140,7 @@ pub(super) fn referral_settings(config: &Config) -> communities::referral::Setti
         },
         min_login_days: config.social.referral_min_login_days,
         profile_url: config.social.referral_profile_url.clone(),
+        cdn_url: config.social.notifications_cdn_url.clone(),
         reward_server_url: config.social.referral_reward_server_url.clone(),
         reward_keys: [
             (

@@ -224,6 +224,8 @@ pub struct RawSettings {
     pub trial_buyers: Option<String>,
     /// `SHOP_BASE_URL`: the grant notification's link (the old `${DECENTRALAND_URL}/shop`).
     pub shop_base_url: String,
+    /// `NOTIFICATIONS_CDN_URL`: base of the credits notification icon (the old `CDN_URL`).
+    pub notifications_cdn_url: String,
 }
 
 impl Default for RawSettings {
@@ -273,6 +275,7 @@ impl Default for RawSettings {
             trial_mode: false,
             trial_buyers: None,
             shop_base_url: crate::subscriptions::DEFAULT_SHOP_BASE_URL.to_string(),
+            notifications_cdn_url: catalyst_social::notifications::DEFAULT_CDN_URL.to_string(),
         }
     }
 }
@@ -317,6 +320,7 @@ pub struct Settings {
     /// the MANA top-up routes refuse.
     pub trial: Option<trial::TrialBuyers>,
     pub shop_base_url: String,
+    pub notifications_cdn_url: String,
 }
 
 fn non_empty(v: Option<String>) -> Option<String> {
@@ -584,6 +588,8 @@ impl Settings {
                 .unwrap_or_else(|| crate::subscriptions::DEFAULT_SHOP_BASE_URL.to_string())
                 .trim_end_matches('/')
                 .to_string(),
+            notifications_cdn_url: non_empty(Some(raw.notifications_cdn_url))
+                .unwrap_or_else(|| catalyst_social::notifications::DEFAULT_CDN_URL.to_string()),
         })
     }
 
@@ -690,7 +696,9 @@ impl State {
             market,
             settings.marketplace_markup_bps,
         ));
-        let mut credits = Credits::new(pool).with_shop_base_url(&settings.shop_base_url);
+        let mut credits = Credits::new(pool)
+            .with_shop_base_url(&settings.shop_base_url)
+            .with_notifications_cdn_url(&settings.notifications_cdn_url);
         if settings.usage.is_configured() {
             credits = credits.with_usage_index(settings.usage.chain_id);
         }

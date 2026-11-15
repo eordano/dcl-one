@@ -291,6 +291,12 @@ async fn signed_list_read_subscription_and_opt_outs_round_trip() {
         None,
     )
     .await;
+    assert_eq!(
+        body["email"],
+        Value::Null,
+        "a row without an email answers null"
+    );
+    assert!(body.as_object().unwrap().contains_key("email"), "{body}");
     assert_eq!(body["details"]["ignore_all_email"], json!(false));
     assert_eq!(
         body["details"]["message_type"]["item_sold"],
@@ -800,6 +806,8 @@ async fn set_email_and_confirm_email_validate_before_touching_the_mailer() {
         json!("a+b@x.com"),
         json!("me@Spam.com"),
         json!("a.b.c@x.com"),
+        json!(" a@x.com"),
+        json!("a@x.com "),
         Value::Null,
     ] {
         let (status, body) = send(
@@ -936,8 +944,44 @@ async fn confirm_email_answers_the_old_messages_and_rechecks_the_blacklist() {
     );
     let (status, _) = confirm(&ok, &code).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let sub = state.store.get_subscription(&ok).await.unwrap().unwrap();
-    assert_eq!(sub.email.as_deref(), Some("me@example.com"));
+    let sub = state.store.get_subscription(&ok).await.unwrap();
+    assert_eq!(sub.email, Some(Some("me@example.com".into())));
+
+    // A disposable domain is refused at confirm time once the list holds it.
+    let disposable = fresh_address();
+    sqlx::query("INSERT INTO social.unconfirmed_emails (address, email, code, source) VALUES ($1, 'me@Mailinator.com', $2, 'credits')")
+        .bind(&disposable)
+        .bind(&code)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let list = axum::Router::new().route(
+        "/list.conf",
+        axum::routing::get(|| async { "# disposable\nmailinator.com\n" }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/list.conf", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, list).await });
+    state
+        .email
+        .refresh_disposable_domains(&url, 1)
+        .await
+        .unwrap();
+    let (status, body) = confirm(&disposable, &code).await;
+    assert_eq!(
+        (status, body["message"].as_str()),
+        (StatusCode::BAD_REQUEST, Some(INVALID_EMAIL))
+    );
+    assert!(
+        state
+            .store
+            .get_subscription(&disposable)
+            .await
+            .unwrap()
+            .email
+            .is_none(),
+        "nothing confirmed"
+    );
 }
 
 const SIGNING_KEY: &str = "test-signing-key";
@@ -1028,12 +1072,7 @@ async fn unsubscribe_links_verify_the_old_signature_and_update_the_subscription(
         "{page}"
     );
     assert!(page.contains("href=\"https://account.decentraland.org\""));
-    let sub = state
-        .store
-        .get_subscription(&address)
-        .await
-        .unwrap()
-        .unwrap();
+    let sub = state.store.get_subscription(&address).await.unwrap();
     assert_eq!(
         sub.details["message_type"]["bid_received"]["email"],
         json!(false)
@@ -1052,12 +1091,7 @@ async fn unsubscribe_links_verify_the_old_signature_and_update_the_subscription(
     assert_eq!((status, ct.as_str()), (StatusCode::OK, "text/html"));
     assert!(page.contains("unsubscribed from all email notifications"));
     assert!(!page.contains("{{"), "every placeholder is filled");
-    let sub = state
-        .store
-        .get_subscription(&address)
-        .await
-        .unwrap()
-        .unwrap();
+    let sub = state.store.get_subscription(&address).await.unwrap();
     assert_eq!(sub.details["ignore_all_email"], json!(true));
     assert_eq!(
         sub.details["message_type"]["bid_received"]["email"],
@@ -1137,6 +1171,7 @@ async fn unsubscribe_links_are_refused_while_social_writes_are_disabled() {
             .get_subscription(&address)
             .await
             .unwrap()
+            .email
             .is_none(),
         "nothing was written"
     );
@@ -1162,12 +1197,7 @@ async fn unsubscribe_keeps_preferences_written_concurrently() {
         .await
         .unwrap();
     state.store.unsubscribe_email(&address, None).await.unwrap();
-    let sub = state
-        .store
-        .get_subscription(&address)
-        .await
-        .unwrap()
-        .unwrap();
+    let sub = state.store.get_subscription(&address).await.unwrap();
     assert_eq!(sub.details["ignore_all_email"], json!(true));
     assert_eq!(sub.details["ignore_all_in_app"], json!(true));
     assert_eq!(
@@ -1211,6 +1241,36 @@ async fn common_email_is_bearer_gated_and_validated() {
             )
         );
     }
+    // The bearer is checked before the body is parsed.
+    let (status, body) = send_raw(
+        app(state.clone()),
+        "POST",
+        "/notifications/notifications/email",
+        HeaderMap::new(),
+        "{not json",
+        Some("application/json"),
+    )
+    .await;
+    assert_eq!(
+        (status, body["message"].as_str()),
+        (
+            StatusCode::UNAUTHORIZED,
+            Some("Authorization header is missing")
+        )
+    );
+    let (status, body) = send_raw(
+        app(state.clone()),
+        "POST",
+        "/notifications/notifications/email",
+        bearer("svc"),
+        "{not json",
+        Some("application/json"),
+    )
+    .await;
+    assert_eq!(
+        (status, body["message"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("Invalid body"))
+    );
     for (body, message) in [
         (json!({ "subject": "s", "content": "c" }), "Missing email"),
         (
@@ -1627,7 +1687,7 @@ async fn only_mark_read_accepts_the_pre_6_signed_payload() {
 mod ingest {
     use super::*;
     use crate::notifications::ingest::{
-        MAX_BODY_BYTES, MAX_ITEMS, MAX_METADATA_BYTES, Producer, dedup, validate,
+        MAX_BODY_BYTES, MAX_METADATA_BYTES, Producer, dedup, validate,
     };
     use crate::notifications::store::test_support::delivery_state;
 
@@ -1791,10 +1851,6 @@ mod ingest {
                 with("metadata", json!({ "pad": "x".repeat(MAX_METADATA_BYTES) })),
                 "\"[0].metadata\" must be less than or equal to 16384 bytes",
             ),
-            (
-                json!(vec![ok.clone(); MAX_ITEMS + 1]),
-                "\"value\" must contain less than or equal to 10000 items",
-            ),
         ] {
             assert_eq!(
                 validate(&body, Producer::Governance, NOW).unwrap_err(),
@@ -1818,7 +1874,14 @@ mod ingest {
         assert!(validate(&at_skew, Producer::Governance, NOW).is_ok());
         let mut big = ok.clone();
         big["metadata"] = json!({ "pad": "x".repeat(MAX_METADATA_BYTES - 10) });
-        assert!(validate(&json!(vec![big; MAX_ITEMS]), Producer::Governance, NOW).is_ok());
+        assert!(validate(&json!([big]), Producer::Governance, NOW).is_ok());
+        // No item cap: more than the old 10,000 small items pass.
+        assert_eq!(
+            validate(&json!(vec![ok.clone(); 20_000]), Producer::Governance, NOW)
+                .unwrap()
+                .len(),
+            20_000
+        );
     }
 
     #[test]
@@ -1983,6 +2046,77 @@ mod ingest {
             Some((json!({ "title": "new" }), 1_700_000_500_000, true))
         );
         assert_eq!(delivery_state(state.store.pool(), id).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_failing_chunk_leaves_the_earlier_chunks_committed() {
+        use crate::notifications::ingest::upsert;
+        let Some(pool) = crate::notifications::store::test_support::private_pool("ing-chunk").await
+        else {
+            return;
+        };
+        let to = fresh_address();
+        let kind = "governance_proposal_enacted";
+        let body: Vec<Value> = (0..1_500)
+            .map(|i| entry(kind, &to, &format!("c{i}"), 1_700_000_000_000))
+            .collect();
+        let mut batch = validate(&json!(body), Producer::Governance, NOW).unwrap();
+        // Chunks follow id order, so the largest id is in the second chunk.
+        let last = batch.iter_mut().max_by_key(|n| n.id()).unwrap();
+        last.metadata = json!({ "title": "boom" });
+        sqlx::query("ALTER TABLE social.notifications ADD CONSTRAINT ingest_chunk_test CHECK (metadata->>'title' IS DISTINCT FROM 'boom')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(upsert(&pool, batch).await.is_err());
+        let (rows, deliveries): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), count(d.notification_id) FROM social.notifications n LEFT JOIN social.notification_deliveries d ON d.notification_id = n.id WHERE n.address = $1",
+        )
+        .bind(&to)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (rows, deliveries),
+            (1_000, 1_000),
+            "the first chunk committed alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_counts_new_and_updated_notifications() {
+        use crate::notifications::ingest::{Upserted, upsert};
+        let Some(state) = producers().await else {
+            return;
+        };
+        let (a, b) = (fresh_address(), fresh_address());
+        let kind = "governance_proposal_enacted";
+        let key = format!("count-{}", Uuid::new_v4());
+        let batch = |ts: i64| {
+            validate(
+                &json!([entry(kind, &a, &key, ts), entry(kind, &b, &key, ts)]),
+                Producer::Governance,
+                NOW,
+            )
+            .unwrap()
+        };
+        let pool = state.store.pool();
+        let first = upsert(pool, batch(1_700_000_000_000)).await.unwrap();
+        assert_eq!(
+            first,
+            Upserted {
+                inserted: 2,
+                updated: 0
+            }
+        );
+        let again = upsert(pool, batch(1_700_000_100_000)).await.unwrap();
+        assert_eq!(
+            again,
+            Upserted {
+                inserted: 0,
+                updated: 2
+            }
+        );
     }
 
     #[tokio::test]
@@ -2303,7 +2437,7 @@ mod ingest {
     }
 
     #[tokio::test]
-    async fn broadcasts_past_the_horizon_are_hidden_then_pruned_with_their_reads() {
+    async fn broadcasts_are_kept_by_default_and_past_a_set_horizon_hidden_then_pruned() {
         let Some(state) = private_state("ingest_horizon").await else {
             return;
         };
@@ -2325,9 +2459,18 @@ mod ingest {
                 .map(|i| i.metadata["title"].clone())
                 .collect::<Vec<_>>()
         };
+        // The default keeps every broadcast, as upstream.
         assert_eq!(
             titles(state.store.list(&me, 10, None, false).await.unwrap()),
-            vec![json!("new")]
+            vec![json!("new"), json!("old")]
+        );
+        assert_eq!(
+            state
+                .store
+                .prune_broadcasts(crate::shared::now_utc(), 100)
+                .await
+                .unwrap(),
+            0
         );
         let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM social.broadcast_notifications")
             .fetch_all(&pool)
@@ -2335,8 +2478,13 @@ mod ingest {
             .unwrap();
         state.store.mark_read(&me, &ids).await.unwrap();
 
-        let pruned = state
-            .store
+        let ninety = crate::notifications::store::NotificationsStore::new(pool.clone())
+            .with_broadcast_horizon(Some(std::time::Duration::from_secs(90 * 86_400)));
+        assert_eq!(
+            titles(ninety.list(&me, 10, None, false).await.unwrap()),
+            vec![json!("new")]
+        );
+        let pruned = ninety
             .prune_broadcasts(crate::shared::now_utc(), 100)
             .await
             .unwrap();
@@ -2350,7 +2498,7 @@ mod ingest {
 
         // A shorter horizon hides and prunes the rest.
         let short = crate::notifications::store::NotificationsStore::new(pool.clone())
-            .with_broadcast_horizon(std::time::Duration::from_secs(30 * 86_400));
+            .with_broadcast_horizon(Some(std::time::Duration::from_secs(30 * 86_400)));
         assert!(short.list(&me, 10, None, false).await.unwrap().is_empty());
         assert_eq!(
             short
@@ -2424,6 +2572,17 @@ mod ingest {
                 .await
                 .unwrap();
         assert_eq!(written, 2_000, "every chunk of the batch is written");
+        let delivered: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM social.notification_deliveries d JOIN social.notifications n ON n.id = d.notification_id WHERE n.address = $1",
+        )
+        .bind(&to)
+        .fetch_one(state.store.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            delivered, 2_000,
+            "each chunk commits its rows' delivery rows"
+        );
         let req = Request::builder()
             .method("POST")
             .uri(PATH)

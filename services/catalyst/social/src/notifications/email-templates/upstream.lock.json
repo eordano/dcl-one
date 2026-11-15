@@ -12,6 +12,14 @@
     {
       "file": "tip_received.content.handlebars",
       "change": "formatMana reads metadata.manaAmount (wei) instead of metadata.amount, which the producer sends as decimal MANA; upstream rendered about 0.00 MANA."
+    },
+    {
+      "file": "worlds_permission_granted.content.handlebars",
+      "change": "arrayToString reads metadata.permissions instead of the top-level permissions, which the notification never has; upstream rendered an empty list."
+    },
+    {
+      "file": "worlds_permission_revoked.content.handlebars",
+      "change": "arrayToString reads metadata.permissions instead of the top-level permissions, which the notification never has; upstream rendered an empty list."
     }
   ],
   "files": {
@@ -101,9 +109,9 @@
     "worlds_access_restricted.subject.handlebars": "81d45a62d8fe3ad1b828ec02e0e46628e93452a4aaa3736b137aa87513b6af05",
     "worlds_missing_resources.content.handlebars": "bb8614a79e6400d946cd8ed7d295b29d53cb80965c20315438a07b9a8e7f8ac1",
     "worlds_missing_resources.subject.handlebars": "b6b6a54aae1775a11b12703ea86b4ac7bf3c8cfdecadeb1b4dace7a9ed34bb6f",
-    "worlds_permission_granted.content.handlebars": "99c5ef2e3702850deed06e1478fbcedc78320226b69a74c8cc8a1020b6e21634",
+    "worlds_permission_granted.content.handlebars": "cddd84f4c6eb2f71d973e9d6e5bc2d39becaa3fe898fd08456b15e4eb9186f92",
     "worlds_permission_granted.subject.handlebars": "836f11f17c5319a8d65758ae58a2b133610f8e7d1874c05fb9d31cdbae9f8d1d",
-    "worlds_permission_revoked.content.handlebars": "a7916e2c7b8019042540982dae479525031dbef9da5d987db7ebfe4e2c7970ed",
+    "worlds_permission_revoked.content.handlebars": "6f9cbbcfe1247f564d8f4af17d2d5b53188aca4b8fa87ba0e1034d7859adaaf8",
     "worlds_permission_revoked.subject.handlebars": "f39c652b861066fa18deb9d42abbebcfe96c5805e66ea798ff1c81c4ad3cdc4e"
   },
   "update_instructions": [

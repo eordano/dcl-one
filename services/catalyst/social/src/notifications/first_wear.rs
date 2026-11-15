@@ -165,7 +165,8 @@ fn profile_wearables(metadata: &Json) -> Vec<String> {
 }
 
 fn profile_name(metadata: &Json) -> Option<String> {
-    metadata["v"]["avatars"][0]["name"]
+    // Deployers store the metadata under `v`; older rows are bare.
+    metadata.get("v").unwrap_or(metadata)["avatars"][0]["name"]
         .as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -561,21 +562,24 @@ async fn friend_gates(
         .collect())
 }
 
-/// The active profile's avatar name of `creator`.
+/// `avatars[0].name` of `address`'s profile as `/lambdas/profiles` serves it:
+/// the entity active on the pointer, unless denylisted; the name as deployed
+/// (lambdas only recomputes `hasClaimedName`, never the name).
 pub(super) async fn creator_profile_name(
     pool: &PgPool,
-    creator: &str,
+    address: &str,
 ) -> anyhow::Result<Option<String>> {
-    if creator.is_empty() {
+    if address.is_empty() {
         return Ok(None);
     }
     let raw: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT entity_metadata::text FROM content.deployments
-         WHERE entity_type = 'profile' AND deleter_deployment IS NULL
-           AND entity_pointers @> ARRAY[$1::text]
-         ORDER BY entity_timestamp DESC LIMIT 1",
+        "SELECT d.entity_metadata::text FROM content.active_pointers ap
+         JOIN content.deployments d ON d.entity_id = ap.entity_id
+         WHERE ap.pointer = $1 AND d.entity_type = 'profile' AND d.deleter_deployment IS NULL
+           AND NOT EXISTS (SELECT 1 FROM content.denylist l WHERE l.id = d.entity_id)
+         LIMIT 1",
     )
-    .bind(creator)
+    .bind(address.to_lowercase())
     .fetch_optional(pool)
     .await?;
     Ok(raw
@@ -855,6 +859,58 @@ mod pg_tests {
             0,
             "nothing past the cursor"
         );
+    }
+
+    /// Names come from the profile lambdas serves: the active entity, never a
+    /// denylisted one, the name as deployed.
+    #[tokio::test]
+    async fn profile_names_follow_the_active_non_denylisted_entity() {
+        let Some(pool) = crate::db::scratch::pool(2).await else {
+            return;
+        };
+        let a = fresh_address();
+        let deploy = |name: &'static str, active: bool| {
+            let (pool, a) = (pool.clone(), a.clone());
+            async move {
+                let entity = format!("bafy-{}", Uuid::new_v4().simple());
+                sqlx::query(
+                    "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, entity_timestamp, entity_pointers, local_timestamp, auth_chain)
+                     VALUES ($1, 'v3', 'profile', $2, $3::json, timezone('UTC', now()), ARRAY[$1::text], timezone('UTC', now()), '[]'::json)",
+                )
+                .bind(&a)
+                .bind(&entity)
+                .bind(json!({"v": {"avatars": [{"name": name, "hasClaimedName": false}]}}))
+                .execute(&pool)
+                .await
+                .unwrap();
+                if active {
+                    sqlx::query("INSERT INTO content.active_pointers (pointer, entity_id, entity_type) VALUES ($1, $2, 'profile') ON CONFLICT (pointer) DO UPDATE SET entity_id = EXCLUDED.entity_id")
+                        .bind(&a)
+                        .bind(&entity)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                entity
+            }
+        };
+        assert_eq!(creator_profile_name(&pool, a.as_str()).await.unwrap(), None);
+        let active = deploy("Active", true).await;
+        deploy("Newer but not active", false).await;
+        let upper = a.as_str().to_uppercase().replace("0X", "0x");
+        assert_eq!(
+            creator_profile_name(&pool, &upper)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("Active")
+        );
+        sqlx::query("INSERT INTO content.denylist (id, added_by) VALUES ($1, 'test')")
+            .bind(&active)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(creator_profile_name(&pool, a.as_str()).await.unwrap(), None);
     }
 
     /// The rate-limit and online-bypass gates of every friend come back from

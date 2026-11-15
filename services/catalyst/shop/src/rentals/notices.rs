@@ -194,7 +194,8 @@ async fn published(pool: &PgPool) -> Option<(i64, i64)> {
     Some((c.last_block, c.last_block_time?))
 }
 
-const WAITING: &str = "the rentals index is not published (SHOP_RENTALS_INDEX_ENABLED)";
+const WAITING: &str =
+    "the rentals index is not published (chain-1 RPC unset or SHOP_RENTALS_INDEX_ENABLED=false)";
 
 /// One `rental_started` pass: every published rent after the cursor.
 pub async fn run_started(pool: &PgPool, base: &str) -> anyhow::Result<Pass> {
@@ -322,7 +323,7 @@ pub async fn run_ended(pool: &PgPool, base: &str) -> anyhow::Result<Pass> {
 
 pub fn spawn(state: &Arc<MarketplaceState>, jobs: &Jobs) {
     tracing::info!(
-        "rental notifications run while the rentals index is published (SHOP_RENTALS_INDEX_ENABLED); \
+        "rental notifications run while the rentals index is published; \
          until then their job progress reads `waiting`"
     );
     let pool = state.pool.clone();

@@ -3,12 +3,11 @@
 //! lease/recovery semantics; do network work outside the transaction;
 //! preserve idempotency on redelivery", over `social.notification_deliveries`
 //! The old crate had no out-of-process channel (rows were in-app only), so this
-//! is new behaviour with an explicit degraded mode: without
-//! `SENDGRID_NOTIFICATION_TEMPLATE_ID` every claimed row ends `skipped`;
-//! without `SIGNING_KEY` rows stay `pending`, unclaimed and with their retry
-//! budget intact, until it is set. Pending rows idle past the configured max
-//! age end `skipped` (`expired`); with expiry disabled a row held for the key
-//! still ends after [`DEFAULT_MAX_AGE`]. Opt-outs are checked again at claim time, so
+//! is new behaviour with an explicit degraded mode: without the SendGrid key,
+//! sender or template, or without `SIGNING_KEY`, rows stay `pending`, unclaimed
+//! and with their retry budget intact, until they are set. Pending rows idle past
+//! the configured max age end `skipped` (`expired`); with expiry disabled a held
+//! row still ends after [`DEFAULT_MAX_AGE`]. Opt-outs are checked again at claim time, so
 //! an unsubscribe stops queued rows. Terminal rows are pruned after [`RETENTION`].
 
 use std::sync::LazyLock;
@@ -42,6 +41,8 @@ pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(7 * 86_400);
 pub const MIN_MAX_AGE: Duration = Duration::from_secs(3600);
 /// The `last_error` of a row held for a missing `SIGNING_KEY`.
 const UNSIGNED: &str = "SIGNING_KEY unset";
+/// The `last_error` of a row held for a missing SendGrid key, sender or template.
+const UNCONFIGURED: &str = "email delivery not configured";
 
 /// `NOTIFICATION_DELIVERY_MAX_AGE_SECS` as the worker uses it: `0` disables
 /// expiry (`None`), any other value is floored to [`MIN_MAX_AGE`].
@@ -196,17 +197,15 @@ pub enum Outcome {
         error: String,
     },
     /// Back to `pending` after [`HOLD`] without counting the claim's attempt.
-    Held,
+    Held(&'static str),
 }
 
 /// The state transition for one claimed row's send result.
 pub fn outcome_of(claimed: &Claimed, result: Result<(), SendFailure>) -> Outcome {
     match result {
         Ok(()) => Outcome::Sent,
-        Err(SendFailure::NotConfigured) => {
-            Outcome::Skipped("email delivery not configured".to_string())
-        }
-        Err(SendFailure::NoSigningKey) => Outcome::Held,
+        Err(SendFailure::NotConfigured) => Outcome::Held(UNCONFIGURED),
+        Err(SendFailure::NoSigningKey) => Outcome::Held(UNSIGNED),
         Err(SendFailure::Permanent(e)) => Outcome::Failed(e),
         Err(SendFailure::Transient(e)) if claimed.attempts >= MAX_ATTEMPTS => {
             Outcome::Failed(format!("{e} (after {} attempts)", claimed.attempts))
@@ -231,7 +230,7 @@ pub async fn record(
             Outcome::Skipped(reason) => ("skipped", now, Some(reason), 0),
             Outcome::Failed(error) => ("failed", now, Some(error), 0),
             Outcome::Retry { after: d, error } => ("pending", after(*d), Some(error), 0),
-            Outcome::Held => ("pending", after(HOLD), Some(UNSIGNED), 1),
+            Outcome::Held(reason) => ("pending", after(HOLD), Some(*reason), 1),
         };
     sqlx::query(
         r#"
@@ -259,7 +258,7 @@ pub struct PassSummary {
     pub skipped: usize,
     pub failed: usize,
     pub retried: usize,
-    /// Due rows left unclaimed for a missing `SIGNING_KEY` (at most [`BATCH`]).
+    /// Due rows left unclaimed for missing SendGrid settings or `SIGNING_KEY` (at most [`BATCH`]).
     pub held: usize,
     /// Held rows ended `expired` (also counted in `skipped`).
     pub expired: usize,
@@ -314,13 +313,14 @@ pub async fn prune(pool: &PgPool, now: NaiveDateTime) -> Result<u64, sqlx::Error
 /// `now - max_age` as `skipped` (`expired`), over `notification_deliveries_due_idx`:
 /// a row left unclaimed for a missing key keeps its insert time as
 /// `next_attempt_at`, and a retried row reaches a terminal state within hours.
-/// With expiry disabled (`None`) only a hold is bounded: without a signing key,
-/// due rows whose notification is older than [`DEFAULT_MAX_AGE`] end `expired`.
+/// With expiry disabled (`None`) only a hold is bounded: when nothing can be sent
+/// (`deliverable` false), due rows whose notification is older than
+/// [`DEFAULT_MAX_AGE`] end `expired`.
 pub async fn expire(
     pool: &PgPool,
     now: NaiveDateTime,
     max_age: Option<Duration>,
-    can_sign: bool,
+    deliverable: bool,
 ) -> Result<u64, sqlx::Error> {
     let cutoff = |age: Duration| {
         chrono::Duration::from_std(age)
@@ -344,7 +344,7 @@ pub async fn expire(
             WHERE d.notification_id = old.notification_id AND d.channel = old.channel
             "#,
         ),
-        None if !can_sign => (
+        None if !deliverable => (
             cutoff(DEFAULT_MAX_AGE),
             r#"
             UPDATE social.notification_deliveries d
@@ -373,7 +373,7 @@ pub async fn expire(
     Ok(res.rows_affected())
 }
 
-/// One pass: claim, send each outside any transaction, record. A row whose
+/// One pass: claim, send each outside any transaction, record; the caller logs `held`. A row whose
 /// recipient lost their email between insert and send, or whose type has no
 /// template (rows written before the allowlist), is `skipped` without a send.
 /// A row held at send time past `max_age` (or [`DEFAULT_MAX_AGE`] with expiry
@@ -385,7 +385,7 @@ pub async fn run_pass(
     max_age: Option<Duration>,
 ) -> anyhow::Result<PassSummary> {
     let now = now_utc();
-    if configured && !channel.can_sign() {
+    if !configured || !channel.can_sign() {
         let held: i64 = sqlx::query_scalar(
             r#"
             SELECT count(*) FROM (
@@ -399,12 +399,6 @@ pub async fn run_pass(
         .bind(BATCH)
         .fetch_one(pool)
         .await?;
-        if held > 0 {
-            tracing::error!(
-                held,
-                "SIGNING_KEY unset: notification emails stay pending until it is set"
-            );
-        }
         return Ok(PassSummary {
             held: held as usize,
             ..Default::default()
@@ -416,16 +410,15 @@ pub async fn run_pass(
         ..Default::default()
     };
     for row in &claimed {
-        let outcome = match (&row.email, configured) {
-            (None, _) => Outcome::Skipped("no confirmed email at send time".to_string()),
+        let outcome = match &row.email {
+            None => Outcome::Skipped("no confirmed email at send time".to_string()),
             _ if !templates::is_emailable(&row.kind) => {
                 Outcome::Skipped("no email template".to_string())
             }
             _ if row.opted_out.is_some() => {
                 Outcome::Skipped(row.opted_out.clone().unwrap_or_default())
             }
-            (Some(_), false) => outcome_of(row, Err(SendFailure::NotConfigured)),
-            (Some(to), true) => {
+            Some(to) => {
                 let mut row = row.clone();
                 let result = match enrich_names(pool, &mut row).await {
                     Ok(()) => channel.send(to, &row).await,
@@ -436,10 +429,10 @@ pub async fn run_pass(
                 outcome_of(&row, result)
             }
         };
-        // `EmailSender` never gets here: `can_sign` and its `NoSigningKey` read
-        // the same key, fixed at construction, so the gate above returns first.
+        // `EmailSender` never gets here: the gate above reads the same settings,
+        // fixed at construction, and returns first.
         let outcome = match outcome {
-            Outcome::Held if held_too_long(row, now, max_age) => {
+            Outcome::Held(_) if held_too_long(row, now, max_age) => {
                 summary.expired += 1;
                 Outcome::Skipped(EXPIRED.to_string())
             }
@@ -450,15 +443,9 @@ pub async fn run_pass(
             Outcome::Skipped(_) => summary.skipped += 1,
             Outcome::Failed(_) => summary.failed += 1,
             Outcome::Retry { .. } => summary.retried += 1,
-            Outcome::Held => summary.held += 1,
+            Outcome::Held(_) => summary.held += 1,
         }
         record(pool, row.notification_id, now_utc(), &outcome).await?;
-    }
-    if summary.held > 0 {
-        tracing::error!(
-            held = summary.held,
-            "SIGNING_KEY unset: notification emails stay pending until it is set"
-        );
     }
     if summary.expired > 0 {
         tracing::warn!(
@@ -510,7 +497,7 @@ mod tests {
         assert_eq!(outcome_of(&claimed(1), Ok(())), Outcome::Sent);
         assert_eq!(
             outcome_of(&claimed(1), Err(SendFailure::NotConfigured)),
-            Outcome::Skipped("email delivery not configured".into())
+            Outcome::Held(UNCONFIGURED)
         );
         assert_eq!(
             outcome_of(&claimed(1), Err(SendFailure::Permanent("400".into()))),
@@ -532,7 +519,7 @@ mod tests {
         ));
         assert_eq!(
             outcome_of(&claimed(MAX_ATTEMPTS + 3), Err(SendFailure::NoSigningKey)),
-            Outcome::Held,
+            Outcome::Held(UNSIGNED),
             "a missing signing key never ends the row"
         );
     }
@@ -683,25 +670,27 @@ mod pg_tests {
     }
 
     #[tokio::test]
-    async fn unconfigured_email_skips_explicitly_and_a_missing_recipient_email_skips_without_a_send()
-     {
+    async fn unconfigured_email_holds_rows_and_a_missing_recipient_email_skips_without_a_send() {
         let Some(pool) = private_pool("dlv").await else {
             return;
         };
         let a = pending_for(&pool, &fresh_address()).await;
         let recorder = Recorder::new();
-        run_pass(&pool, &recorder, false, Some(DEFAULT_MAX_AGE))
+        let summary = run_pass(&pool, &recorder, false, Some(DEFAULT_MAX_AGE))
             .await
             .unwrap();
+        assert_eq!((summary.claimed, summary.held), (0, 1), "{summary:?}");
         assert_eq!(
             delivery_state(&pool, a[0].id).await.unwrap(),
-            (
-                "skipped".into(),
-                1,
-                Some("email delivery not configured".into())
-            )
+            ("pending".into(), 0, None),
+            "held unclaimed, retry budget intact"
         );
-        assert!(recorder.sent.lock().iter().all(|(_, n)| *n != a[0].id));
+        assert!(recorder.sent.lock().is_empty());
+        assert_eq!(expire(&pool, now_utc(), None, false).await.unwrap(), 0);
+        run_pass(&pool, &recorder, true, Some(DEFAULT_MAX_AGE))
+            .await
+            .unwrap();
+        assert_eq!(delivery_state(&pool, a[0].id).await.unwrap().0, "sent");
 
         let b_addr = fresh_address();
         let b = pending_for(&pool, &b_addr).await;
@@ -822,17 +811,24 @@ mod pg_tests {
     }
 
     async fn deploy_profile(pool: &PgPool, address: &str, name: &str) {
+        let entity = format!("bafy-{}", Uuid::new_v4().simple());
         sqlx::query(
             "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, entity_timestamp, entity_pointers, local_timestamp, auth_chain)
              VALUES ($1, 'v3', 'profile', $2, $3::json, $4, ARRAY[$1::text], $4, '[]'::json)",
         )
         .bind(address)
-        .bind(format!("bafy-{}", Uuid::new_v4().simple()))
+        .bind(&entity)
         .bind(serde_json::json!({"v": {"avatars": [{"name": name}]}}))
         .bind(now_utc())
         .execute(pool)
         .await
         .unwrap();
+        sqlx::query("INSERT INTO content.active_pointers (pointer, entity_id, entity_type) VALUES ($1, $2, 'profile') ON CONFLICT (pointer) DO UPDATE SET entity_id = EXCLUDED.entity_id")
+            .bind(address)
+            .bind(&entity)
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

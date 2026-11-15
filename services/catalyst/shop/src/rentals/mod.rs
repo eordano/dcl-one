@@ -27,7 +27,8 @@
 //! - Rental status sync (`open -> executed | cancelled | claimed`): the
 //!   `rentals` chain index ([`index`], `shop.rental_event`, the Rentals
 //!   contract's own logs instead of the rentals subgraph the old crate
-//!   configured and never ran), behind `SHOP_RENTALS_INDEX_ENABLED`;
+//!   configured and never ran), on whenever a chain-1 endpoint is configured
+//!   unless `SHOP_RENTALS_INDEX_ENABLED=false`;
 //!   `GET /v1/rentals-index` reports its cursor. Until it publishes, a
 //!   listing keeps the status it was posted with and the rent quote
 //!   (`shop::mana`) reads the nonces on chain.

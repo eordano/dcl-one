@@ -454,7 +454,8 @@ class DevTest(unittest.TestCase):
             dev.origin_settings({'FOUNDATION_DEV_TLS_CERT': '/unused', 'FOUNDATION_DEV_TLS_KEY': '/unused'})
 
     def test_a_developers_certificate_replaces_the_generated_pulse_pair(self):
-        certificate, key = self.state / 'dev.crt', self.state / 'dev.key'
+        # The settings keep resolved paths, and the macOS temporary directory is behind a link.
+        certificate, key = (self.state / 'dev.crt').resolve(), (self.state / 'dev.key').resolve()
         config = {**self.config, 'public_origin': 'https://dev.example.test'}
         with self.assertRaisesRegex(RuntimeError, 'missing'):
             dev.origin_settings({}, 'https://dev.example.test', str(certificate), str(key))

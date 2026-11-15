@@ -19,6 +19,7 @@ use crate::api::Shared as AppState;
 const IDENTITY_TTL_SECONDS: i64 = 3600;
 const IDENTITY_STATUS_TTL_SECONDS: i64 = 14 * 24 * 3600;
 const MAX_PENDING_IDENTITIES: usize = 10_000;
+pub(super) const MAX_IDENTITIES_PER_SOURCE: usize = 100;
 const MAX_IDENTITY_TOMBSTONES: usize = 50_000;
 const IDENTITY_SIGNED_PATH: &str = "/identities";
 
@@ -43,6 +44,8 @@ pub struct IdentityRecord {
     pub identity_id: String,
     pub identity: Value,
     pub ip_address: String,
+    /// The creating network's `request_source` key, for the pending cap.
+    pub source: Option<String>,
     pub is_mobile: bool,
     pub created_at: DateTime<Utc>,
     pub expiration: DateTime<Utc>,
@@ -102,6 +105,7 @@ pub struct IdentityIdValidationResponse {
 
 pub(super) async fn create_identity(
     State(state): State<AppState>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     headers: HeaderMap,
     Json(body): Json<IdentityRequestBody>,
@@ -153,11 +157,37 @@ pub(super) async fn create_identity(
     if state.auth_api.identities.len() >= MAX_PENDING_IDENTITIES {
         sweep_expired_identities(&state, now);
     }
-    if state.auth_api.identities.len() >= MAX_PENDING_IDENTITIES {
+    let source = super::request_source(
+        &headers,
+        peer.map(|axum::Extension(axum::extract::ConnectInfo(p))| p),
+        &state.settings.trusted_proxy_cidrs,
+    );
+    let admission = state.auth_api.identity_admission.lock();
+    let (mut live, mut from_source) = (0usize, 0usize);
+    for entry in state.auth_api.identities.iter() {
+        let record = entry.value();
+        if record.expiration < now {
+            continue;
+        }
+        live += 1;
+        if source.is_some() && record.source == source {
+            from_source += 1;
+        }
+    }
+    if live >= MAX_PENDING_IDENTITIES {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorBody {
                 error: "Too many pending identities, retry shortly".into(),
+            }),
+        )
+            .into_response();
+    }
+    if from_source >= MAX_IDENTITIES_PER_SOURCE {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorBody {
+                error: "Too many pending sign-ins from this network, try again later".into(),
             }),
         )
             .into_response();
@@ -167,6 +197,7 @@ pub(super) async fn create_identity(
         identity_id: identity_id.clone(),
         identity: body.identity,
         ip_address: client_ip(&headers),
+        source,
         is_mobile: body.is_mobile.unwrap_or(false),
         created_at: now,
         expiration,
@@ -175,6 +206,7 @@ pub(super) async fn create_identity(
         .auth_api
         .identities
         .insert(identity_id.clone(), record);
+    drop(admission);
     if state.auth_api.identity_status.len() < MAX_IDENTITY_TOMBSTONES {
         state.auth_api.identity_status.insert(
             identity_id.clone(),

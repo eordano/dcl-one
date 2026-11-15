@@ -1351,3 +1351,86 @@ async fn a_reload_at_the_cap_keeps_its_slot() {
     drop(reload);
     assert!(h.state.reserve_slot(&second_key).is_ok());
 }
+
+/// A Genesis deployment on `parcels`, its pointers active.
+async fn seed_parked_genesis(h: &Host, id: &str, parcels: &[String]) {
+    let code_hash = store(&h.state, b"").await;
+    let dep_id: i32 = sqlx::query_scalar(
+        "INSERT INTO content.deployments (deployer_address, version, entity_type, entity_id, entity_metadata, entity_timestamp, entity_pointers, local_timestamp, auth_chain) \
+         VALUES ('0x0', 'v3', 'scene', $1, $2::json, timezone('UTC', now()), $3, timezone('UTC', now()), '[]'::json) RETURNING id",
+    )
+    .bind(id)
+    .bind(serde_json::json!({ "main": "bin/game.js", "scene": { "base": parcels[0] } }))
+    .bind(parcels.to_vec())
+    .fetch_one(&h.state.pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO content.content_files (deployment, content_hash, key) VALUES ($1, $2, 'bin/game.js')")
+        .bind(dep_id)
+        .bind(&code_hash)
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    for p in parcels {
+        sqlx::query("INSERT INTO content.active_pointers (pointer, entity_id) VALUES ($1, $2) ON CONFLICT (pointer) DO UPDATE SET entity_id = EXCLUDED.entity_id")
+            .bind(p)
+            .bind(id)
+            .execute(&h.state.pool)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scene_parked_by_an_oom_is_retired_and_stays_refused() {
+    let Some(h) = host(false).await else { return };
+    let world = world_name();
+    seed_world(&h.state.pool, &world, None, AccessType::Unrestricted).await;
+    let world_id = format!("bafyParkedW{}", Uuid::new_v4().simple());
+    seed_scene(
+        &h.state,
+        &world,
+        &world_id,
+        "",
+        None,
+        "0,0",
+        &["0,0"],
+        false,
+    )
+    .await;
+    let world_key = SceneKey::World(world.clone());
+    h.state.load(&world_key).await.unwrap();
+
+    let x = 50_000 + (Uuid::new_v4().as_u128() % 10_000) as i32;
+    let (first, second) = (
+        format!("bafyParkedG{}", Uuid::new_v4().simple()),
+        format!("bafyParkedH{}", Uuid::new_v4().simple()),
+    );
+    seed_parked_genesis(&h, &first, &[format!("{x},1"), format!("{x},2")]).await;
+    let genesis_key = SceneKey::Genesis(SceneId::parse(&first).unwrap());
+    h.state.load(&genesis_key).await.unwrap();
+
+    for scene in [h.state.scenes.get(world.key()), h.state.scenes.get(&first)] {
+        scene.unwrap().runtime.mark_parked_for_tests();
+    }
+    assert_eq!(h.state.retire_parked(), 2);
+    assert!(h.state.scenes.get(world.key()).is_none());
+    assert!(h.state.scenes.get(&first).is_none());
+    assert_eq!(
+        h.state.parked_count(),
+        2,
+        "parked isolates keep their slots"
+    );
+
+    let err = h.state.load(&world_key).await.unwrap_err();
+    assert!(err.to_string().contains("ran out of memory"), "{err}");
+    // A redeploy under a new id on one of the parked scene's parcels.
+    seed_parked_genesis(&h, &second, &[format!("{x},2"), format!("{x},3")]).await;
+    let err = h
+        .state
+        .load(&SceneKey::Genesis(SceneId::parse(&second).unwrap()))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("ran out of memory"), "{err}");
+    assert!(h.state.scenes.get(&second).is_none());
+}

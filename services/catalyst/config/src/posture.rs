@@ -291,6 +291,16 @@ const ROWS: &[Row] = &[
         "https://api.openai.com/v1",
     ),
     upstream(
+        "notification email",
+        "SENDGRID_API_URL",
+        "https://api.sendgrid.com",
+    ),
+    upstream(
+        "notification email",
+        "DISPOSABLE_EMAIL_DOMAINS_URL",
+        "https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/disposable_email_blocklist.conf",
+    ),
+    upstream(
         "mirrors",
         "EXPLORER_MAP_SOURCE_URL",
         "https://api.decentraland.org",
@@ -936,6 +946,7 @@ pub const ANY_HOST: &[(&str, &str)] = &[
     ("COMMUNITIES_CDN_URL", LINK),
     ("SERVICE_BASE_URL", LINK),
     ("FIRST_WEAR_IMAGE_BASE", LINK),
+    ("NOTIFICATIONS_CDN_URL", LINK),
     ("MAP_EXTERNAL_BASE_URL", LINK),
     ("MAP_IMAGE_BASE_URL", LINK),
     ("CAMERA_REEL_API_URL", LINK),
@@ -1147,7 +1158,11 @@ const THIRD_PARTY_SECRETS: &[(&str, Option<&str>, &str)] = &[
         Some("OPENAI_BASE_URL"),
         "community compliance Responses API",
     ),
-    ("SENDGRID_API_KEY", None, "SendGrid's mail API"),
+    (
+        "SENDGRID_API_KEY",
+        Some("SENDGRID_API_URL"),
+        "SendGrid's mail API",
+    ),
     ("SLACK_BOT_TOKEN", None, "Slack Web API"),
     (
         "ANALYTICS_API_TOKEN",

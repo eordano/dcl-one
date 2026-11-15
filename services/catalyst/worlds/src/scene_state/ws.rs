@@ -5,6 +5,7 @@
 //! closes or the client is removed.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{OriginalUri, Path, State};
@@ -286,6 +287,7 @@ async fn handle_socket(
         }
     };
     let index = client.index;
+    let meter = init.outbound_meter.clone();
 
     if init.size == 0 {
         tracing::error!(scene = %scene.name, index, address = %authed.signer, "no entity range available; refusing the connection");
@@ -316,7 +318,12 @@ async fn handle_socket(
 
             queued = rx.recv() => {
                 let Some(frame) = queued else { break };
-                if sink.send(Message::Binary(frame.into())).await.is_err() {
+                let len = frame.len();
+                let sent = sink.send(Message::Binary(frame.into())).await;
+                if let Some(meter) = &meter {
+                    let _ = meter.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_sub(len)));
+                }
+                if sent.is_err() {
                     break;
                 }
             }
@@ -327,7 +334,10 @@ async fn handle_socket(
                     Message::Binary(bytes) => {
                         if let Some((MessageType::Crdt, body)) = decode_message(&bytes) {
                             if body.is_empty() { continue; }
-                            let outbound = scene.runtime.on_client_crdt(index, body);
+                            let Ok(outbound) = scene.runtime.on_client_crdt(index, body) else {
+                                tracing::info!(scene = %scene.name, index, "client over its inbound byte budget; closing");
+                                break;
+                            };
                             for out in outbound {
                                 let frame = encode_message(MessageType::Crdt, &out);
                                 scene.broadcast(&frame, index);

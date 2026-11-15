@@ -17,9 +17,9 @@ Optimized builds retain the release compilation settings and run wasm-opt. Unopt
 builds use 16 codegen units; the larger modules trade download size for compilation speed. The
 two settings give every crate a different hash, so each has its own wasm target cache. Main
 fills the unoptimized one in the job `web-pr-target`, which runs `build-web.py --no-opt
---target-only` (the Cargo step alone) and saves one entry for each set of engine inputs. A PR
-restores main's entry; when main has none for the PR's dependencies, the PR saves one entry of
-its own, once.
+--target-only` (the Cargo steps alone: the two modules and the bindings test build) and saves
+one entry for each set of engine inputs. A PR restores main's entry; when main has none for the
+PR's dependencies, the PR saves one entry of its own, once.
 Linux web CI takes protoc, clang 21, pkg-config and ALSA/udev development outputs from
 the flake's cached `bevy-web-tools` package and installs no apt build dependencies. Its
 pkg-config search path points to that package. Native Linux packaging retains distribution

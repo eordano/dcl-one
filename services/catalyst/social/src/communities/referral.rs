@@ -91,6 +91,8 @@ pub struct Settings {
     pub suspicious_window_ms: f64,
     pub slack: SlackSettings,
     pub profile_url: String,
+    /// `NOTIFICATIONS_CDN_URL`: base of the referral notice icon.
+    pub cdn_url: String,
     pub reward_server_url: Option<String>,
     pub reward_keys: std::collections::HashMap<i64, String>,
 }
@@ -103,6 +105,7 @@ impl Default for Settings {
             suspicious_window_ms: 300_000.0,
             slack: Default::default(),
             profile_url: "https://decentraland.org".into(),
+            cdn_url: crate::notifications::DEFAULT_CDN_URL.into(),
             reward_server_url: None,
             reward_keys: Default::default(),
         }
@@ -662,14 +665,17 @@ impl Referral {
                 "referral_new_tier_reached",
                 "Referral Reward Unlocked!",
                 "Check the 'Referral Rewards' tab in your web profile to see your prize!",
-                reward["image"].as_str().unwrap_or_default(),
+                reward["image"].as_str().unwrap_or_default().to_string(),
                 reward.get("rarity").cloned().unwrap_or(Value::Null),
             ),
             None => (
                 "referral_invited_users_accepted",
                 "Referral Completed!",
                 "Your friend jumped into Decentraland, so you're closer to unlocking your next reward!",
-                "https://assets-cdn.decentraland.org/referral/referral-invited-user-accepted-icon.png",
+                crate::notifications::cdn_asset(
+                    &self.settings.cdn_url,
+                    "referral/referral-invited-user-accepted-icon.png",
+                ),
                 Value::Null,
             ),
         };
@@ -1727,6 +1733,23 @@ mod tests {
         }
         let count:i64=sqlx::query_scalar("SELECT count(*) FROM social.notifications WHERE address=$1 AND type='referral_invited_users_accepted'").bind(referrer).fetch_one(&pool).await.unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn the_accepted_notice_icon_follows_the_configured_cdn() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/nowhere").unwrap();
+        let settings = Settings {
+            cdn_url: "https://cdn.example.org/".into(),
+            ..Settings::for_tests()
+        };
+        let referral = Referral::new(pool, Outbound::for_tests(), settings);
+        let referrer = "0x00000000000000000000000000000000000000a1";
+        let invited = "0x00000000000000000000000000000000000000b1";
+        let notice = referral.notification(referrer, invited, 1, None).unwrap();
+        assert_eq!(
+            notice.metadata["image"],
+            "https://cdn.example.org/referral/referral-invited-user-accepted-icon.png"
+        );
     }
 
     #[test]

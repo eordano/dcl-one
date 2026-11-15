@@ -287,6 +287,7 @@ async fn credit_settled(
                         actor: Some(STRIPE_ACTOR),
                         idempotency_key: Some(event_id),
                         detail: &detail,
+                        studio_name: None,
                     },
                 )
                 .await?;

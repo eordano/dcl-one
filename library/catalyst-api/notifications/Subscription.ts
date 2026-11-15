@@ -2,6 +2,6 @@
 
 export type Subscription = { address: string, 
 /**
- * Absent until confirmed, as upstream's `undefined`.
+ * As upstream: absent without a subscription row, `null` while the row has no confirmed email.
  */
-email?: string, unconfirmedEmail?: string, details: Record<string, unknown>, };
+email?: string | null, unconfirmedEmail?: string, details: Record<string, unknown>, };

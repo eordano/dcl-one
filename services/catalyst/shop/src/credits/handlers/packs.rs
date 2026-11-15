@@ -210,6 +210,7 @@ pub async fn mock_purchase(
             actor: Some("card-mock"),
             idempotency_key: Some(&idem),
             detail: &detail,
+            studio_name: None,
         })
         .await?;
 
@@ -287,6 +288,7 @@ pub async fn mock_topup(
             actor: Some("card-mock"),
             idempotency_key: Some(&idem),
             detail: &detail,
+            studio_name: None,
         })
         .await?;
 

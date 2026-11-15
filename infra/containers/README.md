@@ -136,6 +136,7 @@ describes cache scope, trust boundaries, stale-entry replacement and retention.
 - APIs listen on 5210, Sites on 5212, as `1000:1000`. APIs need `DATABASE_URL`, posture, public URL, encryption key and integration secrets, and, behind the gateway, `HTTP_TRUSTED_PROXY_CIDRS` with the gateway's network ([gateway](../gateway/README.md)); Sites needs `CATALYST_URL`, `CATALYST_DATABASE_URL` and a session secret.
 - Sites' blog (`/blog`) reads cms-server, the Contentful cache decentraland/sites reads: `BLOG_CMS_URL` is its full `<origin>/spaces/<space>/environments/<environment>` base. Unset, or with the CMS unreachable, the blog pages answer 503. TODO(cms-migration): point `BLOG_CMS_URL` at the in-tree catalyst CMS area once cms-server is migrated into dcl-one; today it is the external cms-server.
 - Sites' sign-in (`/auth/login`) offers each option only when its public identifier is set, the same ones decentraland.org ships: `THIRDWEB_CLIENT_ID` (email codes), `MAGIC_API_KEY` (Magic's publishable key: Google, Apple, Discord, X) and `WALLETCONNECT_PROJECT_ID`. A different identifier signs the same account into a different wallet. Magic must allow the site's origin and `<origin>/auth/callback`. `FEATURE_FLAGS_ORIGIN` names the site whose `dapps-sign-in-primary-option` rollout lays it out (decentraland.org when unset). Locally, `tooling/dev.py` takes the three identifiers, and nothing else of the shell's, from the environment it is started in.
+- Sites serves the email confirmation links under `/account` (`confirm-email-challenge`, `confirm-email`, `credits-email-confirmed`), so the node's `ACCOUNT_BASE_URL` is `<origin>/account`; a request on `account.<domain>` redirects there. `TURNSTILE_SITE_KEY` (Cloudflare Turnstile's public site key) shows the challenge and must pair with the node's `TURNSTILE_SECRET_KEY`; unset, the links confirm without one.
 - Run `schema apply` (empty) or `schema migrate` as a job before the new API. Never reset an existing database.
 
 World-admission upgrade: the release script
@@ -146,6 +147,13 @@ with the administrative role before starting the new binaries.
 Keep the pre-migration database backup: old binaries cannot read stable world ban
 keys, so rollback must restore the matching backup. See `DATABASE.md` for the
 retention and token-remint behavior.
+
+### Notification email settings
+
+- `NOTIFICATIONS_BROADCAST_HORIZON_DAYS` now defaults to 0: producer broadcasts are kept and listed forever, as upstream. Set it to 90 to keep the previous hide-and-prune behaviour.
+- Without `SENDGRID_API_KEY`, a sender, a template or `SENDGRID_API_URL`, notification emails stay pending (expiring after `NOTIFICATION_DELIVERY_MAX_AGE_SECS`) instead of ending skipped. `SENDGRID_EMAIL_FROM` and `SENDGRID_EMAIL_TEMPLATE_ID` are accepted as fallbacks.
+- confirm-email runs Turnstile only while `TURNSTILE_SECRET_KEY` is set and the `dapps-turnstile-verification` flag is on (`FF_URL` or a local flag override); the node warns at start when the secret is set and the flag is off.
+- set-email and confirm-email refuse the domains of `DISPOSABLE_EMAIL_DOMAINS_URL` and the `dapps-credits-blacklisted-domains` flag variant. Only `NODE_POSTURE=mirror` sets the URL; under island, journey or no posture it is empty and no disposable domain is refused unless the URL is set. A download with fewer than `DISPOSABLE_EMAIL_DOMAINS_MIN` (1000) domains keeps the previous list; lower it for a shorter list of your own.
 
 ### Pulse assignment upgrade
 

@@ -204,6 +204,19 @@ pub struct RawSettings {
     pub crdt_max_components: usize,
     /// `WS_MAX_FRAME_BYTES` (2 MiB).
     pub ws_max_frame_bytes: usize,
+    /// `CRDT_MAX_VALUE_BYTES` (256 KiB): largest single component payload a scene's state keeps.
+    pub crdt_max_value_bytes: usize,
+    /// `CRDT_MAX_BYTES` (32 MiB): payload bytes one scene's state keeps.
+    pub crdt_max_bytes: usize,
+    /// `CLIENT_INBOUND_MAX_BYTES` (8 MiB): unread client bytes queued toward the scene, per client.
+    pub client_inbound_max_bytes: usize,
+    /// `SCENE_INBOUND_MAX_BYTES` (32 MiB): unread client bytes queued toward
+    /// one scene, a quarter of it for frames held before the observer registers.
+    pub scene_inbound_max_bytes: usize,
+    /// `CLIENT_OUTBOUND_MAX_BYTES` (8 MiB): scene bytes queued to one client.
+    pub client_outbound_max_bytes: usize,
+    /// `JS_ARRAY_BUFFER_LIMIT_MB` (128): ArrayBuffer memory one isolate holds outside its JS heap.
+    pub js_array_buffer_limit_mb: usize,
     /// `SCENE_HOST_STORAGE_URL`: the world-storage origin, the ONLY origin
     /// `~system/SignedFetch` may reach; unset disables scene storage.
     pub storage_url: Option<String>,
@@ -265,6 +278,12 @@ impl std::fmt::Debug for RawSettings {
             .field("client_inbound_max", &self.client_inbound_max)
             .field("crdt_max_components", &self.crdt_max_components)
             .field("ws_max_frame_bytes", &self.ws_max_frame_bytes)
+            .field("crdt_max_value_bytes", &self.crdt_max_value_bytes)
+            .field("crdt_max_bytes", &self.crdt_max_bytes)
+            .field("client_inbound_max_bytes", &self.client_inbound_max_bytes)
+            .field("scene_inbound_max_bytes", &self.scene_inbound_max_bytes)
+            .field("client_outbound_max_bytes", &self.client_outbound_max_bytes)
+            .field("js_array_buffer_limit_mb", &self.js_array_buffer_limit_mb)
             .field("storage_url", &self.storage_url)
             .field("storage_allow_http", &self.storage_allow_http)
             .field("authoritative_key", &set(&self.authoritative_key))
@@ -314,6 +333,12 @@ impl Default for RawSettings {
             client_inbound_max: 1024,
             crdt_max_components: 100_000,
             ws_max_frame_bytes: 2 * 1024 * 1024,
+            crdt_max_value_bytes: 256 * 1024,
+            crdt_max_bytes: 32 * 1024 * 1024,
+            client_inbound_max_bytes: 8 * 1024 * 1024,
+            scene_inbound_max_bytes: 32 * 1024 * 1024,
+            client_outbound_max_bytes: 8 * 1024 * 1024,
+            js_array_buffer_limit_mb: 128,
             storage_url: None,
             storage_allow_http: false,
             authoritative_key: None,
@@ -427,6 +452,43 @@ impl Settings {
                  SCENE_HOST_STORAGE_DELEGATION; scene storage requests fail closed"
             );
         }
+        for (name, value) in [
+            ("CRDT_MAX_VALUE_BYTES", raw.crdt_max_value_bytes),
+            ("CRDT_MAX_BYTES", raw.crdt_max_bytes),
+            ("CLIENT_INBOUND_MAX_BYTES", raw.client_inbound_max_bytes),
+            ("SCENE_INBOUND_MAX_BYTES", raw.scene_inbound_max_bytes),
+            ("CLIENT_OUTBOUND_MAX_BYTES", raw.client_outbound_max_bytes),
+            ("JS_ARRAY_BUFFER_LIMIT_MB", raw.js_array_buffer_limit_mb),
+        ] {
+            if value == 0 {
+                return Err(anyhow!("{name} must be at least 1"));
+            }
+        }
+        // getMessages copies a client's whole queue, crdtGetState the whole snapshot.
+        if raw.js_array_buffer_limit_mb.saturating_mul(1024 * 1024)
+            < raw.client_inbound_max_bytes.max(raw.crdt_max_bytes)
+        {
+            return Err(anyhow!(
+                "JS_ARRAY_BUFFER_LIMIT_MB is below CLIENT_INBOUND_MAX_BYTES or CRDT_MAX_BYTES"
+            ));
+        }
+        if raw.crdt_max_value_bytes > raw.crdt_max_bytes {
+            return Err(anyhow!("CRDT_MAX_VALUE_BYTES exceeds CRDT_MAX_BYTES"));
+        }
+        // A client must be able to queue at least one frame of the largest size.
+        if raw.client_inbound_max_bytes < raw.ws_max_frame_bytes {
+            return Err(anyhow!(
+                "CLIENT_INBOUND_MAX_BYTES is below WS_MAX_FRAME_BYTES"
+            ));
+        }
+        // A quarter of the scene bound is for frames held before registration.
+        let readable = raw.scene_inbound_max_bytes
+            - runtime::InboundBudget::held_share(raw.scene_inbound_max_bytes);
+        if readable < raw.client_inbound_max_bytes {
+            return Err(anyhow!(
+                "three quarters of SCENE_INBOUND_MAX_BYTES are below CLIENT_INBOUND_MAX_BYTES"
+            ));
+        }
         if admin_token.is_none() {
             tracing::warn!(
                 "SCENE_HOST_ADMIN_TOKEN / SCENE_HOST_DEBUGGING_SECRET unset; the scene admin and reload routes refuse every caller"
@@ -452,6 +514,12 @@ impl Settings {
                 fetch_max_body_bytes: raw.signed_fetch_max_body_bytes,
                 fetch_max_in_flight: raw.signed_fetch_max_in_flight,
                 fetch_timeout_ms: raw.signed_fetch_timeout_ms,
+                crdt_max_value_bytes: raw.crdt_max_value_bytes,
+                crdt_max_bytes: raw.crdt_max_bytes,
+                client_inbound_max_bytes: raw.client_inbound_max_bytes,
+                scene_inbound_max_bytes: raw.scene_inbound_max_bytes,
+                client_outbound_max_bytes: raw.client_outbound_max_bytes,
+                js_array_buffer_limit_mb: raw.js_array_buffer_limit_mb,
             },
             ws_max_frame_bytes: raw.ws_max_frame_bytes,
             storage,
@@ -491,6 +559,20 @@ pub struct SceneHostState {
     /// The jobs' root token once `spawn_jobs` ran: every per-scene delegation
     /// renewal loop stops with it, not only when its scene is dropped.
     shutdown: std::sync::OnceLock<tokio_util::sync::CancellationToken>,
+    /// What a V8 OOM parked since start: refused until restart.
+    parked: parking_lot::Mutex<ParkedScenes>,
+}
+
+/// Scenes this host retired after a V8 OOM parked their isolate.
+#[derive(Default)]
+struct ParkedScenes {
+    /// Room keys refused from then on.
+    keys: std::collections::HashSet<String>,
+    /// Genesis parcels refused from then on, so a redeploy under a new id
+    /// cannot take the slot again.
+    parcels: std::collections::HashSet<String>,
+    /// Isolates still held; each keeps a slot.
+    isolates: usize,
 }
 
 pub type SharedState = Arc<SceneHostState>;
@@ -555,6 +637,7 @@ impl SceneHostState {
             eip1654,
             loads: SceneLocks::default(),
             shutdown: std::sync::OnceLock::new(),
+            parked: parking_lot::Mutex::new(ParkedScenes::default()),
         })
     }
 
@@ -593,6 +676,7 @@ impl SceneHostState {
         let key = self.canonical_key(key).await;
         let lock = self.load_lock(&key);
         let _guard = lock.lock().await;
+        self.retire_parked();
         let _slot = self.reserve_slot(&key)?;
         load_or_reload(self, &key).await
     }
@@ -614,7 +698,9 @@ impl SceneHostState {
             loading.fetch_add(1, Ordering::SeqCst);
             return Ok(SlotReservation(Some(loading)));
         }
-        if self.scenes.len() + loading.load(Ordering::SeqCst) >= self.settings.max_scenes {
+        // Isolates parked by an OOM keep their memory, so they hold a slot.
+        let held = self.scenes.len() + loading.load(Ordering::SeqCst) + self.parked_count();
+        if held >= self.settings.max_scenes {
             anyhow::bail!(
                 "scene host is full ({} scenes hosted, SCENE_HOST_MAX_SCENES)",
                 self.settings.max_scenes
@@ -625,9 +711,12 @@ impl SceneHostState {
     }
 
     /// Removes and kicks the scene hosted under `name`, atomically with joins.
+    /// Every removal goes through here or [`Self::unload_idle`], which both
+    /// record an OOM-parked scene ([`Self::note_removed`]).
     pub(crate) fn remove_hosted(&self, name: &str) -> Option<(Arc<scene::Scene>, usize)> {
         let _membership = self.loads.membership.lock();
         let scene = self.scenes.remove(name)?;
+        self.note_removed(&scene);
         let kicked = scene.kick_all();
         Some((scene, kicked))
     }
@@ -701,11 +790,63 @@ impl SceneHostState {
             {
                 tracing::info!(scene = %key, "no clients for the idle timeout; unloading");
                 self.scenes.remove(&key.room_key());
+                self.note_removed(&scene);
                 scene.kick_all();
                 unloaded += 1;
             }
         }
         unloaded
+    }
+
+    /// Unloads every scene an OOM parked; [`Self::note_removed`] records it.
+    pub fn retire_parked(&self) -> usize {
+        if jsruntime::parked_isolates() == 0 {
+            return 0;
+        }
+        let mut retired = 0;
+        for scene in self.scenes.all() {
+            if scene.runtime.parked()
+                && self.remove_hosted(&scene.identity.key.room_key()).is_some()
+            {
+                retired += 1;
+            }
+        }
+        retired
+    }
+
+    /// For a removed scene an OOM parked: its key (and a Genesis scene's
+    /// parcels) are refused until restart and its isolate keeps a slot.
+    /// Per runtime: a Genesis scene hosted under two keys is two runtimes.
+    fn note_removed(&self, scene: &scene::Scene) {
+        if !scene.runtime.parked() {
+            return;
+        }
+        let key = &scene.identity.key;
+        tracing::error!(scene = %key, "scene ran out of memory; unloaded and not loaded again until restart");
+        let mut parked = self.parked.lock();
+        parked.keys.insert(key.room_key());
+        if matches!(key, SceneKey::Genesis(_) | SceneKey::GenesisParcel(_))
+            && let Some(deployment) = &scene.identity.deployment
+        {
+            parked.parcels.extend(deployment.parcels.canonical());
+        }
+        parked.isolates += 1;
+    }
+
+    /// Whether an OOM parked the scene under `room_key` since start.
+    pub fn is_key_parked(&self, room_key: &str) -> bool {
+        self.parked.lock().keys.contains(room_key)
+    }
+
+    /// Whether a scene on any of `parcels` was parked by an OOM since start.
+    pub fn covers_parked_parcel(&self, parcels: &[String]) -> bool {
+        let parked = self.parked.lock();
+        parcels.iter().any(|p| parked.parcels.contains(p))
+    }
+
+    /// Isolates this host retired after an OOM; each keeps a slot.
+    pub fn parked_count(&self) -> usize {
+        self.parked.lock().isolates
     }
 
     /// Stops hosting `key`: every client is kicked and the runtime dropped.
@@ -786,7 +927,7 @@ impl SceneHostState {
     /// connected client and kick the refused.
     pub async fn sweep(&self) -> SweepSummary {
         let mut summary = SweepSummary {
-            unloaded: self.unload_idle().await,
+            unloaded: self.retire_parked() + self.unload_idle().await,
             ..SweepSummary::default()
         };
         for scene in self.scenes.all() {
@@ -976,6 +1117,38 @@ mod key_tests {
         );
         raw.authoritative_key = Some("nope".into());
         assert!(Settings::resolve(raw, &http).is_err());
+    }
+
+    #[test]
+    fn byte_limits_are_validated() {
+        let http = Outbound::for_tests();
+        let ok = |tune: fn(&mut RawSettings)| {
+            let mut raw = RawSettings::default();
+            tune(&mut raw);
+            Settings::resolve(raw, &http).is_ok()
+        };
+        assert!(ok(|_| {}));
+        assert!(!ok(|r| r.client_outbound_max_bytes = 0));
+        assert!(!ok(|r| r.js_array_buffer_limit_mb = 0));
+        assert!(!ok(
+            |r| r.js_array_buffer_limit_mb = r.crdt_max_bytes / (1024 * 1024) - 1
+        ));
+        assert!(!ok(|r| r.crdt_max_value_bytes = r.crdt_max_bytes + 1));
+        assert!(!ok(
+            |r| r.client_inbound_max_bytes = r.ws_max_frame_bytes - 1
+        ));
+        assert!(!ok(
+            |r| r.scene_inbound_max_bytes = r.client_inbound_max_bytes
+        ));
+        // The boundary: three quarters of the scene bound hold exactly one client.
+        assert!(ok(|r| {
+            r.client_inbound_max_bytes = 3 << 20;
+            r.scene_inbound_max_bytes = 4 << 20;
+        }));
+        assert!(!ok(|r| {
+            r.client_inbound_max_bytes = 3 << 20;
+            r.scene_inbound_max_bytes = (4 << 20) - 4;
+        }));
     }
 
     #[test]

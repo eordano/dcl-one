@@ -996,6 +996,7 @@ async fn dispute_revokes_granted_credits_instead_of_paying_the_buyer_twice() {
             actor: Some("stripe"),
             idempotency_key: None,
             detail: &json!({}),
+            studio_name: None,
         })
         .await
         .unwrap();
@@ -1089,6 +1090,7 @@ async fn charge_refund_revokes_and_reports_the_unrecoverable_shortfall() {
             actor: Some("stripe"),
             idempotency_key: None,
             detail: &json!({}),
+            studio_name: None,
         })
         .await
         .unwrap();
@@ -1132,6 +1134,7 @@ async fn charge_refund_revokes_and_reports_the_unrecoverable_shortfall() {
             actor: Some("test"),
             idempotency_key: None,
             detail: &json!({}),
+            studio_name: None,
         })
         .await
         .unwrap();
@@ -1286,6 +1289,7 @@ async fn pack_reversal_is_bounded_by_the_purchase_across_replays() {
             actor: Some("stripe"),
             idempotency_key: None,
             detail: &json!({}),
+            studio_name: None,
         })
         .await
         .unwrap();
@@ -1403,7 +1407,8 @@ async fn spend_rejects_non_positive_amounts_and_never_mints() {
                     reason: None,
                     actor: Some("t"),
                     idempotency_key: None,
-                    detail: &json!({})
+                    detail: &json!({}),
+                    studio_name: None,
                 })
                 .await
                 .expect_err("admin grant must reject")
@@ -1809,6 +1814,7 @@ async fn double_post_grants_once_and_replays_original_amounts() {
         actor: Some("mana-topup"),
         idempotency_key: Some(&idem),
         detail: &detail,
+        studio_name: None,
     };
 
     let first = credits.admin_grant_credits(grant("250")).await.unwrap();
@@ -1852,7 +1858,9 @@ async fn an_operator_grant_notifies_once_and_a_purchase_never() {
     let Some(pool) = pool().await else { return };
     let addr = scratch_wallet().address;
     let idem = unique("grant");
-    let credits = Credits::new(pool.clone()).with_shop_base_url("https://example.org/shop/");
+    let credits = Credits::new(pool.clone())
+        .with_shop_base_url("https://example.org/shop/")
+        .with_notifications_cdn_url("https://cdn.example.org/");
     let detail = json!({});
     let grant = |amount: &'static str, kind: &'static str, keyed: bool| GrantRequest {
         address: &addr,
@@ -1862,6 +1870,7 @@ async fn an_operator_grant_notifies_once_and_a_purchase_never() {
         actor: Some("ops"),
         idempotency_key: keyed.then_some(idem.as_str()),
         detail: &detail,
+        studio_name: None,
     };
     assert!(
         !credits
@@ -1885,6 +1894,13 @@ async fn an_operator_grant_notifies_once_and_a_purchase_never() {
         .admin_grant_credits(grant("9", "purchase", false))
         .await
         .unwrap();
+    credits
+        .admin_grant_credits(GrantRequest {
+            studio_name: Some(" Acme Studio "),
+            ..grant("30", "grant", false)
+        })
+        .await
+        .unwrap();
 
     let metadata: Vec<serde_json::Value> = sqlx::query_scalar(
         "SELECT metadata FROM social.notifications WHERE address = $1 AND type = 'credits_on_demand_granted' ORDER BY (metadata->>'usdCents')::int DESC",
@@ -1898,14 +1914,22 @@ async fn an_operator_grant_notifies_once_and_a_purchase_never() {
         vec![
             json!({
                 "creditsGranted": 1250, "denomination": "USD", "usdCents": 12500,
-                "image": "https://assets-cdn.decentraland.org/credits/notification-icon.png",
+                "image": "https://cdn.example.org/credits/notification-icon.png",
                 "title": "Credits added to your account",
                 "description": "You received 1,250 Credits. They never expire: spend them in the Shop.",
                 "link": "https://example.org/shop",
             }),
             json!({
+                "creditsGranted": 30, "denomination": "USD", "usdCents": 300,
+                "studioName": "Acme Studio",
+                "image": "https://cdn.example.org/credits/notification-icon.png",
+                "title": "A gift from Acme Studio",
+                "description": "Acme Studio gifted you 30 Credits. They never expire: spend them in the Shop.",
+                "link": "https://example.org/shop",
+            }),
+            json!({
                 "creditsGranted": 2.5, "denomination": "USD", "usdCents": 25,
-                "image": "https://assets-cdn.decentraland.org/credits/notification-icon.png",
+                "image": "https://cdn.example.org/credits/notification-icon.png",
                 "title": "Credits added to your account",
                 "description": "You received 2.5 Credits. They never expire: spend them in the Shop.",
                 "link": "https://example.org/shop",
@@ -5083,6 +5107,7 @@ async fn an_event_in_flight_holds_the_other_until_it_commits() {
                 actor: Some("stripe"),
                 idempotency_key: Some("evt_inflight-grant"),
                 detail: &json!({}),
+                studio_name: None,
             },
         )
         .await
@@ -8646,6 +8671,7 @@ async fn a_settled_session_naming_no_payment_intent_applies_the_reversals_of_the
                 actor: Some("stripe"),
                 idempotency_key: Some("evt_stored_pi-grant"),
                 detail: &json!({}),
+                studio_name: None,
             },
         )
         .await

@@ -3,6 +3,7 @@
 //! delivery records share the existing database; paid USD balances are untouched.
 pub mod flags;
 mod reads;
+mod reminders;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -83,6 +84,30 @@ async fn policy(
     conn: &mut PgConnection,
     address: &str,
 ) -> Result<Option<&'static str>, ApiError> {
+    Ok(gate(state, conn).await?.refusal(address))
+}
+
+/// The program switch and Explorer allowlist, read once and checked per wallet.
+struct Gate {
+    disabled: bool,
+    allowlist: Option<Vec<String>>,
+}
+impl Gate {
+    fn refusal(&self, address: &str) -> Option<&'static str> {
+        if self.disabled {
+            Some("disabled")
+        } else if self
+            .allowlist
+            .as_ref()
+            .is_some_and(|list| !list.iter().any(|a| a == address))
+        {
+            Some("not-allowed")
+        } else {
+            None
+        }
+    }
+}
+async fn gate(state: &SharedState, conn: &mut PgConnection) -> Result<Gate, ApiError> {
     let [mut dapps, mut explorer] = state.goal_flags.documents();
     let overrides = sqlx::query("SELECT app,name,value FROM explore_api.feature_flags_local WHERE app IN ('dapps','explorer')")
         .fetch_all(&mut *conn).await?;
@@ -112,23 +137,26 @@ async fn policy(
     let dapps =
         dapps.ok_or_else(|| ApiError::service_unavailable("credits dapps flags unavailable"))?;
     if dapps["flags"]["dapps-credits-server"].as_bool() != Some(true) {
-        return Ok(Some("disabled"));
+        return Ok(Gate {
+            disabled: true,
+            allowlist: None,
+        });
     }
     let explorer = explorer
         .ok_or_else(|| ApiError::service_unavailable("credits explorer flags unavailable"))?;
     let snapshot = crate::explore::api::feature_flags::Snapshot::from_document(explorer);
-    if snapshot
+    let allowlist = snapshot
         .variant_values("explorer", "alfa-marketplace-credits")
-        .is_some_and(|list| {
-            !list
-                .iter()
+        .map(|list| {
+            list.iter()
                 .filter(|a| Address::from_str(a).is_ok())
-                .any(|a| a == address)
-        })
-    {
-        return Ok(Some("not-allowed"));
-    }
-    Ok(None)
+                .map(|a| a.to_string())
+                .collect()
+        });
+    Ok(Gate {
+        disabled: false,
+        allowlist,
+    })
 }
 
 pub fn qualifies(payload: &Value, address: &str) -> bool {
@@ -295,7 +323,13 @@ async fn process_event(state: &SharedState, id: i64, now: NaiveDateTime) -> Resu
                     .bind(&address).bind(season.id).bind(week).bind(GOAL).bind(steps).bind(complete.then_some(now)).execute(&mut *tx).await?;
                 if complete {
                     let reward_wei: String = p.get("reward_wei");
-                    grant(&mut tx, state, &address, season, week, &reward_wei, now).await?;
+                    let completed = Completed {
+                        goal: GOAL,
+                        season,
+                        week,
+                        amount: &reward_wei,
+                    };
+                    grant(&mut tx, state, &address, completed, now).await?;
                 }
                 ordinal = Some(steps);
             }
@@ -307,15 +341,55 @@ async fn process_event(state: &SharedState, id: i64, now: NaiveDateTime) -> Resu
     Ok(true)
 }
 
+/// A goal a wallet completed in a season's week, and its reward in wei.
+#[derive(Clone, Copy)]
+struct Completed<'a> {
+    goal: &'a str,
+    season: &'a Season,
+    week: i32,
+    amount: &'a str,
+}
+
+/// The credits-server `CREDITS_GOAL_COMPLETED` notice as the old parser
+/// stored it, for any goal; keyed like upstream's event.
+fn goal_completed_notification(
+    address: &str,
+    completed: &Completed<'_>,
+    cdn_url: &str,
+    now: NaiveDateTime,
+) -> Result<(String, catalyst_social::notifications::NewNotification), ApiError> {
+    let key = format!(
+        "{address}-{}-{}-{}",
+        completed.goal, completed.season.id, completed.week
+    );
+    let image = catalyst_social::notifications::cdn_asset(
+        cdn_url,
+        super::admin_store::CREDITS_NOTIFICATION_ICON_PATH,
+    );
+    let notification = catalyst_social::notifications::NewNotification {
+        id: Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes()),
+        address: catalyst_social::Address::parse(address)
+            .map_err(|_| ApiError::Internal("invalid goal owner".into()))?,
+        kind: "credits_goal_completed".into(),
+        occurred_at: now,
+        metadata: json!({"goalId":completed.goal,"creditsObtained":mana_number(completed.amount)?,"image":image,"title":"Weekly Goal Completed!","description":"Claim your Credits to unlock them"}),
+    };
+    Ok((key, notification))
+}
+
 async fn grant(
     conn: &mut PgConnection,
     state: &SharedState,
     address: &str,
-    season: &Season,
-    week: i32,
-    amount: &str,
+    completed: Completed<'_>,
     now: NaiveDateTime,
 ) -> Result<(), ApiError> {
+    let Completed {
+        goal,
+        season,
+        week,
+        amount,
+    } = completed;
     let signer = state
         .settings
         .credits_signer_key
@@ -351,7 +425,6 @@ async fn grant(
             "goal expiry must be in the future",
         ));
     }
-    let key = format!("{address}-{GOAL}-{}-{week}", season.id);
     let salt: B256 = keccak256(Uuid::new_v4().to_string().as_bytes());
     let credit = CreditIdentity {
         sender: Address::from_str(address)
@@ -364,16 +437,14 @@ async fn grant(
     };
     let signature = signer.sign_credit(&credit).map_err(ApiError::Internal)?;
     sqlx::query("INSERT INTO credits.goal_grants(address,season_id,week_id,goal_id,salt,chain_id,contract,credit_hash,amount_wei,signature,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::numeric,$10,$11,$12)")
-        .bind(address).bind(season.id).bind(week).bind(GOAL).bind(format!("{salt:#x}")).bind(chain as i64).bind(format!("{manager:#x}"))
+        .bind(address).bind(season.id).bind(week).bind(goal).bind(format!("{salt:#x}")).bind(chain as i64).bind(format!("{manager:#x}"))
         .bind(format!("{:#x}", credit.credit_hash())).bind(amount).bind(signature).bind(now).bind(expires).execute(&mut *conn).await?;
-    let notification = catalyst_social::notifications::NewNotification {
-        id: Uuid::new_v5(&NOTIFICATION_NAMESPACE, key.as_bytes()),
-        address: catalyst_social::Address::parse(address)
-            .map_err(|_| ApiError::Internal("invalid photo owner".into()))?,
-        kind: "credits_goal_completed".into(),
-        occurred_at: now,
-        metadata: json!({"goalId":GOAL,"creditsObtained":mana_number(amount)?,"image":"https://assets-cdn.decentraland.org/credits/notification-icon.png","title":"Weekly Goal Completed!","description":"Claim your Credits to unlock them"}),
-    };
+    let (key, notification) = goal_completed_notification(
+        address,
+        &completed,
+        &state.settings.notifications_cdn_url,
+        now,
+    )?;
     catalyst_social::notifications::store::insert_keyed_notification(conn, &key, &notification)
         .await?;
     Ok(())
@@ -452,6 +523,7 @@ async fn process_pass(
 
 pub fn spawn_job(state: &SharedState, jobs: &Jobs) {
     flags::spawn(state, jobs);
+    reminders::spawn(state, jobs);
     let state = Arc::clone(state);
     let last_sample = Arc::new(parking_lot::Mutex::new(None));
     jobs.spawn_periodic_leased(

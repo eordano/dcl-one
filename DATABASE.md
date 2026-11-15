@@ -1418,6 +1418,13 @@ the ordered `photosTaken` lookup; the pending-photo query uses the unique
 receipt identity. `METRICS.md` records the synthetic access-path measurement.
 Production volume and latency remain unmeasured.
 
+The `credits-reminders` job reads progress rows of the current week and grants
+for its weekly reminders by the progress and grant primary keys. Its usage
+reminders read claimed grants expiring within seven days or one day through
+the partial index on `credits.goal_grants (expires_at) WHERE claimed_at IS NOT
+NULL`, which the object pass creates on existing databases. Notifications are
+keyed per wallet, season and week, so a rerun inserts nothing.
+
 The worker runs through the existing leased job registry under the Ops write
 gate. Receipts survive photo deletion and event retention; changing visibility
 does not undo a reward. The Camera event retention window still bounds crash

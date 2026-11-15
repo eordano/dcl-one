@@ -20,7 +20,7 @@ pub mod tiles;
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use axum::Router;
@@ -32,7 +32,6 @@ use sqlx::PgPool;
 
 use super::{Shared, mirror};
 use crate::jobs::JobContext;
-use crate::shared::cache::TtlMap;
 use tiles::{Tile, TileType};
 
 pub const MIRROR: &str = "map-grid";
@@ -41,6 +40,9 @@ const GRID_BODY_CAP: usize = 96 << 20;
 const RESPONSE_CACHE_TTL: Duration = Duration::from_secs(120);
 const PNG_CACHE_ENTRIES: usize = 256;
 const TILES_CACHE_ENTRIES: usize = 512;
+const PNG_CACHE_BYTES: usize = 128 << 20;
+const TILES_CACHE_BYTES: usize = 256 << 20;
+const FLIGHT_PRUNE_AT: usize = 64;
 
 pub struct Grid {
     pub tiles: HashMap<String, Tile>,
@@ -54,6 +56,8 @@ pub struct Grid {
     pub estates_owned: HashMap<String, Vec<(i32, i32)>>,
     /// estate id -> coords of every parcel carrying it (the fallback selection).
     pub estates_all: HashMap<String, Vec<(i32, i32)>>,
+    /// `(min_x, max_x, min_y, max_y)` over every tile; `None` for an empty grid.
+    pub bounds: Option<(i32, i32, i32, i32)>,
 }
 
 #[derive(Deserialize)]
@@ -90,7 +94,17 @@ impl Grid {
     ) -> Self {
         let mut estates_owned: HashMap<String, Vec<(i32, i32)>> = HashMap::new();
         let mut estates_all: HashMap<String, Vec<(i32, i32)>> = HashMap::new();
+        let mut bounds: Option<(i32, i32, i32, i32)> = None;
         for tile in tiles.values() {
+            bounds = Some(match bounds {
+                None => (tile.x, tile.x, tile.y, tile.y),
+                Some((x1, x2, y1, y2)) => (
+                    x1.min(tile.x),
+                    x2.max(tile.x),
+                    y1.min(tile.y),
+                    y2.max(tile.y),
+                ),
+            });
             if let Some(estate) = &tile.estate_id {
                 estates_all
                     .entry(estate.clone())
@@ -123,14 +137,114 @@ impl Grid {
             content_tag,
             estates_owned,
             estates_all,
+            bounds,
         }
+    }
+}
+
+/// A TTL response cache bounded by entry count and total body bytes; the
+/// oldest entries go first when either bound is reached.
+type CachedBody = (Instant, Arc<Vec<u8>>);
+
+struct ResponseCache {
+    entries: parking_lot::Mutex<CachedBodies>,
+    ttl: Duration,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+#[derive(Default)]
+struct CachedBodies {
+    map: HashMap<String, CachedBody>,
+    bytes: usize,
+}
+
+impl CachedBodies {
+    fn remove(&mut self, key: &str) -> Option<Arc<Vec<u8>>> {
+        let (_, body) = self.map.remove(key)?;
+        self.bytes -= body.len();
+        Some(body)
+    }
+}
+
+impl ResponseCache {
+    fn new(ttl: Duration, max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: parking_lot::Mutex::new(CachedBodies::default()),
+            ttl,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    fn get_fresh(&self, key: &str) -> Option<Arc<Vec<u8>>> {
+        let entries = self.entries.lock();
+        let (at, body) = entries.map.get(key)?;
+        (at.elapsed() < self.ttl).then(|| body.clone())
+    }
+
+    fn insert(&self, key: String, body: Arc<Vec<u8>>) {
+        if body.len() > self.max_bytes {
+            return;
+        }
+        // Evicted bodies are freed after the lock is released.
+        let mut evicted = Vec::new();
+        {
+            let mut entries = self.entries.lock();
+            evicted.extend(entries.remove(&key));
+            let full = |e: &CachedBodies| {
+                e.map.len() >= self.max_entries || e.bytes + body.len() > self.max_bytes
+            };
+            if full(&entries) {
+                let expired: Vec<String> = entries
+                    .map
+                    .iter()
+                    .filter(|(_, (at, _))| at.elapsed() >= self.ttl)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for k in expired {
+                    evicted.extend(entries.remove(&k));
+                }
+            }
+            while !entries.map.is_empty() && full(&entries) {
+                let oldest = entries
+                    .map
+                    .iter()
+                    .min_by_key(|(_, (at, _))| *at)
+                    .map(|(k, _)| k.clone())
+                    .expect("a non-empty map has an oldest entry");
+                evicted.extend(entries.remove(&oldest));
+            }
+            entries.bytes += body.len();
+            entries.map.insert(key, (Instant::now(), body));
+        }
+        drop(evicted);
+    }
+
+    fn clear(&self) {
+        let old = std::mem::take(&mut *self.entries.lock());
+        drop(old);
+    }
+
+    #[cfg(test)]
+    fn bytes(&self) -> usize {
+        let entries = self.entries.lock();
+        assert_eq!(
+            entries.bytes,
+            entries.map.values().map(|(_, b)| b.len()).sum::<usize>(),
+            "the byte count follows the entries"
+        );
+        entries.bytes
     }
 }
 
 pub struct MapState {
     grid: RwLock<Option<Arc<Grid>>>,
-    png_cache: TtlMap<String, Arc<Vec<u8>>>,
-    tiles_cache: TtlMap<String, Arc<Vec<u8>>>,
+    png_cache: ResponseCache,
+    tiles_cache: ResponseCache,
+    tiles_flights: parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    #[cfg(test)]
+    tiles_builds: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for MapState {
@@ -143,8 +257,15 @@ impl MapState {
     pub fn new() -> Self {
         Self {
             grid: RwLock::new(None),
-            png_cache: TtlMap::bounded(RESPONSE_CACHE_TTL, PNG_CACHE_ENTRIES),
-            tiles_cache: TtlMap::bounded(RESPONSE_CACHE_TTL, TILES_CACHE_ENTRIES),
+            png_cache: ResponseCache::new(RESPONSE_CACHE_TTL, PNG_CACHE_ENTRIES, PNG_CACHE_BYTES),
+            tiles_cache: ResponseCache::new(
+                RESPONSE_CACHE_TTL,
+                TILES_CACHE_ENTRIES,
+                TILES_CACHE_BYTES,
+            ),
+            tiles_flights: Default::default(),
+            #[cfg(test)]
+            tiles_builds: Default::default(),
         }
     }
 
@@ -160,6 +281,27 @@ impl MapState {
         self.grid.read().as_ref().map_or(0, |g| g.last_updated_at)
     }
 
+    /// The lock a tiles miss holds while building `key`'s body.
+    pub fn tiles_flight(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut flights = self.tiles_flights.lock();
+        // Idle locks are dropped in batches, not on every call.
+        if flights.len() >= FLIGHT_PRUNE_AT {
+            flights.retain(|_, lock| Arc::strong_count(lock) > 1);
+        }
+        flights.entry(key.to_string()).or_default().clone()
+    }
+
+    #[cfg(test)]
+    pub fn tiles_builds(&self) -> usize {
+        self.tiles_builds.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(super) fn count_tiles_build(&self) {
+        #[cfg(test)]
+        self.tiles_builds
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn content_tag(&self) -> u64 {
         self.grid.read().as_ref().map_or(0, |g| g.content_tag)
     }
@@ -171,7 +313,7 @@ impl MapState {
     }
 
     pub fn cached_png(&self, key: &str) -> Option<Arc<Vec<u8>>> {
-        self.png_cache.get_fresh(&key.to_string())
+        self.png_cache.get_fresh(key)
     }
 
     pub fn store_png(&self, key: String, body: Arc<Vec<u8>>) {
@@ -179,7 +321,7 @@ impl MapState {
     }
 
     pub fn cached_tiles(&self, key: &str) -> Option<Arc<Vec<u8>>> {
-        self.tiles_cache.get_fresh(&key.to_string())
+        self.tiles_cache.get_fresh(key)
     }
 
     pub fn store_tiles(&self, key: String, body: Arc<Vec<u8>>) {
@@ -351,4 +493,104 @@ pub fn routes() -> Router<Shared> {
         .route("/v2/ping", get(meta::ping))
         .route("/v2/ready", get(meta::ready))
         .route("/satellite/{z}/{x}/{y}", get(super::satellite::tile))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_cache_stays_within_its_byte_budget() {
+        let cache = ResponseCache::new(Duration::from_secs(60), 100, 100);
+        for i in 0..10 {
+            cache.insert(format!("k{i}"), Arc::new(vec![0; 40]));
+        }
+        assert!(cache.bytes() <= 100, "{}", cache.bytes());
+        assert!(cache.get_fresh("k9").is_some(), "the newest entry is kept");
+        assert!(
+            cache.get_fresh("k0").is_none(),
+            "the oldest entry is evicted"
+        );
+        cache.insert("huge".into(), Arc::new(vec![0; 101]));
+        assert!(
+            cache.get_fresh("huge").is_none(),
+            "an over-budget body is not cached"
+        );
+        assert!(cache.get_fresh("k9").is_some());
+    }
+
+    #[test]
+    fn response_cache_drops_every_expired_entry_once_full() {
+        let cache = ResponseCache::new(Duration::from_secs(60), 3, 1 << 20);
+        for k in ["a", "b", "c"] {
+            cache.insert(k.into(), Arc::new(vec![1]));
+        }
+        let long_ago = Instant::now()
+            .checked_sub(Duration::from_secs(120))
+            .expect("a clock past two minutes");
+        for k in ["a", "b"] {
+            cache.entries.lock().map.get_mut(k).unwrap().0 = long_ago;
+        }
+        cache.insert("d".into(), Arc::new(vec![1]));
+        let entries = cache.entries.lock();
+        let mut keys: Vec<&str> = entries.map.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["c", "d"],
+            "both expired entries go, not just the oldest one"
+        );
+        drop(entries);
+        assert_eq!(cache.bytes(), 2);
+        assert!(cache.get_fresh("c").is_some());
+    }
+
+    #[test]
+    fn response_cache_stays_within_its_entry_cap() {
+        let cache = ResponseCache::new(Duration::from_secs(60), 3, 1 << 20);
+        for i in 0..10 {
+            cache.insert(format!("k{i}"), Arc::new(vec![1]));
+        }
+        assert_eq!(cache.entries.lock().map.len(), 3);
+        cache.insert("k9".into(), Arc::new(vec![2]));
+        assert_eq!(
+            cache.entries.lock().map.len(),
+            3,
+            "replacing a key needs no room"
+        );
+        assert_eq!(cache.get_fresh("k9").as_deref(), Some(&vec![2]));
+    }
+
+    #[test]
+    fn concurrent_tile_misses_share_one_build_lock() {
+        let map = MapState::new();
+        let a = map.tiles_flight("k");
+        assert!(Arc::ptr_eq(&a, &map.tiles_flight("k")));
+        assert!(!Arc::ptr_eq(&a, &map.tiles_flight("other")));
+        drop(a);
+        for i in 0..1_000 {
+            map.tiles_flight(&format!("idle-{i}"));
+        }
+        assert!(
+            map.tiles_flights.lock().len() <= FLIGHT_PRUNE_AT + 1,
+            "idle locks are dropped"
+        );
+    }
+
+    #[test]
+    fn grid_bounds_span_every_tile() {
+        let tile = |x: i32, y: i32| -> Tile {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("{x},{y}"), "x": x, "y": y, "type": "road",
+                "top": false, "left": false, "topLeft": false
+            }))
+            .unwrap()
+        };
+        let tiles: HashMap<String, Tile> = [tile(-3, 2), tile(5, -7), tile(0, 9)]
+            .into_iter()
+            .map(|t| (t.id.clone(), t))
+            .collect();
+        let grid = Grid::from_tiles(tiles, 1, None, chrono::Utc::now().naive_utc());
+        assert_eq!(grid.bounds, Some((-3, 5, -7, 9)));
+    }
 }

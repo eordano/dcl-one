@@ -1,5 +1,6 @@
 //! The `sales` chain index on Polygon: the primary mints the CollectionStore
-//! issues (a mirrored collection's `Issue` whose `_caller` is the store) and
+//! issues (a mirrored collection's `Issue` whose `_caller` is the store,
+//! priced by the store's `Bought` in the same transaction) and
 //! the ERC721BidV2 bid lifecycle (`BidCreated`, `BidAccepted`,
 //! `BidCancelled`), kept in `shop.sale_event` and folded into `shop.nft_bid`
 //! (one row per bidder and token, as the contract keeps them: a bidder's new
@@ -39,6 +40,9 @@ pub const TOPIC_BID_ACCEPTED: &str =
 /// `BidCancelled(bytes32 _id, address indexed _tokenAddress, uint256 indexed _tokenId, address indexed _bidder)`.
 pub const TOPIC_BID_CANCELLED: &str =
     "0xc43098075c34b8b92567bd49f08f55e397ebf82dd82072e3eb1be525c4506f5f";
+
+/// `Bought((address collection, uint256[] ids, uint256[] prices, address[] beneficiaries)[] _itemsToBuy)` (CollectionStore).
+pub const TOPIC_BOUGHT: &str = "0x77cc75f8061aa168906862622e88c5b05a026a9c06c02d91ec98543e01e7ad33";
 
 pub const KIND_MINT: &str = "mint";
 pub const KIND_BID_CREATED: &str = "bid_created";
@@ -189,6 +193,87 @@ pub fn decode_log(log: &RpcLog, block_time: i64) -> Result<Option<SaleEvent>, De
         }
     };
     Ok(Some(event))
+}
+
+/// One item a store `Bought` paid for: (collection, item id, beneficiary, price).
+pub type BoughtItem = (String, String, String, String);
+
+/// A store `Bought` log's transaction and items; `Ok(None)` for another log.
+pub fn decode_bought(log: &RpcLog) -> Result<Option<(String, Vec<BoughtItem>)>, DecodeError> {
+    let (block, index) = chain_walk::log_position(log);
+    let err = |why: String| DecodeError {
+        block,
+        index: index as i32,
+        what: "Bought",
+        why,
+    };
+    if log.address.to_ascii_lowercase() != STORE_MATIC
+        || log
+            .topics
+            .first()
+            .map(|t| t.to_ascii_lowercase())
+            .as_deref()
+            != Some(TOPIC_BOUGHT)
+    {
+        return Ok(None);
+    }
+    let tx = log
+        .transaction_hash
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| err("missing transaction hash".into()))?;
+    let data = hex::decode(log.data.trim_start_matches("0x")).map_err(|e| err(e.to_string()))?;
+    type Items = sol_data::Array<(
+        sol_data::Address,
+        sol_data::Array<sol_data::Uint<256>>,
+        sol_data::Array<sol_data::Uint<256>>,
+        sol_data::Array<sol_data::Address>,
+    )>;
+    let (items,) = <(Items,)>::abi_decode_params(&data).map_err(|e| err(e.to_string()))?;
+    let mut out = Vec::new();
+    for (collection, ids, prices, beneficiaries) in items {
+        if ids.len() != prices.len() || ids.len() != beneficiaries.len() {
+            return Err(err("ids, prices and beneficiaries differ in length".into()));
+        }
+        for ((id, price), beneficiary) in ids.iter().zip(&prices).zip(&beneficiaries) {
+            out.push((
+                format!("{collection:#x}"),
+                id.to_string(),
+                format!("{beneficiary:#x}"),
+                price.to_string(),
+            ));
+        }
+    }
+    Ok(Some((tx, out)))
+}
+
+/// Prices each mint by its transaction's `Bought` item of the same
+/// collection, item and beneficiary, each item used once; a mint without one keeps no price.
+pub fn price_mints(rows: &mut [SaleEvent], logs: &[RpcLog]) {
+    let mut bought: HashMap<String, Vec<Option<BoughtItem>>> = HashMap::new();
+    for log in logs {
+        match decode_bought(log) {
+            Ok(Some((tx, items))) => bought
+                .entry(tx)
+                .or_default()
+                .extend(items.into_iter().map(Some)),
+            Ok(None) => {}
+            Err(e) => tracing::warn!(error = %e, "sales index: skipping a Bought it cannot decode"),
+        }
+    }
+    for row in rows.iter_mut().filter(|r| r.kind == KIND_MINT) {
+        let Some(items) = bought.get_mut(&row.tx_hash) else {
+            continue;
+        };
+        let item = row.item_id.as_deref().unwrap_or_default();
+        if let Some(slot) = items.iter_mut().find(|i| {
+            i.as_ref().is_some_and(|(c, id, b, _)| {
+                *c == row.contract_address && id == item && *b == row.buyer
+            })
+        }) {
+            row.price = slot.take().map(|(_, _, _, price)| price);
+        }
+    }
 }
 
 pub async fn insert_events(
@@ -370,6 +455,11 @@ impl ChainIndex for SalesIndex {
                 topics: json!([[TOPIC_ISSUE]]),
             });
         }
+        // The store's Bought prices the mints of its transaction.
+        groups.push(LogGroup {
+            addresses: vec![STORE_MATIC.to_string()],
+            topics: json!([[TOPIC_BOUGHT]]),
+        });
         if to >= BID_V2_MATIC_START_BLOCK {
             groups.push(LogGroup {
                 addresses: vec![BID_V2_MATIC.to_string()],
@@ -397,6 +487,7 @@ impl ChainIndex for SalesIndex {
                 }
             }
         }
+        price_mints(&mut rows, logs);
         Ok(insert_events(conn, &rows).await?)
     }
 
@@ -622,6 +713,10 @@ pub(crate) mod tests {
                 "BidCancelled(bytes32,address,uint256,address)",
                 TOPIC_BID_CANCELLED,
             ),
+            (
+                "Bought((address,uint256[],uint256[],address[])[])",
+                TOPIC_BOUGHT,
+            ),
         ] {
             assert_eq!(format!("{:#x}", keccak256(sig)), topic, "{sig}");
         }
@@ -762,6 +857,133 @@ pub(crate) mod tests {
             block,
             index,
         )
+    }
+
+    /// A store `Bought` of `items` (collection, item, price, beneficiary) in transaction `tx`.
+    pub(crate) fn bought_log(
+        items: &[(&str, u64, u128, &str)],
+        tx: &str,
+        block: u64,
+        index: u64,
+    ) -> RpcLog {
+        let addr = |a: &str| alloy_primitives::Address::from_str(a).unwrap();
+        type Item = (
+            alloy_primitives::Address,
+            Vec<U256>,
+            Vec<U256>,
+            Vec<alloy_primitives::Address>,
+        );
+        let encoded: Vec<Item> = items
+            .iter()
+            .map(|(c, id, price, b)| {
+                (
+                    addr(c),
+                    vec![U256::from(*id)],
+                    vec![U256::from(*price)],
+                    vec![addr(b)],
+                )
+            })
+            .collect();
+        let mut l = log(
+            STORE_MATIC,
+            vec![TOPIC_BOUGHT.into()],
+            (encoded,).abi_encode_params(),
+            block,
+            index,
+        );
+        l.transaction_hash = Some(tx.to_string());
+        l
+    }
+
+    /// A Bought of two items, one of them twice, prices the transaction's
+    /// store mints by collection, item and beneficiary; another transaction's
+    /// mint and a bare data word stay unpriced.
+    #[test]
+    fn the_stores_bought_prices_its_transactions_mints() {
+        let other = "0x00000000000000000000000000000000000000c2";
+        let tx = format!("0x{:064x}", 10_000);
+        let mint = |item: u64, beneficiary: &str, index: u64| {
+            let token = (U256::from(item) << 216) | U256::from(index);
+            decode_log(
+                &issue_log(
+                    COLLECTION,
+                    beneficiary,
+                    token,
+                    item,
+                    STORE_MATIC,
+                    100,
+                    index,
+                ),
+                5,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let mut rows = vec![
+            SaleEvent {
+                tx_hash: tx.clone(),
+                ..mint(3, ALICE, 0)
+            },
+            SaleEvent {
+                tx_hash: tx.clone(),
+                ..mint(3, ALICE, 1)
+            },
+            SaleEvent {
+                tx_hash: tx.clone(),
+                ..mint(4, BOB, 2)
+            },
+            mint(3, ALICE, 3),
+        ];
+        let bought = bought_log(
+            &[
+                (COLLECTION, 3, 2_000_000_000_000_000_000, ALICE),
+                (COLLECTION, 3, 2_000_000_000_000_000_000, ALICE),
+                (other, 4, 9, BOB),
+                (COLLECTION, 4, 0, BOB),
+            ],
+            &tx,
+            100,
+            4,
+        );
+        let (decoded_tx, items) = decode_bought(&bought).unwrap().unwrap();
+        assert_eq!(decoded_tx, tx);
+        assert_eq!(items.len(), 4);
+        assert_eq!(
+            items[2],
+            (
+                other.to_string(),
+                "4".to_string(),
+                BOB.to_string(),
+                "9".to_string()
+            )
+        );
+        price_mints(&mut rows, &[bought]);
+        let prices: Vec<_> = rows.iter().map(|r| r.price.as_deref()).collect();
+        assert_eq!(
+            prices,
+            [
+                Some("2000000000000000000"),
+                Some("2000000000000000000"),
+                Some("0"),
+                None
+            ]
+        );
+        let mut bare = bought_log(&[], &tx, 100, 5);
+        bare.data = format!("0x{:064x}", 1);
+        assert!(decode_bought(&bare).is_err());
+        assert_eq!(
+            decode_bought(&issue_log(
+                COLLECTION,
+                ALICE,
+                U256::from(1u8),
+                0,
+                STORE_MATIC,
+                1,
+                0
+            ))
+            .unwrap(),
+            None
+        );
     }
 
     #[test]

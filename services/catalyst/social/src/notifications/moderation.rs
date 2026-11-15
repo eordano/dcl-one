@@ -59,8 +59,8 @@ pub(crate) async fn insert(
     transaction: &mut sqlx::PgConnection,
     notification: &ModerationNotification,
 ) -> Result<(), sqlx::Error> {
-    // The shared path writes the email delivery row; its conflict on the v5 id
-    // preserves the original payload, time and read state on retries.
+    // The shared path writes the email delivery row once; a retry on the v5 id
+    // refreshes payload and time and keeps the read state, as upstream's upsert.
     insert_notifications(transaction, std::slice::from_ref(&project(notification))).await?;
     Ok(())
 }
@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn directory_retry_preserves_original_payload_time_read_state_and_one_delivery_row() {
+    async fn directory_retry_refreshes_payload_and_time_keeps_read_state_and_one_delivery_row() {
         let Some(pool) = pool().await else { return };
         let directory = crate::comms_directory::Directory::new(pool.clone());
         let mut event = notice(Kind::BanWarning {
@@ -236,7 +236,7 @@ mod tests {
             .await
             .unwrap();
         event.event = Kind::BanWarning {
-            reason: "retry payload must not replace original".into(),
+            reason: "retry".into(),
             warned_at: 456,
         };
         event.occurred_at += chrono::Duration::seconds(10);
@@ -261,10 +261,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![(
-                json!({"reason":"original","warnedAt":123}),
-                chrono::DateTime::from_timestamp_millis(1_700_000_000_123)
-                    .unwrap()
-                    .naive_utc(),
+                json!({"reason":"retry","warnedAt":456}),
+                event.occurred_at,
                 true,
                 Some(
                     chrono::DateTime::from_timestamp_millis(1_700_000_000_123)
@@ -302,8 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_duplicate_source_commits_one_notice_and_preserves_original_delivery_state()
-    {
+    async fn concurrent_duplicate_source_commits_one_notice_and_keeps_identity_and_read_state() {
         async fn commit_concurrently(pool: &sqlx::PgPool, event: &ModerationNotification) {
             let barrier = Arc::new(tokio::sync::Barrier::new(2));
             let mut tasks = tokio::task::JoinSet::new();
@@ -371,17 +368,28 @@ mod tests {
         assert!(preserved[0].4);
         assert_eq!(preserved[0].5, Some(read_at));
         event.event = Kind::BanWarning {
-            reason: "concurrent retry must not overwrite original".into(),
+            reason: "concurrent retry".into(),
             warned_at: 456,
         };
         event.occurred_at += chrono::Duration::seconds(10);
         commit_concurrently(&pool, &event).await;
         let retried: Vec<DeliveryRow> = sqlx::query_as("SELECT id,metadata,occurred_at,created_at,read,read_at FROM social.notifications WHERE address=$1")
             .bind(&event.recipient).fetch_all(&pool).await.unwrap();
+        let mut expected = preserved.clone();
+        expected[0].1 = json!({"reason":"concurrent retry","warnedAt":456});
+        expected[0].2 = event.occurred_at;
         assert_eq!(
-            retried, preserved,
-            "concurrent retries must preserve the original identity, payload, event/creation time and read state"
+            retried, expected,
+            "concurrent retries keep identity, creation time and read state and refresh payload and time"
         );
+        let deliveries: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM social.notification_deliveries WHERE notification_id=$1",
+        )
+        .bind(retried[0].0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(deliveries, 1);
     }
 
     #[tokio::test]

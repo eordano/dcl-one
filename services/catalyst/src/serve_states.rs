@@ -323,6 +323,12 @@ pub(super) async fn worlds_states(
                 client_inbound_max: config.worlds.client_inbound_max,
                 crdt_max_components: config.worlds.crdt_max_components,
                 ws_max_frame_bytes: config.worlds.ws_max_frame_bytes,
+                crdt_max_value_bytes: config.worlds.crdt_max_value_bytes,
+                crdt_max_bytes: config.worlds.crdt_max_bytes,
+                client_inbound_max_bytes: config.worlds.client_inbound_max_bytes,
+                scene_inbound_max_bytes: config.worlds.scene_inbound_max_bytes,
+                client_outbound_max_bytes: config.worlds.client_outbound_max_bytes,
+                js_array_buffer_limit_mb: config.worlds.js_array_buffer_limit_mb,
                 storage_url: non_empty(&config.worlds.scene_host_storage_url),
                 storage_allow_http: config.worlds.scene_host_storage_allow_http,
                 authoritative_key: non_empty(&config.worlds.scene_host_authoritative_key),
@@ -698,10 +704,11 @@ pub(super) fn social_states(
                     .is_some_and(|endpoint| !endpoint.trim().is_empty()),
             email: notifications::EmailConfig {
                 sendgrid_api_key: non_empty(&config.social.sendgrid_api_key),
-                from_email: non_empty(&config.social.sendgrid_from_email),
-                notification_template_id: non_empty(
-                    &config.social.sendgrid_notification_template_id,
-                ),
+                api_url: config.social.sendgrid_api_url.clone(),
+                disposable_list_url: config.social.disposable_email_domains_url.clone(),
+                disposable_min_domains: config.social.disposable_email_domains_min,
+                from_email: config.social.sendgrid_sender().map(str::to_string),
+                notification_template_id: config.social.sendgrid_template_id().map(str::to_string),
                 validate_email_template_id: non_empty(
                     &config.social.sendgrid_validate_email_template_id,
                 ),
@@ -715,6 +722,7 @@ pub(super) fn social_states(
                 ),
                 sandbox_mode: config.social.sendgrid_sandbox_mode,
                 environment: non_empty(&config.social.social_environment).unwrap_or_default(),
+                dapps_flags: notifications::email::DappsFlags(communities.flags.clone()),
             },
             notification_service_token: non_empty(&config.social.notification_service_token),
             governance_token: non_empty(&config.social.notifications_governance_token),
@@ -727,13 +735,10 @@ pub(super) fn social_states(
             delivery_interval: Duration::from_secs(
                 config.social.notification_delivery_interval_secs,
             ),
-            broadcast_horizon: Duration::from_secs(
-                config
-                    .social
-                    .notifications_broadcast_horizon_days
-                    .max(1)
-                    .saturating_mul(86_400),
-            ),
+            broadcast_horizon: match config.social.notifications_broadcast_horizon_days {
+                0 => None,
+                days => Some(Duration::from_secs(days.saturating_mul(86_400))),
+            },
             delivery_max_age: notifications::delivery::max_age_from_secs(
                 config.social.notification_delivery_max_age_secs,
             ),

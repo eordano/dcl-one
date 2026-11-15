@@ -38,8 +38,7 @@ use super::super::evaluators as ev;
 use super::{Pass, award, completed, init_cursor, lock_cursor};
 use crate::identity::Address;
 
-/// 2^216: a v2 collection token id is `item << 216 | issued`.
-const ITEM_SHIFT: &str = "105312291668557186697918027683670432318895095400549111254310977536";
+pub(crate) use crate::shared::collections::{ITEM_SHIFT, ITEM_WAIT_SECS};
 const ASSET_TYPE_ERC721: i64 = 3;
 const ASSET_TYPE_COLLECTION_ITEM: i64 = 4;
 const ZERO_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
@@ -47,10 +46,6 @@ const ZERO_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 /// to the token's owner after the sale.
 const RELAY_BUYERS: &str =
     "'0xed038688ecf1193f8d9717eb3930f0bf0d745cb4', '0xea749fd6ba492dbc14c24fe8a3d08769229b896c'";
-/// How long after a sale the items mirror must complete a pass before a
-/// sale whose item it lacks is passed (a pass takes well under it: 50 pages
-/// of 1,000 items every 300 s by default).
-pub(crate) const ITEM_WAIT_SECS: i64 = 3_600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Log {

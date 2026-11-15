@@ -218,6 +218,9 @@ pub(super) async fn load_scene(
     require_opt_in: bool,
 ) -> Result<()> {
     let name = key.room_key();
+    if state.is_key_parked(&name) {
+        bail!("{name} ran out of memory earlier; it is not loaded again until restart");
+    }
     if let Some((prev, _)) = state.remove_hosted(&name) {
         tracing::info!(scene = %name, "stopping existing scene");
         drop(prev);
@@ -257,6 +260,13 @@ pub(super) async fn load_scene(
         }
         _ => {
             let resolved = resolved.expect("resolved above for every non-local key");
+            if !matches!(key, SceneKey::World(_))
+                && state.covers_parked_parcel(&resolved.deployment.parcels.canonical())
+            {
+                bail!(
+                    "{name} stands on parcels of a scene that ran out of memory; not loaded until restart"
+                );
+            }
             let code = read_blob(state, &resolved.code_hash, "scene code").await?;
             let static_crdt = match &resolved.crdt_hash {
                 Some(h) => read_blob(state, h, "main.crdt").await?,
@@ -291,15 +301,19 @@ pub(super) async fn load_scene(
         || source.trim().is_empty()
     {
         tracing::info!(scene = %name, %hash, "loading with RelayRuntime (JS disabled or empty source)");
-        Arc::new(RelayRuntime::new(
+        Arc::new(RelayRuntime::with_limits(
             hash.clone(),
             ServerTransportConfig::default(),
+            &state.settings.limits,
         ))
     } else {
         let realm = match key {
             SceneKey::World(w) => w.display().to_string(),
             _ => state.settings.realm_name.clone(),
         };
+        if super::jsruntime::is_parked(&hash) {
+            bail!("scene {hash} ran out of memory earlier; it is not loaded again until restart");
+        }
         tracing::info!(scene = %name, %hash, "loading with JsRuntime (server-side game.js)");
         let storage = match build_storage_ctx(state, scope).await {
             Some((ctx, task)) => {

@@ -105,6 +105,8 @@ pub struct GrantRequest<'a> {
     pub actor: Option<&'a str>,
     pub idempotency_key: Option<&'a str>,
     pub detail: &'a JsonValue,
+    /// The studio giving an operator grant: its notice reads "A gift from {studio}".
+    pub studio_name: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -131,18 +133,35 @@ fn with_fields(detail: &JsonValue, fields: &[(&str, JsonValue)]) -> JsonValue {
 const CREDITS_GRANT_NS: uuid::Uuid =
     uuid::Uuid::from_u128(0x8d2f_41c7_5a90_4e3b_b7d6_0c1e_9a4f_62d8);
 /// The old processor's `${CDN_URL}credits/notification-icon.png`.
-const CREDITS_NOTIFICATION_ICON: &str =
-    "https://assets-cdn.decentraland.org/credits/notification-icon.png";
+pub(crate) const CREDITS_NOTIFICATION_ICON_PATH: &str = "credits/notification-icon.png";
+
+/// The longest studio name, as credits-server's studio admin allows.
+pub const MAX_STUDIO_NAME_CHARS: usize = 80;
 
 /// The credits-server USD `ON_DEMAND_CREDITS_GRANTED` event as the old
 /// parser stored it, keyed on the grant's audit row.
+struct GrantNotice<'a> {
+    pub address: catalyst_social::Address,
+    pub audit_id: i64,
+    pub amount: &'a str,
+    pub usd_cents: Option<i64>,
+    pub studio_name: Option<&'a str>,
+    pub shop_base_url: &'a str,
+    pub cdn_url: &'a str,
+}
+
 fn credits_granted_notification(
-    address: catalyst_social::Address,
-    audit_id: i64,
-    amount: &str,
-    usd_cents: Option<i64>,
-    shop_base_url: &str,
+    notice: GrantNotice<'_>,
 ) -> catalyst_social::notifications::NewNotification {
+    let GrantNotice {
+        address,
+        audit_id,
+        amount,
+        usd_cents,
+        studio_name,
+        shop_base_url,
+        cdn_url,
+    } = notice;
     let credits = amount
         .parse::<serde_json::Number>()
         .map_or_else(|_| JsonValue::String(amount.into()), JsonValue::Number);
@@ -150,13 +169,25 @@ fn credits_granted_notification(
     if let Some(cents) = usd_cents {
         metadata["usdCents"] = cents.into();
     }
-    metadata["image"] = CREDITS_NOTIFICATION_ICON.into();
-    metadata["title"] = "Credits added to your account".into();
-    metadata["description"] = format!(
-        "You received {} Credits. They never expire: spend them in the Shop.",
-        en_us_amount(amount)
-    )
-    .into();
+    let studio = studio_name.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(studio) = studio {
+        metadata["studioName"] = studio.into();
+    }
+    metadata["image"] =
+        catalyst_social::notifications::cdn_asset(cdn_url, CREDITS_NOTIFICATION_ICON_PATH).into();
+    let amount = format!("{} Credits", en_us_amount(amount));
+    let (title, description) = match studio {
+        Some(studio) => (
+            format!("A gift from {studio}"),
+            format!("{studio} gifted you {amount}. They never expire: spend them in the Shop."),
+        ),
+        None => (
+            "Credits added to your account".to_string(),
+            format!("You received {amount}. They never expire: spend them in the Shop."),
+        ),
+    };
+    metadata["title"] = title.into();
+    metadata["description"] = description.into();
     metadata["link"] = shop_base_url.into();
     let mut n = catalyst_social::notifications::NewNotification::now(
         address,
@@ -245,6 +276,7 @@ impl Credits {
             actor,
             idempotency_key,
             detail,
+            studio_name,
         } = grant;
         if !matches!(kind, "grant" | "purchase" | "refund") {
             return Err(ApiError::bad_request(
@@ -348,13 +380,15 @@ impl Credits {
         if kind == "grant"
             && let Ok(recipient) = catalyst_social::Address::parse(address)
         {
-            let notification = credits_granted_notification(
-                recipient,
+            let notification = credits_granted_notification(GrantNotice {
+                address: recipient,
                 audit_id,
                 amount,
                 usd_cents,
-                &self.shop_base_url,
-            );
+                studio_name,
+                shop_base_url: &self.shop_base_url,
+                cdn_url: &self.notifications_cdn_url,
+            });
             catalyst_social::notifications::insert_notifications(&mut **tx, &[notification])
                 .await?;
         }

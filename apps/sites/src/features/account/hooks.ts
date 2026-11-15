@@ -12,7 +12,13 @@ import {
 
 import type { AuthIdentity } from "@/data/lib/auth/types";
 import { optOutOfCredits } from "@/data/lib/account/credits";
-import { putEmail, putSubscription, type SubscriptionDetails } from "@/data/lib/account/notifications";
+import {
+  confirmEmail,
+  putEmail,
+  putSubscription,
+  type EmailConfirmation,
+  type SubscriptionDetails,
+} from "@/data/lib/account/notifications";
 import {
   ACCOUNT_STALE_MS,
   accountKeys,
@@ -124,5 +130,16 @@ export function useOptOutOfCredits() {
     mutationFn: ({ identity }: { identity: AuthIdentity }) => optOutOfCredits(identity),
     onSuccess: (_result, { identity }) =>
       client.invalidateQueries({ queryKey: accountKeys.creditsStatus(identity.signer) }),
+  });
+}
+
+/** Unsigned: the emailed link names the account, which this browser may not be signed in as. */
+export function useConfirmEmail() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (confirmation: EmailConfirmation) =>
+      confirmEmail(confirmation, { signal: AbortSignal.timeout(SUBSCRIPTION_WRITE_TIMEOUT_MS) }),
+    onSuccess: (_result, { address }) =>
+      client.invalidateQueries({ queryKey: accountKeys.subscription(address) }),
   });
 }

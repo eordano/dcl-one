@@ -707,6 +707,9 @@ CREATE TABLE credits.goal_grants (
         REFERENCES credits.goal_progress(address, season_id, week_id, goal_id),
     CHECK (expires_at > created_at)
 );
+-- The daily usage reminders' range over claimed credits about to expire.
+CREATE INDEX goal_grants_claimed_expiry_idx ON credits.goal_grants (expires_at)
+    WHERE claimed_at IS NOT NULL;
 
 -- A wallet's failed slider attempts, expiring 24 hours after the last failure.
 -- Independent of multi-account flags: captcha failures block claims, not photos.

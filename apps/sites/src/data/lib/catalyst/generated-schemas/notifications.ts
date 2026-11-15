@@ -42,7 +42,7 @@ export const NotificationsListResponseSchema = z.object({
 
 export const SubscriptionSchema = z.object({
   address: z.string(),
-  email: z.string().optional(),
+  email: z.string().nullable().optional(),
   unconfirmedEmail: z.string().optional(),
   details: z.record(z.string(), z.unknown()),
 });

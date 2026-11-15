@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { AuthIdentity } from "../auth/types";
 import { NOTIFICATIONS_PREFIX } from "../catalyst/bases";
-import { postJSON, signedGetJSON } from "../catalyst/client";
+import { CatalystError, catalystBase, errorFromResponse, postJSON, signedGetJSON } from "../catalyst/client";
 import { SubscriptionSchema } from "../catalyst/generated-schemas/notifications";
 
 const BASE = NOTIFICATIONS_PREFIX;
@@ -143,4 +143,83 @@ export function isAllEmailEnabled(details: SubscriptionDetails): boolean {
 /** The master switch only mutes or unmutes email; each type keeps its own setting. */
 export function setAllEmail(details: SubscriptionDetails, enabled: boolean): SubscriptionDetails {
   return { ...details, ignore_all_email: !enabled };
+}
+
+export type EmailConfirmationSource = "account" | "credits";
+
+export function isEmailConfirmationSource(value: string | null | undefined): value is EmailConfirmationSource {
+  return value === "account" || value === "credits";
+}
+
+export type EmailConfirmation = {
+  address: string;
+  code: string;
+  source: EmailConfirmationSource;
+  turnstileToken?: string;
+};
+
+/** Confirms a pending address with the emailed code. Unsigned: the link may open in any browser. */
+export async function confirmEmail(
+  confirmation: EmailConfirmation,
+  opts: { signal?: AbortSignal; base?: string } = {},
+): Promise<void> {
+  const url = `${catalystBase(opts.base)}${BASE}/confirm-email`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "PUT",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify(confirmation),
+      signal: opts.signal,
+    });
+  } catch (err) {
+    if ((err as Error)?.name === "TimeoutError") throw new EmailConfirmationTimeout(url);
+    throw new CatalystError(`Catalyst request failed: ${(err as Error)?.message ?? "network error"}`, url);
+  }
+  if (!res.ok) throw await errorFromResponse(res, url);
+  await res.body?.cancel().catch(() => {});
+}
+
+/** The confirmation got no answer within its time budget. */
+export class EmailConfirmationTimeout extends CatalystError {
+  constructor(url: string) {
+    super("Email confirmation timed out", url);
+    this.name = "EmailConfirmationTimeout";
+  }
+}
+
+export type EmailConfirmationFailure = { message: string; retry: boolean };
+
+const INVALID_LINK = "This confirmation link is invalid or was replaced by a newer one. Request a new link from your account settings.";
+
+/**
+ * The node's refusals, worded for the page; only a failed challenge, a timeout or an outage can be
+ * retried. A refused captcha with no challenge shown means the node checks one this site cannot show.
+ */
+export function emailConfirmationFailure(
+  error: unknown,
+  { challengeShown }: { challengeShown: boolean },
+): EmailConfirmationFailure {
+  if (error instanceof EmailConfirmationTimeout) {
+    return { message: "The confirmation is taking too long. Try again in a moment.", retry: true };
+  }
+  const server = error instanceof CatalystError && error.serverMessage ? error.message : "";
+  if (server === "Invalid captcha") {
+    return challengeShown
+      ? { message: "The security check did not pass. Complete it again and retry.", retry: true }
+      : {
+          message: "Email confirmation needs a security check this site is not set up to show. Please contact support.",
+          retry: false,
+        };
+  }
+  if (server === "Invalid code" || server === "Missing code" || server === "Missing address") {
+    return { message: INVALID_LINK, retry: false };
+  }
+  if (server === "No unconfirmed email for this address") {
+    return { message: "There is no email waiting for confirmation on this account. It may already be confirmed.", retry: false };
+  }
+  if (server.startsWith("Email address invalid")) {
+    return { message: "This email address can't be used. Set a different one from your account settings.", retry: false };
+  }
+  return { message: "We couldn't confirm your email right now. Try again in a moment.", retry: true };
 }

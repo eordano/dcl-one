@@ -176,7 +176,16 @@ class DevCiTest(unittest.TestCase):
     def rust(self, *changed):
         return dev.needs_rust(changed, 'HEAD', self.dev)[0]
 
+    def scanned_once(self):
+        """Give every needs_rust call in the test the result of one real scan: a scan takes seconds on macOS."""
+        references = dev.rust_source_references('HEAD')
+        scan = patch.object(dev, 'rust_source_references', return_value=references)
+        scan.start()
+        self.addCleanup(scan.stop)
+        return references
+
     def test_files_outside_the_rust_inputs_skip_the_rust_tests(self):
+        self.scanned_once()
         for changed in (['apps/ui3/src/play/Hud.tsx'], ['apps/sites/src/app.ts', 'apps/ui3/package.json'],
                         ['library/ui/apps/hud/Hud.tsx', 'apps/sites/pnpm-lock.yaml', 'docs/development.md'],
                         ['rendering/bevy-explorer/source/src/main.rs', 'rendering/bevy-explorer/source/Cargo.lock'],
@@ -216,7 +225,7 @@ class DevCiTest(unittest.TestCase):
                 self.assertEqual(sorted(set(inputs) - set(dev.watched_changes(inputs, self.dev))), [])
 
     def test_files_that_rust_sources_name_run_the_rust_tests(self):
-        references = dev.rust_source_references('HEAD')
+        references = self.scanned_once()
         # The event poster default that the backend embeds.
         self.assertIn('apps/ui3/public/assets/event-default.webp', references)
         for reference in references:

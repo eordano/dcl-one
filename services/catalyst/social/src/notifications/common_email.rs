@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use axum::Json;
+use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use serde::Deserialize;
@@ -33,10 +33,11 @@ fn required<'a>(value: &'a Option<String>, name: &str) -> Result<&'a str, Notifi
         .ok_or_else(|| ApiError::bad_request(format!("Missing {name}")).into())
 }
 
+/// The bearer is checked before the body is read, as upstream's middleware.
 pub async fn post_email(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<EmailBody>,
+    body: Bytes,
 ) -> Result<StatusCode, NotificationsError> {
     match check(
         state.settings.notification_service_token.as_deref(),
@@ -51,6 +52,8 @@ pub async fn post_email(
             return Err(ApiError::unauthorized("Invalid authorization header").into());
         }
     }
+    let body: EmailBody =
+        serde_json::from_slice(&body).map_err(|_| ApiError::bad_request("Invalid body"))?;
     let email = required(&body.email, "email")?;
     let content = required(&body.content, "content")?;
     let subject = required(&body.subject, "subject")?;

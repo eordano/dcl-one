@@ -12,7 +12,7 @@
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
-use super::chain_walk::{ChainNet, INDEXER_NFT, INDEXER_TRADE_EVENTS};
+use super::chain_walk::{ChainNet, INDEXER_NFT, INDEXER_SALES, INDEXER_TRADE_EVENTS};
 use crate::rentals::index::INDEXER_RENTALS;
 
 pub const TRANSFER_RECEIVED: &str = "transfer_received";
@@ -22,6 +22,9 @@ pub const RENTAL_ENDED: &str = "rental_ended";
 pub const SALES_TRADED_ETHEREUM: &str = "sales:traded:ethereum";
 pub const SALES_TRADED_MATIC: &str = "sales:traded:matic";
 pub const SALES_ORDER_SUCCESSFUL_MATIC: &str = "sales:order_successful:matic";
+pub const SALES_MINT_MATIC: &str = "sales:mint:matic";
+pub const SALES_BID_ACCEPTED_MATIC: &str = "sales:bid_accepted:matic";
+pub const ROYALTIES_BID_ACCEPTED_MATIC: &str = "royalties:bid_accepted:matic";
 
 /// Every producer; no other name is ever written to `shop.notification_cursor`
 /// (its CHECK lists exactly these).
@@ -33,6 +36,9 @@ pub const PRODUCERS: &[&str] = &[
     SALES_TRADED_ETHEREUM,
     SALES_TRADED_MATIC,
     SALES_ORDER_SUCCESSFUL_MATIC,
+    SALES_MINT_MATIC,
+    SALES_BID_ACCEPTED_MATIC,
+    ROYALTIES_BID_ACCEPTED_MATIC,
 ];
 
 /// How far below an index's head a replay moves the cursors back: deeper
@@ -45,6 +51,9 @@ fn reads(producer: &str) -> Option<(ChainNet, &'static [&'static str])> {
         TRANSFER_RECEIVED => (ChainNet::Matic, &[INDEXER_NFT, INDEXER_TRADE_EVENTS]),
         ROYALTIES_EARNED | SALES_ORDER_SUCCESSFUL_MATIC => (ChainNet::Matic, &[INDEXER_NFT]),
         SALES_TRADED_MATIC => (ChainNet::Matic, &[INDEXER_TRADE_EVENTS]),
+        SALES_MINT_MATIC | SALES_BID_ACCEPTED_MATIC | ROYALTIES_BID_ACCEPTED_MATIC => {
+            (ChainNet::Matic, &[INDEXER_SALES])
+        }
         SALES_TRADED_ETHEREUM => (ChainNet::Ethereum, &[INDEXER_TRADE_EVENTS]),
         RENTAL_STARTED | RENTAL_ENDED => (ChainNet::Ethereum, &[INDEXER_RENTALS]),
         _ => return None,
@@ -287,6 +296,15 @@ mod tests {
             producers_of(INDEXER_TRADE_EVENTS, ChainNet::Matic),
             [TRANSFER_RECEIVED, SALES_TRADED_MATIC]
         );
+        assert_eq!(
+            producers_of(INDEXER_SALES, ChainNet::Matic),
+            [
+                SALES_MINT_MATIC,
+                SALES_BID_ACCEPTED_MATIC,
+                ROYALTIES_BID_ACCEPTED_MATIC
+            ]
+        );
+        assert!(producers_of(INDEXER_SALES, ChainNet::Ethereum).is_empty());
         let mut sorted = PRODUCERS.to_vec();
         sorted.sort();
         sorted.dedup();

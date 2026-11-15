@@ -11,6 +11,7 @@ pub mod as_of;
 pub mod audit;
 pub mod cache;
 pub mod client_ip;
+pub mod collections;
 pub mod cors;
 pub mod drain;
 pub mod errors;

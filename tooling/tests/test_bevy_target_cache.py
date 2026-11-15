@@ -152,8 +152,10 @@ class PruneTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.target = Path(temporary.name) / 'target'
-        self.home = Path(temporary.name) / 'cargo-home'
+        # Resolved, as the prune command resolves its target: the macOS temporary directory is behind a link.
+        root = Path(temporary.name).resolve()
+        self.target = root / 'target'
+        self.home = root / 'cargo-home'
         for name in self.KEPT + self.PRUNED:
             self.write(self.target / name)
         for name in self.HOME_KEPT:

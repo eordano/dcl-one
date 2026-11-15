@@ -171,12 +171,16 @@ def main():
     parser.add_argument('--shared-build', action='store_true',
                         help='Compile both WASM modules in one Cargo feature graph; requires wasm-bindgen and wasm-opt')
     parser.add_argument('--target-only', action='store_true',
-                        help='Run only the Cargo step of a shared build and stop; CI fills a target cache with it')
+                        help='Run only the Cargo steps of a shared build (the two modules and the bindings '
+                             'test build) and stop; CI fills a target cache with them')
     args = parser.parse_args()
     if args.target_only:
         env = build_environment()
         materialise_sources(env)
         cargo_wasm(args.no_opt, env)
+        # The bindings script compiles a test build in the same target; a build that restores
+        # the target without it compiles that again.
+        run('bash', './scripts/gen-ts-bindings.sh', env=env)
         return
     web(args.no_opt, args.engine_cache.resolve() if args.engine_cache else None, args.shared_build)
 

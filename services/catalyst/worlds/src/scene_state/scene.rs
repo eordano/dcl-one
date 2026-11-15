@@ -419,7 +419,10 @@ mod tests {
             timestamp: 1,
             data: vec![1],
         }]);
-        assert_eq!(scene.runtime.on_client_crdt(a.index, &body).len(), 1);
+        assert_eq!(
+            scene.runtime.on_client_crdt(a.index, &body).unwrap().len(),
+            1
+        );
 
         scene.remove_client(a.index);
 

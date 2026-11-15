@@ -74,3 +74,18 @@ class HostAliasTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(route("worlds-content-server.example.test", path),
                                  ("/worlds-content-server" + path, path))
+
+
+class AccountHostTest(unittest.TestCase):
+    def test_account_host_reaches_the_sites_confirmation_pages(self):
+        root = Path(__file__).parents[3]
+        sites = sorted(path.name for path in (root / "apps/sites/src/routes/routes").iterdir())
+        cfg = gateway.settings({"GATEWAY_RESOLVERS": "127.0.0.1", "GATEWAY_DOMAIN": "example.test"})
+        config = gateway.render({**TABLE, "sites": sites}, cfg, "/mime.types")
+        uri = "/confirm-email-challenge/abc?address=0x1&source=account"
+        self.assertEqual(nginx_map.route(config, "account.example.test", uri),
+                         ("/account/confirm-email-challenge/abc", uri))
+        self.assertIn("location /account/ {\nproxy_pass http://sites;", config)
+        # The confirm request itself stays the node's on the apex host.
+        self.assertEqual(nginx_map.route(config, "example.test", "/notifications/confirm-email")[0],
+                         "/notifications/confirm-email")

@@ -411,6 +411,19 @@ mod tests {
     }
 
     #[test]
+    fn world_permission_emails_list_the_metadata_permissions() {
+        let metadata = json!({"world": "w.dcl.eth", "permissions": ["deployment", "streaming"]});
+        for kind in ["worlds_permission_granted", "worlds_permission_revoked"] {
+            let r = render(kind, "0xa", &metadata).unwrap().unwrap();
+            assert!(
+                r.content.contains("deployment/streaming"),
+                "{kind}: {}",
+                r.content
+            );
+        }
+    }
+
+    #[test]
     fn rendering_matches_the_old_processor() {
         let r = render(
             "banned",

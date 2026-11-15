@@ -7,7 +7,7 @@
 //! entry without `address` is a broadcast: one `broadcast_notifications` row
 //! every wallet's inbox lists, with per-wallet `broadcast_reads`, never emailed.
 //! Unlike upstream, only [`BROADCAST_TYPES`] may be address-less, timestamps
-//! may not run ahead of the clock, and items and metadata are capped.
+//! may not run ahead of the clock, and metadata is capped.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,9 +48,7 @@ pub const BROADCAST_TYPES: [&str; 1] = ["governance_announcement"];
 pub const MAX_CLOCK_SKEW_MS: i64 = 5 * 60 * 1000;
 /// Serialized `metadata` per item.
 pub const MAX_METADATA_BYTES: usize = 16 * 1024;
-/// Items per body; governance posts one item per voter of a proposal.
-pub const MAX_ITEMS: usize = 10_000;
-/// Rows per INSERT statement inside the batch's transaction.
+/// Rows per INSERT statement and transaction.
 const WRITE_CHUNK: usize = 1_000;
 
 /// A producer and the type prefix its token may publish.
@@ -165,11 +163,6 @@ pub fn validate(body: &Json, producer: Producer, now_ms: i64) -> Result<Vec<Inge
     let Json::Array(items) = body else {
         return Err("\"value\" must be an array".into());
     };
-    if items.len() > MAX_ITEMS {
-        return Err(format!(
-            "\"value\" must contain less than or equal to {MAX_ITEMS} items"
-        ));
-    }
     let max_ts = now_ms.saturating_add(MAX_CLOCK_SKEW_MS);
     let mut out = Vec::with_capacity(items.len());
     for (i, item) in items.iter().enumerate() {
@@ -282,28 +275,75 @@ pub(crate) fn dedup(batch: Vec<Ingested>) -> Vec<Ingested> {
     out
 }
 
-/// Upserts the batch in one transaction; returns how many rows were new.
-/// Addressed rows get their email delivery row; opted-out recipients are dropped.
-pub async fn upsert(pool: &PgPool, batch: Vec<Ingested>) -> Result<u64, sqlx::Error> {
+/// Rows a batch wrote, as upstream logs them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Upserted {
+    pub inserted: u64,
+    pub updated: u64,
+}
+
+impl std::ops::AddAssign for Upserted {
+    fn add_assign(&mut self, other: Self) {
+        self.inserted += other.inserted;
+        self.updated += other.updated;
+    }
+}
+
+/// Upserts the batch one [`WRITE_CHUNK`] transaction at a time, so no row
+/// stays locked for the whole body; a retry after a partial failure redoes
+/// the rest idempotently. Each id lands in one chunk, so a new row gets its
+/// email delivery row in its own chunk's transaction; opted-out recipients
+/// are dropped.
+pub async fn upsert(pool: &PgPool, batch: Vec<Ingested>) -> Result<Upserted, sqlx::Error> {
     let batch = dedup(batch);
     let (addressed, broadcast): (Vec<_>, Vec<_>) =
         batch.into_iter().partition(|n| n.address.is_some());
-    let mut tx = pool.begin().await?;
-    let mut inserted = 0;
+    let chunks = addressed.len().div_ceil(WRITE_CHUNK) + broadcast.len().div_ceil(WRITE_CHUNK);
+    let mut written = Upserted::default();
+    let mut committed = 0;
+    let outcome = write_chunks(pool, &addressed, &broadcast, &mut written, &mut committed).await;
+    if let Err(error) = &outcome {
+        // The committed chunks stay; a retry counts their rows as updated.
+        tracing::warn!(
+            %error,
+            inserted = written.inserted,
+            updated = written.updated,
+            committed_chunks = committed,
+            total_chunks = chunks,
+            "notification ingest stopped part-way"
+        );
+    }
+    outcome.map(|()| written)
+}
+
+async fn write_chunks(
+    pool: &PgPool,
+    addressed: &[Ingested],
+    broadcast: &[Ingested],
+    written: &mut Upserted,
+    committed: &mut usize,
+) -> Result<(), sqlx::Error> {
     for chunk in addressed.chunks(WRITE_CHUNK) {
-        inserted += upsert_addressed(&mut tx, chunk).await?;
+        let mut tx = pool.begin().await?;
+        let chunk_written = upsert_addressed(&mut tx, chunk).await?;
+        tx.commit().await?;
+        *written += chunk_written;
+        *committed += 1;
     }
     for chunk in broadcast.chunks(WRITE_CHUNK) {
-        inserted += upsert_broadcasts(&mut tx, chunk).await?;
+        let mut tx = pool.begin().await?;
+        let chunk_written = upsert_broadcasts(&mut tx, chunk).await?;
+        tx.commit().await?;
+        *written += chunk_written;
+        *committed += 1;
     }
-    tx.commit().await?;
-    Ok(inserted)
+    Ok(())
 }
 
 async fn upsert_addressed(
     tx: &mut sqlx::PgConnection,
     addressed: &[Ingested],
-) -> Result<u64, sqlx::Error> {
+) -> Result<Upserted, sqlx::Error> {
     let sql = format!(
         r#"
         WITH src AS (
@@ -318,14 +358,15 @@ async fn upsert_addressed(
         ),
         ups AS (
             INSERT INTO social.notifications AS t (id, address, type, metadata, occurred_at)
-            SELECT id, address, type, metadata, occurred_at FROM src
+            SELECT id, address, type, metadata, occurred_at FROM src ORDER BY id
             ON CONFLICT (id) DO UPDATE
                 SET metadata = EXCLUDED.metadata, occurred_at = EXCLUDED.occurred_at
                 WHERE t.address = EXCLUDED.address AND t.type = EXCLUDED.type
             RETURNING id, address, type, (xmax = 0) AS inserted
         ),
-        ins AS (SELECT id, address, type FROM ups WHERE inserted)
-        {delivery}
+        ins AS (SELECT id, address, type FROM ups WHERE inserted),
+        delivered AS ({delivery})
+        SELECT count(*) FILTER (WHERE inserted), count(*) FILTER (WHERE NOT inserted) FROM ups
         "#,
         delivery = *DELIVERY_ROWS_SQL,
         community_opt_out = community_opt_out("n.address", &uuid_or_null("n.scope_id")),
@@ -346,7 +387,7 @@ async fn upsert_addressed(
         .iter()
         .map(|n| n.opt_out.as_ref().map(|(_, id)| id.as_str()))
         .collect();
-    Ok(sqlx::query(sqlx::AssertSqlSafe(sql))
+    let (inserted, updated): (i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(&ids)
         .bind(&addresses)
         .bind(&kinds)
@@ -354,31 +395,36 @@ async fn upsert_addressed(
         .bind(&occurred)
         .bind(&scopes)
         .bind(&scope_ids)
-        .execute(tx)
-        .await?
-        .rows_affected())
+        .fetch_one(tx)
+        .await?;
+    Ok(Upserted {
+        inserted: inserted as u64,
+        updated: updated as u64,
+    })
 }
 
 async fn upsert_broadcasts(
     tx: &mut sqlx::PgConnection,
     broadcast: &[Ingested],
-) -> Result<u64, sqlx::Error> {
+) -> Result<Upserted, sqlx::Error> {
     // Stored once, listed in every inbox; never emailed (upstream sent none).
     let ids: Vec<Uuid> = broadcast.iter().map(Ingested::id).collect();
     let kinds: Vec<&str> = broadcast.iter().map(|n| n.kind.as_str()).collect();
     let metadata: Vec<&Json> = broadcast.iter().map(|n| &n.metadata).collect();
     let occurred: Vec<NaiveDateTime> = broadcast.iter().map(|n| n.occurred_at).collect();
-    let fresh: i64 = sqlx::query_scalar(
+    let (inserted, updated): (i64, i64) = sqlx::query_as(
         r#"
         WITH ups AS (
             INSERT INTO social.broadcast_notifications AS t (id, type, metadata, occurred_at)
             SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::jsonb[], $4::timestamp[])
+                AS b(id, type, metadata, occurred_at)
+            ORDER BY id
             ON CONFLICT (id) DO UPDATE
                 SET metadata = EXCLUDED.metadata, occurred_at = EXCLUDED.occurred_at
                 WHERE t.type = EXCLUDED.type
             RETURNING (xmax = 0) AS inserted
         )
-        SELECT count(*) FILTER (WHERE inserted) FROM ups
+        SELECT count(*) FILTER (WHERE inserted), count(*) FILTER (WHERE NOT inserted) FROM ups
         "#,
     )
     .bind(&ids)
@@ -387,7 +433,10 @@ async fn upsert_broadcasts(
     .bind(&occurred)
     .fetch_one(tx)
     .await?;
-    Ok(fresh as u64)
+    Ok(Upserted {
+        inserted: inserted as u64,
+        updated: updated as u64,
+    })
 }
 
 pub async fn post_notifications(
@@ -410,7 +459,13 @@ pub async fn post_notifications(
         ApiError::bad_request(message)
     })?;
     let received = batch.len();
-    let inserted = upsert(state.store.pool(), batch).await?;
-    tracing::info!(?producer, received, inserted, "notifications ingested");
+    let written = upsert(state.store.pool(), batch).await?;
+    tracing::info!(
+        ?producer,
+        received,
+        inserted = written.inserted,
+        updated = written.updated,
+        "notifications ingested"
+    );
     Ok(StatusCode::NO_CONTENT)
 }

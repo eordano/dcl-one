@@ -365,6 +365,30 @@ pub struct WorldsConfig {
     #[arg(long, env = "WS_MAX_FRAME_BYTES", default_value_t = 2_097_152)]
     pub ws_max_frame_bytes: usize,
 
+    /// The scene host's largest single component payload a scene's state keeps.
+    #[arg(long, env = "CRDT_MAX_VALUE_BYTES", default_value_t = 262_144)]
+    pub crdt_max_value_bytes: usize,
+
+    /// The scene host's payload bytes one scene's state keeps.
+    #[arg(long, env = "CRDT_MAX_BYTES", default_value_t = 33_554_432)]
+    pub crdt_max_bytes: usize,
+
+    /// The scene host's unread client bytes queued toward the scene, per client.
+    #[arg(long, env = "CLIENT_INBOUND_MAX_BYTES", default_value_t = 8_388_608)]
+    pub client_inbound_max_bytes: usize,
+
+    /// The scene host's unread client bytes queued toward one scene.
+    #[arg(long, env = "SCENE_INBOUND_MAX_BYTES", default_value_t = 33_554_432)]
+    pub scene_inbound_max_bytes: usize,
+
+    /// The scene host's scene bytes queued to one client.
+    #[arg(long, env = "CLIENT_OUTBOUND_MAX_BYTES", default_value_t = 8_388_608)]
+    pub client_outbound_max_bytes: usize,
+
+    /// The scene host's ArrayBuffer memory one isolate holds outside its JS heap.
+    #[arg(long, env = "JS_ARRAY_BUFFER_LIMIT_MB", default_value_t = 128)]
+    pub js_array_buffer_limit_mb: usize,
+
     /// The world-storage origin, the ONLY origin a scene's `~system/SignedFetch`
     /// may reach (this node's `<PUBLIC_URL>/world-storage`); unset disables scene storage.
     #[arg(long, env = "SCENE_HOST_STORAGE_URL")]
@@ -925,6 +949,17 @@ mod tests {
                 c.worlds.ws_max_frame_bytes
             ),
             (1024, 1024, 100_000, 2_097_152)
+        );
+        assert_eq!(
+            (
+                c.worlds.crdt_max_value_bytes,
+                c.worlds.crdt_max_bytes,
+                c.worlds.client_inbound_max_bytes,
+                c.worlds.scene_inbound_max_bytes,
+                c.worlds.client_outbound_max_bytes,
+                c.worlds.js_array_buffer_limit_mb
+            ),
+            (262_144, 33_554_432, 8_388_608, 33_554_432, 8_388_608, 128)
         );
         assert_eq!(
             (

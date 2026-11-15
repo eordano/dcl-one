@@ -23,7 +23,7 @@ use super::errors::{ApiError, NotificationsError, parse_json};
 use super::store::SetEmailOutcome;
 use super::types::{
     BroadcastResponse, CommunityOptOutStatus, MarkReadResponse, NotificationsListResponse,
-    Subscription, is_known_type, normalize_details, subscription_update,
+    Subscription, is_known_type, subscription_update,
 };
 use crate::identity::Address;
 use crate::shared::signed_fetch;
@@ -180,16 +180,7 @@ pub async fn get_subscription(
     local: Uri,
 ) -> Result<Json<Subscription>, NotificationsError> {
     let signer = signer(&state, &headers, "get", &uri, &local).await?;
-    let sub = match state.store.get_subscription(&signer).await? {
-        Some(sub) => sub,
-        None => Subscription {
-            address: signer.into_string(),
-            email: None,
-            unconfirmed_email: None,
-            details: normalize_details(&serde_json::json!({})),
-        },
-    };
-    Ok(Json(sub))
+    Ok(Json(state.store.get_subscription(&signer).await?))
 }
 
 pub async fn put_subscription(
@@ -228,8 +219,7 @@ pub async fn put_set_email(
     Json(body): Json<SetEmailBody>,
 ) -> Result<impl IntoResponse, NotificationsError> {
     let signer = signer(&state, &headers, "put", &uri, &local).await?;
-    let email = body.email.as_deref().map(str::trim);
-    let email = match email {
+    let email = match body.email.as_deref() {
         Some("") => "",
         Some(e) if email::is_valid_email(e) => e,
         _ => return Err(ApiError::bad_request(email::INVALID_EMAIL).into()),

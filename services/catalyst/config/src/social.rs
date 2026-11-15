@@ -564,12 +564,30 @@ pub struct SocialConfig {
     #[arg(long, env = "SENDGRID_API_KEY", hide_env_values = true)]
     pub sendgrid_api_key: Option<String>,
 
+    /// SendGrid's API origin; `/v3/mail/send` is appended. Empty means no SendGrid.
+    #[arg(
+        long,
+        env = "SENDGRID_API_URL",
+        default_value = "https://api.sendgrid.com"
+    )]
+    pub sendgrid_api_url: String,
+
+    /// Read through [`SocialConfig::sendgrid_sender`], which falls back to `SENDGRID_EMAIL_FROM`.
     #[arg(long, env = "SENDGRID_FROM_EMAIL")]
     pub sendgrid_from_email: Option<String>,
 
-    /// The generic template: outbox deliveries, confirmations and ad-hoc emails; unset records every delivery as skipped.
+    /// Upstream's name for SENDGRID_FROM_EMAIL, used when that is unset.
+    #[arg(long, env = "SENDGRID_EMAIL_FROM")]
+    pub sendgrid_email_from: Option<String>,
+
+    /// The generic template: outbox deliveries, confirmations and ad-hoc emails; unset holds every delivery pending.
+    /// Read through [`SocialConfig::sendgrid_template_id`], which falls back to `SENDGRID_EMAIL_TEMPLATE_ID`.
     #[arg(long, env = "SENDGRID_NOTIFICATION_TEMPLATE_ID")]
     pub sendgrid_notification_template_id: Option<String>,
+
+    /// Upstream's name for SENDGRID_NOTIFICATION_TEMPLATE_ID, used when that is unset.
+    #[arg(long, env = "SENDGRID_EMAIL_TEMPLATE_ID")]
+    pub sendgrid_email_template_id: Option<String>,
 
     /// The account confirmation email's own template; unset uses SENDGRID_NOTIFICATION_TEMPLATE_ID.
     #[arg(long, env = "SENDGRID_VALIDATE_EMAIL_TEMPLATE_ID")]
@@ -621,11 +639,23 @@ pub struct SocialConfig {
     #[arg(long, env = "NOTIFICATIONS_REWARDS_TOKEN", hide_env_values = true)]
     pub notifications_rewards_token: Option<String>,
 
-    /// Cloudflare Turnstile secret for confirm-email; unset turns the check off.
+    /// Cloudflare Turnstile secret for confirm-email; the check runs while it is set and the
+    /// `dapps-turnstile-verification` flag is on.
     #[arg(long, env = "TURNSTILE_SECRET_KEY", hide_env_values = true)]
     pub turnstile_secret_key: Option<String>,
 
-    /// Comma-separated email domains refused by set-email.
+    /// The disposable email domain list set-email and confirm-email refuse, fetched hourly; empty
+    /// (the default outside the mirror posture) fetches none.
+    #[arg(long, env = "DISPOSABLE_EMAIL_DOMAINS_URL", default_value = "")]
+    pub disposable_email_domains_url: String,
+
+    /// A disposable list download with fewer domains is treated as broken and the previous list
+    /// kept. The upstream list holds thousands; lower it for a shorter list of your own.
+    #[arg(long, env = "DISPOSABLE_EMAIL_DOMAINS_MIN", default_value_t = 1000)]
+    pub disposable_email_domains_min: usize,
+
+    /// Comma-separated email domains refused by set-email and confirm-email, on top of the
+    /// disposable-domain list and the `dapps-credits-blacklisted-domains` flag variant.
     #[arg(long, env = "EMAIL_DOMAIN_BLACKLIST", default_value = "")]
     pub email_domain_blacklist: String,
 
@@ -643,6 +673,14 @@ pub struct SocialConfig {
     #[arg(long, env = "FIRST_WEAR_IMAGE_BASE")]
     pub first_wear_image_base: Option<String>,
 
+    /// Base of the notification icons (upstream `CDN_URL`), e.g. `<base>/credits/notification-icon.png`.
+    #[arg(
+        long,
+        env = "NOTIFICATIONS_CDN_URL",
+        default_value = "https://assets-cdn.decentraland.org"
+    )]
+    pub notifications_cdn_url: String,
+
     /// Tick of the notification outbox worker.
     #[arg(
         long,
@@ -651,11 +689,11 @@ pub struct SocialConfig {
     )]
     pub notification_delivery_interval_secs: u64,
 
-    /// Days a producer broadcast stays in every inbox before it is hidden and pruned.
+    /// Days a producer broadcast stays in every inbox before it is hidden and pruned; 0 keeps them forever.
     #[arg(
         long,
         env = "NOTIFICATIONS_BROADCAST_HORIZON_DAYS",
-        default_value_t = 90
+        default_value_t = 0
     )]
     pub notifications_broadcast_horizon_days: u64,
     /// Pending notification emails idle this long end skipped as expired (default 7 days;
@@ -996,6 +1034,28 @@ impl SocialConfig {
     }
 }
 
+impl SocialConfig {
+    /// SENDGRID_FROM_EMAIL, else upstream's SENDGRID_EMAIL_FROM; empty counts as unset.
+    pub fn sendgrid_sender(&self) -> Option<&str> {
+        first_set(&self.sendgrid_from_email, &self.sendgrid_email_from)
+    }
+
+    /// SENDGRID_NOTIFICATION_TEMPLATE_ID, else upstream's SENDGRID_EMAIL_TEMPLATE_ID; empty counts as unset.
+    pub fn sendgrid_template_id(&self) -> Option<&str> {
+        first_set(
+            &self.sendgrid_notification_template_id,
+            &self.sendgrid_email_template_id,
+        )
+    }
+}
+
+fn first_set<'a>(primary: &'a Option<String>, alias: &'a Option<String>) -> Option<&'a str> {
+    [primary, alias]
+        .into_iter()
+        .filter_map(|v| v.as_deref())
+        .find(|v| !v.is_empty())
+}
+
 impl std::fmt::Debug for SocialConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SocialConfig").finish_non_exhaustive()
@@ -1071,6 +1131,37 @@ mod tests {
         ] {
             assert!(social(&[(name, invalid)]).is_err(), "{name}={invalid}");
         }
+    }
+
+    #[test]
+    fn sendgrid_accepts_upstreams_variable_names_as_fallbacks() {
+        let defaults = social(&[]).unwrap();
+        assert_eq!(defaults.sendgrid_sender(), None);
+        assert_eq!(defaults.sendgrid_template_id(), None);
+        assert_eq!(defaults.sendgrid_api_url, "https://api.sendgrid.com");
+        let upstream = social(&[
+            ("SENDGRID_EMAIL_FROM", "from@example.com"),
+            ("SENDGRID_EMAIL_TEMPLATE_ID", "d-upstream"),
+            ("SENDGRID_API_URL", "https://sendgrid.example"),
+        ])
+        .unwrap();
+        assert_eq!(upstream.sendgrid_sender(), Some("from@example.com"));
+        assert_eq!(upstream.sendgrid_template_id(), Some("d-upstream"));
+        assert_eq!(upstream.sendgrid_api_url, "https://sendgrid.example");
+        let both = social(&[
+            ("SENDGRID_FROM_EMAIL", "own@example.com"),
+            ("SENDGRID_EMAIL_FROM", "from@example.com"),
+            ("SENDGRID_NOTIFICATION_TEMPLATE_ID", ""),
+            ("SENDGRID_EMAIL_TEMPLATE_ID", "d-upstream"),
+        ])
+        .unwrap();
+        assert_eq!(both.sendgrid_sender(), Some("own@example.com"));
+        assert_eq!(both.sendgrid_template_id(), Some("d-upstream"));
+    }
+
+    #[test]
+    fn broadcasts_are_kept_forever_by_default() {
+        assert_eq!(social(&[]).unwrap().notifications_broadcast_horizon_days, 0);
     }
 
     #[test]

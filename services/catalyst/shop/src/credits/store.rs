@@ -34,6 +34,8 @@ pub struct Credits {
     pub(crate) usage_chain: Option<i64>,
     /// The grant notification's link (`SHOP_BASE_URL`).
     pub(crate) shop_base_url: Arc<str>,
+    /// The grant notification's icon base (`NOTIFICATIONS_CDN_URL`).
+    pub(crate) notifications_cdn_url: Arc<str>,
 }
 
 /// A wallet's balances in integer US cents at the peg (`floor(credits * 10)`;
@@ -77,11 +79,17 @@ impl Credits {
             kick: Arc::new(Notify::new()),
             usage_chain: None,
             shop_base_url: crate::subscriptions::DEFAULT_SHOP_BASE_URL.into(),
+            notifications_cdn_url: catalyst_social::notifications::DEFAULT_CDN_URL.into(),
         }
     }
 
     pub fn with_shop_base_url(mut self, url: &str) -> Self {
         self.shop_base_url = url.trim_end_matches('/').into();
+        self
+    }
+
+    pub fn with_notifications_cdn_url(mut self, url: &str) -> Self {
+        self.notifications_cdn_url = url.into();
         self
     }
 

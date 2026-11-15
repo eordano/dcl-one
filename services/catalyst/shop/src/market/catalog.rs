@@ -68,8 +68,7 @@ pub const MAX_NUMERIC_NUMBER: &str =
 
 /// 2^216: a collection token id is `item_id << 216 | issued_id`, the rule
 /// that gives an nft-order leg its item without an nft table.
-pub const ITEM_ID_SHIFT: &str =
-    "105312291668557186697918027683670432318895095400549111254310977536";
+pub use crate::shared::collections::ITEM_SHIFT as ITEM_ID_SHIFT;
 
 /// The off-chain marketplace contracts (v2 and v3, both mainnets and
 /// testnets): a collection listing one of them as a minter is what the squid

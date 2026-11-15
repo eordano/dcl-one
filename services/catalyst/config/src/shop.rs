@@ -560,8 +560,9 @@ pub struct ShopConfig {
 
     /// Walk the Rentals contract's logs on Ethereum (shop.rental_event, over TRADE_RPC_URLS 1=
     /// or, on mainnet, ETH_RPC_URL): listing status sync and the rental notifications.
-    #[arg(long, env = "SHOP_RENTALS_INDEX_ENABLED", default_value_t = false, action = clap::ArgAction::Set)]
-    pub shop_rentals_index_enabled: bool,
+    /// Unset: on whenever that endpoint is configured; `false` turns it off.
+    #[arg(long, env = "SHOP_RENTALS_INDEX_ENABLED", action = clap::ArgAction::Set)]
+    pub shop_rentals_index_enabled: Option<bool>,
 }
 
 #[cfg(test)]
@@ -774,10 +775,19 @@ mod tests {
             c.shop.credits_checkout_success_url.is_empty()
                 && c.shop.credits_checkout_cancel_url.is_empty()
         );
-        assert!(
-            !c.shop.shop_rentals_index_enabled,
-            "the rentals index is opt-in"
+        assert_eq!(
+            c.shop.shop_rentals_index_enabled, None,
+            "the rentals index follows the chain-1 endpoint unless set"
         );
+        let off = parse(&[
+            "x",
+            "--database-url",
+            "postgres:///catalyst",
+            "--shop-rentals-index-enabled",
+            "false",
+        ])
+        .unwrap();
+        assert_eq!(off.shop.shop_rentals_index_enabled, Some(false));
         assert!(
             !c.shop.credits_usage_index_enabled
                 && c.shop.credits_usage_start_block.is_none()

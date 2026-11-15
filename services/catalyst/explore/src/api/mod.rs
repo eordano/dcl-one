@@ -203,6 +203,8 @@ pub struct Settings {
     pub opensea: opensea::Settings,
     /// `ONBOARDING_API_KEY`: the bearer of `/onboarding/*`; unset, both routes answer 401.
     pub onboarding_api_key: Option<String>,
+    /// `HTTP_TRUSTED_PROXY_CIDRS`: peers whose `X-Real-IP` names the client.
+    pub trusted_proxy_cidrs: Vec<ipnet::IpNet>,
 }
 
 impl Settings {
@@ -315,6 +317,7 @@ impl Settings {
                 .onboarding_api_key
                 .clone()
                 .filter(|k| !k.trim().is_empty()),
+            trusted_proxy_cidrs: config.node.http_trusted_proxy_cidrs.clone(),
         }
     }
 
@@ -355,6 +358,7 @@ impl Settings {
                 ..opensea::Settings::defaults()
             },
             onboarding_api_key: None,
+            trusted_proxy_cidrs: Vec::new(),
         }
     }
 

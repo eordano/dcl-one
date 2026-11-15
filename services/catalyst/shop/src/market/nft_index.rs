@@ -385,7 +385,7 @@ pub async fn insert_events(
     Ok(written)
 }
 
-const TWO_POW_216: &str = "105312291668557186697918027683670432318895095400549111254310977536";
+use crate::shared::collections::ITEM_SHIFT as TWO_POW_216;
 
 /// The keys a fold past `$2` touches, counted before the fold decides its
 /// join strategy (`NESTED_LOOP_TOUCHED_MAX`); the same two arms as the

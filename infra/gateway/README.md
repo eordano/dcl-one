@@ -6,7 +6,8 @@ The exact `/places/place?position=...` and `/places/world?name=...` endpoints, i
 
 The exact `/events/assets/event-default.webp` path serves Catalyst's bundled event image. Event image links use the node's `PUBLIC_URL` plus the `/events` mount; `EVENTS_BASE_URL` remains the website URL used by sitemaps.
 
-Referral quotas, the `POST /entities` burst limit and daily quota, and the
+Referral quotas, the `POST /entities` burst limit and daily quota, the
+`/auth-api` pending sign-in caps and the
 `/contents` rate limit use the backend TCP peer by default. Configure
 `HTTP_TRUSTED_PROXY_CIDRS` on the API process with the direct backend proxy
 networks (the gateway's container network), and ensure those proxies overwrite
@@ -14,8 +15,11 @@ a single valid `X-Real-IP`. An
 empty setting trusts no forwarded header (only a loopback peer may name the
 client to the other per-client limits and IP bindings) and therefore buckets
 traffic behind a non-loopback gateway under that gateway's peer address: every
-deployer then shares one deploy limit. The API logs one warning when an
-untrusted private or loopback peer forwards `X-Real-IP`. Missing or malformed X-Real-IP from a trusted peer
+deployer then shares one deploy limit. `/auth-api` instead skips its
+per-network cap for an untrusted private or loopback peer and keeps only its
+global cap. The API logs one warning when an untrusted private peer forwards
+`X-Real-IP`, and `/auth-api` one the first time it sees an untrusted private or
+loopback peer. Missing or malformed X-Real-IP from a trusted peer
 fails closed. This API-side setting is separate from
 `GATEWAY_TRUSTED_PROXY_CIDRS`, which controls the gateway's upstream CDN trust.
 Verify the deployed trust chain and client bucket separation before cutover:
