@@ -7,12 +7,15 @@ on:
       - 'flake.*'
       - 'infra/dev/**'
       - 'infra/gateway/**'
+      - 'infra/packages/**'
       - 'tooling/dev*'
       - 'tooling/catalyst-test*.sh'
       - 'tooling/enet-provenance.py'
       - 'tooling/*.py'
       - 'tooling/tests/**'
       - 'services/catalyst/**'
+      # the node never links the scene CLI, but the workspace reads its manifest
+      - 'apps/dcl-scene-cli/Cargo.toml'
       - 'library/**'
       - '.cargo/**'
       - 'apps/sites/**'
@@ -198,7 +201,7 @@ jobs:
         run: |
           # Hash tracked inputs, not the commit: unrelated documentation edits
           # reuse a snapshot, while schema, protocol and vendored SDK edits do not.
-          source=$(git ls-tree -r HEAD -- services/catalyst library schemas .cargo apps/dcl-scene-cli flake.nix Makefile tooling infra/dev .github/workflows/development.yml | git hash-object --stdin)
+          source=$(git ls-tree -r HEAD -- services/catalyst library schemas .cargo apps/dcl-scene-cli flake.nix Makefile tooling infra/dev infra/packages .github/workflows/development.yml | git hash-object --stdin)
           echo "source=$source" >> "$GITHUB_OUTPUT"
       - name: Restore Rust build cache
         id: rust-cache

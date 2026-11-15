@@ -131,7 +131,10 @@ commit) and whether the run's *Changes* job selected an explorer job (`explorer-
 *Test Suite*, *Headless Smoke*, *Clippy* or the web build not skipped). A run that selected none,
 such as a backend-only change, leaves the pull request without a comment. When the run is
 requested, both sections go to pending; when it completes, they are
-composed from its jobs and artifacts (`explorer-ci-sections.sh`). A cancelled run of a commit the
+composed from its jobs and artifacts (`explorer-ci-sections.sh`). A completed run that ran no test
+job reads the newer runs of this workflow for the head commit of an open pull request: while one
+has not ended, the tests section links it as pending; when one has ended, the run writes no tests
+section, so it does not replace the results of that run. A cancelled run of a commit the
 pull request moved past writes nothing. `automation` and `inworld` sections are allowed for suites
 to come; they appear the first time one writes.
 

@@ -74,6 +74,9 @@ def digests(path):
 
 def install(system, machine, destination):
     target, digest = ARCHIVES[(system, machine.lower())]
+    if not hasattr(tarfile, 'tar_filter'):
+        raise RuntimeError('this Python has no extraction filter (tarfile.tar_filter): use Python 3.12 or newer, '
+                           'or a release of an older version that has the filter')
     name = f'cef_binary_{BUILD}_{target}_minimal.tar.bz2'
     destination = Path(destination).absolute()
     destination.parent.mkdir(parents=True, exist_ok=True)

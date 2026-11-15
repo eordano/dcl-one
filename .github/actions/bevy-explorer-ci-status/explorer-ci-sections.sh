@@ -5,7 +5,9 @@
 #
 # Environment: REPO (owner/name), PR_NUMBER, RUN_ID, RUN_URL, HEAD_SHA (the PR head), RUN_FILE
 # (the run attempt's metadata), JOBS_FILE (the run's /jobs response), ARTIFACTS_FILE (its
-# /artifacts response) and OUT_DIR (where build.md and tests.md are written).
+# /artifacts response) and OUT_DIR (where build.md and tests.md are written). Optional:
+# HEAD_RUNS_FILE (the runs of the PR head, an /actions/runs response; the caller gives it only for
+# an open pull request).
 #
 # The build section covers the products: the web app (*Web engine, HUD and bridge scene*), its
 # package (*Web package for the CDN*, a row only when the job ran) and the headless engine
@@ -13,7 +15,10 @@
 # *Test Suite* uploads. The tests section covers *Test Suite* on each platform and
 # *Headless Smoke*. A job *Changes* did not select (`skipped`) is reported as not selected; a
 # section none of whose jobs ran says its inputs are unchanged; the tests section adds that a draft
-# holds its tests, because the job list does not tell the two apart.
+# holds its tests, because the job list does not tell the two apart. A run with no test job reads
+# the newer runs of the same workflow for the same head (the run that ready_for_review starts
+# waits for this one): while one has not ended, the tests section says so and links it; when one
+# has ended, that run wrote the tests section and this run writes none.
 #
 # Usage: REPO=o/r PR_NUMBER=10 RUN_ID=1 RUN_URL=... HEAD_SHA=... RUN_FILE=run.json \
 #          JOBS_FILE=jobs.json ARTIFACTS_FILE=artifacts.json bash explorer-ci-sections.sh
@@ -265,11 +270,33 @@ if [ -n "${url:-}${conclusion:-}" ]; then
   rows="$rows| $(job_cell "$HEADLESS_JOB" "$url") | $(result_cell "$conclusion" Passed) | $(job_time "$secs") |"$'\n'
 fi
 
+# The newer runs of this workflow for the same head. One that has not ended reports the tests
+# later; one that has ended reported them already, and this run must not replace its section.
+waiting_url="" newer_ended=""
+if [ "$state" = none ] && [ -s "${HEAD_RUNS_FILE:-}" ]; then
+  IFS=$'\t' read -r waiting_url newer_ended <<< "$(jq -r --arg run "$RUN_ID" --arg head "$HEAD_SHA" --slurpfile this "$RUN_FILE" '
+    ($this[0].workflow_id // null) as $workflow
+    | [.workflow_runs[]? | select(.workflow_id == $workflow and .event == "pull_request"
+        and .head_sha == $head and .id > ($run | tonumber))] as $newer
+    | [($newer | map(select(.status != "completed")) | sort_by(.id) | last | .html_url // "-"),
+       ($newer | any(.status == "completed") | tostring)] | @tsv' "$HEAD_RUNS_FILE" | tr -d '\r')" || true
+  [ "$waiting_url" != - ] || waiting_url=""
+fi
+if [ -z "$waiting_url" ] && [ "$newer_ended" = true ]; then
+  echo "A newer run of ${HEAD_SHA:0:7} has ended and reported the tests: run $RUN_ID, which ran no test job, writes no tests section."
+  rm -f "$OUT_DIR/tests.md"
+  exit 0
+fi
+
 case "$state" in
   passed) badge="Tests-Passed!-3fb950"; headline="All explorer tests passed ✅" ;;
   failed) badge="Tests-Failed!-ff0000"; headline="Some explorer tests failed ❌ Check the [run]($RUN_URL) for the failing tests." ;;
   cancelled) badge="Tests-Cancelled-lightgrey"; headline="The run was cancelled. Push a new commit or re-run the workflow to refresh this section." ;;
-  *) badge="Tests-Not%20selected-lightgrey"; headline="No test job was selected: the test inputs are unchanged, or the pull request is a draft and the tests wait until it is ready for review." ;;
+  *) if [ -n "$waiting_url" ]; then
+       badge="Tests-Pending!-yellow"; headline="A newer [run]($waiting_url) of this commit has not ended. This section updates when that run reports."
+     else
+       badge="Tests-Not%20selected-lightgrey"; headline="No test job was selected: the test inputs are unchanged, or the pull request is a draft and the tests wait until it is ready for review."
+     fi ;;
 esac
 {
   echo "[![Tests](https://img.shields.io/badge/$badge?logo=rust&$BADGE_STYLE)]($RUN_URL)"

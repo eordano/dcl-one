@@ -406,7 +406,9 @@ and on a PR only for a [platform input](platforms.md) or `ci:macos`. A draft PR 
 Test Suite, so it uploads no runner until it is marked ready for review. Other PRs that run the Test
 Suite, including one confined to `perf_stream.js` or `sso.ts` (which the runner's tests read),
 build only the Linux runner; one confined to other web files builds none. The workflow takes the
-missing runners from main.
+missing runners from main. A draft that changes the sender or the runner is then measured with the
+runner of main, which is not the receiver of its sender: read its benchmark only after the PR is
+ready for review.
 
 | Command | Does |
 | --- | --- |

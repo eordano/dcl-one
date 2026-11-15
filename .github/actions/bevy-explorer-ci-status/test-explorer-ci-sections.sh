@@ -122,6 +122,64 @@ check "green build badge with only the web app" build.md 'Build-Success!-3fb950'
 check "tests not selected badge" tests.md 'Tests-Not%20selected-lightgrey'
 check "tests headline" tests.md 'No test job was selected: the test inputs are unchanged, or the pull request is a draft and the tests wait until it is ready for review.'
 
+# 3b. The same run and the newer runs of the same workflow and head. Run 1 is this run.
+head_runs() { # head_runs '<id>:<workflow id>:<status>:<event>[:<head sha>]' ...
+  jq -nc --arg head "$SHA" '{workflow_runs: $ARGS.positional | map(split(":") | {id:(.[0] | tonumber),
+    workflow_id:(.[1] | tonumber), status:.[2], event:.[3], head_sha:(.[4] // $head),
+    html_url:("https://github.com/o/r/actions/runs/" + .[0])})}' --args "$@" > "$WORK/head-runs.json"
+}
+compose_with_head_runs() { # compose_with_head_runs [run id]
+  rm -f "$WORK/tests.md"
+  (cd "$WORK" && REPO=o/r RUN_ID="${1:-1}" RUN_URL=https://github.com/o/r/actions/runs/1 HEAD_SHA="$SHA" \
+    RUN_FILE=run.json PR_NUMBER=10 JOBS_FILE=jobs.json ARTIFACTS_FILE=artifacts.json \
+    HEAD_RUNS_FILE=head-runs.json bash "$COMPOSER")
+}
+not_selected='No test job was selected'
+run_metadata pull_request
+jq -c '. + {workflow_id: 7}' "$WORK/run.json" > "$WORK/run.tmp" && mv "$WORK/run.tmp" "$WORK/run.json"
+head_runs 1:7:completed:pull_request 2:7:pending:pull_request 3:8:queued:pull_request 4:7:queued:push
+compose_with_head_runs
+check "tests pending badge while a newer run has not ended" tests.md 'Tests-Pending!-yellow'
+check "the headline links the newer run" tests.md \
+  'A newer [run](https://github.com/o/r/actions/runs/2) of this commit has not ended. This section updates when that run reports.'
+check_absent "no not selected headline while a newer run has not ended" tests.md "$not_selected"
+head_runs 2:7:queued:pull_request 6:7:in_progress:pull_request
+compose_with_head_runs
+check "the newest of two runs that have not ended is the link" tests.md 'actions/runs/6)'
+head_runs 1:7:in_progress:pull_request
+compose_with_head_runs
+check "this run in the list is no newer run" tests.md "$not_selected"
+head_runs 3:8:queued:pull_request 4:7:queued:push
+compose_with_head_runs
+check "a run of another workflow or another event is no newer run" tests.md "$not_selected"
+head_runs 2:7:queued:pull_request:2222222222222222222222222222222222222222
+compose_with_head_runs
+check "a run of another commit is no newer run" tests.md "$not_selected"
+head_runs 2:7:queued:pull_request 3:7:completed:pull_request
+compose_with_head_runs 5
+check "an older run that has not ended is no newer run" tests.md "$not_selected"
+head_runs 5:7:completed:pull_request
+compose_with_head_runs
+if [ -e "$WORK/tests.md" ]; then
+  echo "  FAIL a newer run that ended keeps its tests section: tests.md was written"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "  ok   a newer run that ended keeps its tests section"
+  PASSES=$((PASSES + 1))
+fi
+check "the build section is still written" build.md 'Build-Success!-3fb950'
+head_runs 2:7:queued:pull_request 5:7:completed:pull_request
+compose_with_head_runs
+check "a newer run that has not ended is the headline beside one that ended" tests.md 'actions/runs/2)'
+run_metadata pull_request
+head_runs 2:7:queued:pull_request
+compose_with_head_runs
+check "a run with no workflow id names no newer run" tests.md "$not_selected"
+echo '{}' > "$WORK/head-runs.json"
+compose_with_head_runs
+check "an empty run list, as for a closed pull request, names no newer run" tests.md "$not_selected"
+run_metadata push
+
 # 4. Only the tests were selected, and an expired artifact is no download.
 jobs "$(job Changes success 40)" "$(job 'Test Suite (ubuntu-24.04)' success 1500)" \
   "$(job 'Web engine, HUD and bridge scene' skipped)" "$(job 'Headless Smoke' skipped)"

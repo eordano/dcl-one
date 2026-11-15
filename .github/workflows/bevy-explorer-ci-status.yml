@@ -129,6 +129,7 @@ jobs:
           RUN_FILE: run.json
           JOBS_FILE: jobs.json
           ARTIFACTS_FILE: artifacts.json
+          HEAD_RUNS_FILE: head-runs.json
           OUT_DIR: sections
         run: |
           if ! gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT" > "$RUN_FILE"; then
@@ -137,9 +138,19 @@ jobs:
           fi
           gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > jobs.json
           gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" > artifacts.json
+          # The run that ready_for_review starts waits for this one and reports the tests this run held.
+          # A closed pull request has no such run: its last run only removes the preview.
+          echo '{}' > "$HEAD_RUNS_FILE"
+          if [ "$(gh pr view "$PR_NUMBER" --repo "$REPO" --json state --jq '.state')" = OPEN ]; then
+            if ! gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" > "$HEAD_RUNS_FILE"; then
+              echo "::warning::Could not list the runs of ${HEAD_SHA:0:7}: the tests section does not name a newer run."
+              echo '{}' > "$HEAD_RUNS_FILE"
+            fi
+          fi
           mkdir -p sections
           bash .github/actions/bevy-explorer-ci-status/explorer-ci-sections.sh
-          cat sections/build.md sections/tests.md
+          cat sections/build.md
+          [ ! -f sections/tests.md ] || cat sections/tests.md
       - name: Check that the run still matches the PR head
         id: current
         run: |
@@ -159,7 +170,7 @@ jobs:
           github-token: ${{ github.token }}
           body-file: sections/build.md
       - name: Update the tests section
-        if: steps.current.outputs.write == 'true'
+        if: steps.current.outputs.write == 'true' && hashFiles('sections/tests.md') != ''
         uses: ./.github/actions/bevy-explorer-ci-status
         with:
           pr-number: ${{ needs.resolve.outputs.pr }}

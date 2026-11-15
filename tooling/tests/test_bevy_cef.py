@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -153,6 +154,14 @@ class CefTest(unittest.TestCase):
                 self.assertEqual((self.destination / 'icudtl.dat').is_file(), system != 'Darwin')
         with self.assertRaises(KeyError):
             cef.install('Linux', 'riscv64', self.destination)
+
+    def test_a_python_with_no_extraction_filter_fails_before_the_download(self):
+        # A tarfile module with no extraction filter, as in a Python that predates it.
+        with patch.object(cef, 'tarfile', types.SimpleNamespace()), patch.object(cef, 'download') as download:
+            with self.assertRaisesRegex(RuntimeError, r'tarfile\.tar_filter.*Python 3\.12'):
+                cef.install('Linux', 'x86_64', self.destination)
+        download.assert_not_called()
+        self.assertFalse(self.destination.parent.exists() and any(self.destination.parent.iterdir()))
 
     def test_a_changed_archive_fails_and_keeps_the_installed_directory(self):
         self.install('Linux', 'x86_64', archive('linux64', LINUX))
