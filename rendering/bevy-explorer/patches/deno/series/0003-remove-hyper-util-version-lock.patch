@@ -1,0 +1,19 @@
+From 751c24fc6a999694607308d56cafa127414942c0
+Subject: remove hyper-util version lock
+Origin: https://github.com/robtfm/deno/commit/751c24fc6a999694607308d56cafa127414942c0
+Date: 2026-06-02T13:58:35+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 5e5ae935f14972604eb806df79a5027de86035c4..e51d51615ec3fb5e08adefe7a505006ec858c9c6 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -124,7 +124,7 @@ http_v02 = { package = "http", version = "0.2.9" }
+ httparse = "1.8.0"
+ hyper = { version = "1.4.1", features = ["full"] }
+ hyper-rustls = { version = "0.27.2", default-features = false, features = ["http1", "http2", "tls12", "ring"] }
+-hyper-util = { version = "=0.1.10", features = ["tokio", "client", "client-legacy", "server", "server-auto"] }
++hyper-util = { version = "0.1.10", features = ["tokio", "client", "client-legacy", "server", "server-auto"] }
+ hyper_v014 = { package = "hyper", version = "0.14.26", features = ["runtime", "http1"] }
+ indexmap = { version = "2", features = ["serde"] }
+ ipnet = "2.3"

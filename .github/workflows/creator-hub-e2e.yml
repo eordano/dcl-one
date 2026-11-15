@@ -30,7 +30,7 @@ jobs:
   e2e-inspector:
     # Not ubuntu-latest: Playwright 1.60 had no Chromium build for Ubuntu 26.04. The suite now runs 1.62,
     # so this can move to ubuntu-latest once a run there is green.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86_UBUNTU_24_04 || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/creator-hub-setup

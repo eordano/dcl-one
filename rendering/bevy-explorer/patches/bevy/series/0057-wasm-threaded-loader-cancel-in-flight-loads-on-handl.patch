@@ -1,0 +1,140 @@
+From ede652c2afff2c1ff9d8f59907493e6b487c362f
+Subject: wasm_threaded_loader: cancel in-flight loads on handle drop
+Origin: https://github.com/robtfm/bevy/commit/ede652c2afff2c1ff9d8f59907493e6b487c362f
+Date: 2026-05-16T13:17:06+01:00
+
+Worker-side load tasks (spawn_local) previously had no cancellation path:
+the AssetServer task on the main thread was the only Drop-tracked handle,
+and even that runs to completion on wasm because Task<T> wraps an
+uncancellable wasm_bindgen_futures::spawn_local future. Result: when all
+strong handles to an in-flight asset dropped (scene change, realm switch),
+the worker's reqwest fetch continued, holding the IPFS semaphore permit
+until natural completion and starving the new scene's loads.
+
+Race the worker's load_with_meta_and_loader_internal against a 2s poll of
+AssetInfos::path_to_id. When process_handle_drop_internal has removed the
+entry (no strong handles left), the cancel branch returns Err(LoadCancelled),
+FutureExt::or drops the work future, and reqwest's AbortGuard aborts the
+JS fetch on the way out, releasing the permit.
+---
+diff --git a/crates/bevy_asset/Cargo.toml b/crates/bevy_asset/Cargo.toml
+index f3b7f67e68781efedb2e161d7eb310caf1bcd953..4203a74e5aa2804138f892cdcba6bdb0f7f90e8f 100644
+--- a/crates/bevy_asset/Cargo.toml
++++ b/crates/bevy_asset/Cargo.toml
+@@ -17,7 +17,7 @@ multi_threaded = ["bevy_tasks/multi_threaded"]
+ asset_processor = []
+ watch = []
+ trace = []
+-wasm_threaded_loader = ["async-channel", "spin"]
++wasm_threaded_loader = ["async-channel", "spin", "dep:gloo-timers"]
+ 
+ [dependencies]
+ bevy_app = { path = "../bevy_app", version = "0.16.1" }
+@@ -68,6 +68,7 @@ web-sys = { version = "0.3", features = [
+ ] }
+ wasm-bindgen-futures = "0.4"
+ js-sys = "0.3"
++gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+ uuid = { version = "1.13.1", default-features = false, features = ["js"] }
+ bevy_app = { path = "../bevy_app", version = "0.16.1", default-features = false, features = [
+   "web",
+diff --git a/crates/bevy_asset/src/server/info.rs b/crates/bevy_asset/src/server/info.rs
+index 1b3bb3cb65d6807036616367af331a53f0c4a149..85bbb52c89ea934bde8aad2d668944ec1befa1c9 100644
+--- a/crates/bevy_asset/src/server/info.rs
++++ b/crates/bevy_asset/src/server/info.rs
+@@ -70,7 +70,7 @@ impl AssetInfo {
+ 
+ #[derive(Default)]
+ pub(crate) struct AssetInfos {
+-    path_to_id: HashMap<AssetPath<'static>, TypeIdMap<UntypedAssetId>>,
++    pub(crate) path_to_id: HashMap<AssetPath<'static>, TypeIdMap<UntypedAssetId>>,
+     infos: HashMap<UntypedAssetId, AssetInfo>,
+     /// If set to `true`, this informs [`AssetInfos`] to track data relevant to watching for changes (such as `load_dependents`)
+     /// This should only be set at startup.
+diff --git a/crates/bevy_asset/src/server/mod.rs b/crates/bevy_asset/src/server/mod.rs
+index 63bfe3774328facee991232eeb5d9fdc0c83faa6..66ad9c3e4244bb35e96e66faee32fdca8ec559f8 100644
+--- a/crates/bevy_asset/src/server/mod.rs
++++ b/crates/bevy_asset/src/server/mod.rs
+@@ -36,7 +36,7 @@ use info::*;
+ use loaders::*;
+ use std::path::{Path, PathBuf};
+ use thiserror::Error;
+-use tracing::{error, info};
++use tracing::{debug, error, info};
+ 
+ #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
+ use spin::{RwLock, RwLockWriteGuard};
+@@ -126,15 +126,39 @@ async fn wasm_thread_handle_load_request(request: WasmThreadLoadAssetRequest) {
+         sender,
+     } = request;
+ 
+-    let result = asset_server
+-        .load_with_meta_and_loader_internal(
+-            &asset_path,
+-            meta,
+-            loader,
+-            load_dependencies,
+-            populate_hashes,
+-        )
+-        .await;
++    // The load itself. Borrows `asset_server`, `asset_path`.
++    let work = asset_server.load_with_meta_and_loader_internal(
++        &asset_path,
++        meta,
++        loader,
++        load_dependencies,
++        populate_hashes,
++    );
++
++    // Poll every 2s for handle liveness via `AssetInfos::path_to_id`. When the last
++    // strong handle for `asset_path` is dropped, `process_handle_drop_internal`
++    // removes the entry from `path_to_id`, and this branch returns. `FutureExt::or`
++    // then drops `work`, which drops the in-flight reqwest fetch (firing its
++    // `AbortGuard`) and releases any IPFS semaphore permit it was holding.
++    let cancel = async {
++        loop {
++            gloo_timers::future::sleep(core::time::Duration::from_secs(2)).await;
++            if !asset_server
++                .data
++                .infos
++                .read()
++                .path_to_id
++                .contains_key(&asset_path)
++            {
++                debug!("wasm asset thread loader: cancelling in-flight load for `{asset_path}` (no strong handles remain)");
++                return Err(AssetLoadError::LoadCancelled {
++                    path: asset_path.clone(),
++                });
++            }
++        }
++    };
++
++    let result = work.or(cancel).await;
+     let _ = sender.send(result).await;
+ }
+ 
+@@ -611,11 +635,12 @@ impl AssetServer {
+         let owned_handle = handle.clone();
+         let server = self.clone();
+         let task = IoTaskPool::get().spawn(async move {
+-            if let Err(err) = server
++            match server
+                 .load_internal(Some(owned_handle), path, false, None)
+                 .await
+             {
+-                error!("{}", err);
++                Ok(_) | Err(AssetLoadError::LoadCancelled { .. }) => {}
++                Err(err) => error!("{}", err),
+             }
+             drop(guard);
+         });
+@@ -2117,6 +2142,9 @@ pub enum AssetLoadError {
+     },
+     #[error("An error occurred in the wasm asset loading thread")]
+     WasmThreadLoaderError,
++    #[error("Load of asset '{path}' was cancelled because no strong handles remain")]
++    #[from(ignore)]
++    LoadCancelled { path: AssetPath<'static> },
+ }
+ 
+ /// An error that can occur during asset loading.

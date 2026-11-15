@@ -1,0 +1,16 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:23+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 94f19af9a5ad23cef265c3e7d24381df9c6942a0..310d937f4fd92307854d0a5f9b9ea0e86797cf94 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -67,3 +67,6 @@ path = "examples/interactive.rs"
+ 
+ # [patch."https://github.com/robtfm/bevy"]
+ # bevy = { path = "../bevy" }
++
++[lints.rust]
++warnings = "allow"

@@ -23,6 +23,7 @@ use crate::shared::signed_fetch::SignedPath;
 
 use super::SharedState;
 use super::auth::{map_auth_error_api, require_verified};
+use super::deploy_validate::{MAX_PARCEL_COORDINATE, MIN_PARCEL_COORDINATE};
 use super::http::ApiError;
 use super::permissions::parse_world;
 use super::settings_policy::{
@@ -32,9 +33,8 @@ use super::settings_policy::{
 use super::store::{self, WorldSettingsRow, WorldSettingsUpdate};
 use super::upload_limits::{self, too_large};
 
-const MIN_PARCEL_COORDINATE: i32 = -150;
-const MAX_PARCEL_COORDINATE: i32 = 150;
-const MAX_THUMBNAIL_BYTES: usize = 1024 * 1024;
+/// A world thumbnail is at most 1 MiB, uploaded or mirrored.
+pub(crate) const MAX_THUMBNAIL_BYTES: usize = 1024 * 1024;
 const REALM_NAME_MAX_LENGTH: usize = 64;
 const MAX_PREVIEW_WEARABLES: usize = 8;
 
@@ -668,8 +668,8 @@ fn first_nonempty(fields: &HashMap<String, Vec<String>>, key: &str) -> Option<St
 
 fn parse_coordinate(s: &str) -> Option<(i32, i32)> {
     let p = Parcel::parse(s).ok()?;
-    if !(MIN_PARCEL_COORDINATE..=MAX_PARCEL_COORDINATE).contains(&p.x)
-        || !(MIN_PARCEL_COORDINATE..=MAX_PARCEL_COORDINATE).contains(&p.y)
+    if !(MIN_PARCEL_COORDINATE..=MAX_PARCEL_COORDINATE).contains(&i64::from(p.x))
+        || !(MIN_PARCEL_COORDINATE..=MAX_PARCEL_COORDINATE).contains(&i64::from(p.y))
     {
         return None;
     }

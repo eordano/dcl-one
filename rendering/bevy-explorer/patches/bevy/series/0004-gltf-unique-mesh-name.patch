@@ -1,0 +1,25 @@
+From 4049529347ea176f5f7e81e70682bc268fb908d4
+Subject: gltf unique mesh name
+Origin: https://github.com/robtfm/bevy/commit/4049529347ea176f5f7e81e70682bc268fb908d4
+Date: 2025-06-17T09:52:31+01:00
+
+---
+diff --git a/crates/bevy_gltf/src/loader/gltf_ext/mesh.rs b/crates/bevy_gltf/src/loader/gltf_ext/mesh.rs
+index ef719891a4b336593672de85f4565c4b32d33557..a5bace8ed01b328b17fc48daf1dcb4676723c185 100644
+--- a/crates/bevy_gltf/src/loader/gltf_ext/mesh.rs
++++ b/crates/bevy_gltf/src/loader/gltf_ext/mesh.rs
+@@ -5,11 +5,11 @@ use gltf::mesh::{Mesh, Mode, Primitive};
+ use crate::GltfError;
+ 
+ pub(crate) fn primitive_name(mesh: &Mesh<'_>, primitive: &Primitive) -> String {
+-    let mesh_name = mesh.name().unwrap_or("Mesh");
++    let mesh_name = mesh.name().map(ToOwned::to_owned).unwrap_or_else(|| format!("Mesh{}", mesh.index()));
+     if mesh.primitives().len() > 1 {
+-        format!("{}.{}", mesh_name, primitive.index())
++        format!("{}/Primitive{}", mesh_name, primitive.index())
+     } else {
+-        mesh_name.to_string()
++        mesh_name
+     }
+ }
+ 

@@ -1,0 +1,19 @@
+From fa87f183b0a9fc06c805308f0d6791406a705611
+Subject: fix unicode paths
+Origin: https://github.com/robtfm/bevy/commit/fa87f183b0a9fc06c805308f0d6791406a705611
+Date: 2025-07-03T13:01:40+01:00
+
+---
+diff --git a/crates/bevy_asset/src/path.rs b/crates/bevy_asset/src/path.rs
+index ad127812dcfcf22a4a820a487c04a127ca42cf06..8f2dccbc0a1f0b72b031df0ac1df59d4bd6f22b1 100644
+--- a/crates/bevy_asset/src/path.rs
++++ b/crates/bevy_asset/src/path.rs
+@@ -470,7 +470,7 @@ impl<'a> AssetPath<'a> {
+     }
+ 
+     pub(crate) fn iter_secondary_extensions(full_extension: &str) -> impl Iterator<Item = &str> {
+-        full_extension.chars().enumerate().filter_map(|(i, c)| {
++        full_extension.char_indices().filter_map(|(i, c)| {
+             if c == '.' {
+                 Some(&full_extension[i + 1..])
+             } else {

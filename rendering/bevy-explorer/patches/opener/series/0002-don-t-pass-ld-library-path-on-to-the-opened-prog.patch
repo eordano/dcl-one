@@ -1,0 +1,65 @@
+From 973658fe4501ad9d9b4338e4fe192036277ba0fb
+Subject: Don't pass LD_LIBRARY_PATH on to the opened program
+Origin: https://github.com/robtfm/opener/commit/973658fe4501ad9d9b4338e4fe192036277ba0fb
+Date: 2026-10-01T17:38:52+01:00
+
+An application that finds its own bundled libraries through LD_LIBRARY_PATH
+hands that value to xdg-open and so to whatever it launches, where it can stop
+an unrelated program from starting. Remove it from the xdg-open, bundled
+xdg-open script, wslview and $BROWSER spawns.
+---
+diff --git a/opener/src/lib.rs b/opener/src/lib.rs
+index 05f1450e15751a97dda7c4eb46402c91195f97d4..2a963d44ef68c0fc2dc8831fb92b5d3da44437e2 100644
+--- a/opener/src/lib.rs
++++ b/opener/src/lib.rs
+@@ -102,7 +102,10 @@ where
+             }
+         };
+ 
+-        Command::new(&browser_var)
++        let mut command = Command::new(&browser_var);
++        #[cfg(not(any(target_os = "windows", target_os = "macos", target_arch = "wasm32")))]
++        command.env_remove(sys::LD_LIBRARY_PATH);
++        command
+             .arg(path)
+             .stdin(Stdio::null())
+             .stdout(Stdio::null())
+diff --git a/opener/src/linux_and_more.rs b/opener/src/linux_and_more.rs
+index 852bb94161ee8788e2066dbb506f5019af0db03b..6aaba8157660f659961494c6ff8cda610c2941f1 100644
+--- a/opener/src/linux_and_more.rs
++++ b/opener/src/linux_and_more.rs
+@@ -6,6 +6,10 @@ use std::process::{Child, Command, Stdio};
+ 
+ const XDG_OPEN_SCRIPT: &[u8] = include_bytes!("xdg-open");
+ 
++/// Not passed on to the opened program: the caller's value is there to locate the caller's own
++/// bundled libraries, which can stop an unrelated program (a browser, say) from starting.
++pub(crate) const LD_LIBRARY_PATH: &str = "LD_LIBRARY_PATH";
++
+ pub(crate) fn open(path: &OsStr) -> Result<(), OpenError> {
+     if crate::is_wsl() {
+         wsl_open(path)
+@@ -60,6 +64,7 @@ fn non_wsl_open(path: &OsStr) -> Result<(), OpenError> {
+ fn open_with_wslview(path: &OsStr) -> io::Result<Child> {
+     Command::new("wslview")
+         .arg(path)
++        .env_remove(LD_LIBRARY_PATH)
+         .stdin(Stdio::null())
+         .stdout(Stdio::null())
+         .stderr(Stdio::piped())
+@@ -69,6 +74,7 @@ fn open_with_wslview(path: &OsStr) -> io::Result<Child> {
+ fn open_with_system_xdg_open(path: &OsStr) -> io::Result<Child> {
+     Command::new("xdg-open")
+         .arg(path)
++        .env_remove(LD_LIBRARY_PATH)
+         .stdin(Stdio::null())
+         .stdout(Stdio::null())
+         .stderr(Stdio::null())
+@@ -79,6 +85,7 @@ fn open_with_internal_xdg_open(path: &OsStr) -> Result<Child, OpenError> {
+     let mut sh = Command::new("sh")
+         .arg("-s")
+         .arg(path)
++        .env_remove(LD_LIBRARY_PATH)
+         .stdin(Stdio::piped())
+         .stdout(Stdio::null())
+         .stderr(Stdio::null())

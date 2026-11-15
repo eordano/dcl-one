@@ -1,0 +1,170 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:23+00:00
+
+---
+diff --git a/device-info/Cargo.toml b/device-info/Cargo.toml
+index af3e412c1f88c6f10920d7beefef85bb5604933f..543b35ecbcdb8272c61e687bbde35893da271e40 100644
+--- a/device-info/Cargo.toml
++++ b/device-info/Cargo.toml
+@@ -28,3 +28,6 @@ jni = "0.21"
+ [target.'cfg(target_arch = "wasm32")'.dependencies]
+ web-sys = { version = "0.3", features = ["Navigator", "Window"] }
+ wasm-bindgen = "0.2"
++
++[lints.rust]
++warnings = "allow"
+diff --git a/libwebrtc/Cargo.toml b/libwebrtc/Cargo.toml
+index 6c9c1bcdd7322a93561f9a402e3dc21e87ef2584..26be72fd20bda75d73337e4851beb5eed442e50e 100644
+--- a/libwebrtc/Cargo.toml
++++ b/libwebrtc/Cargo.toml
+@@ -64,3 +64,6 @@ web-sys = { version = "0.3", features = [
+ 
+ [dev-dependencies]
+ env_logger = { workspace = true }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-api/Cargo.toml b/livekit-api/Cargo.toml
+index 3e71f075292ecf613f4ecdc1759e604d7389248c..fb52516172fb333ab656a7b9c456f9fbc94b9eab 100644
+--- a/livekit-api/Cargo.toml
++++ b/livekit-api/Cargo.toml
+@@ -113,3 +113,6 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time",
+ [[test]]
+ name = "threads"
+ required-features = ["services"]
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-common/Cargo.toml b/livekit-common/Cargo.toml
+index bc7679a9de469f3b11aceb12489118c520220780..6542ca8091fabd4f2ab87d376b946338f1f9ee7b 100644
+--- a/livekit-common/Cargo.toml
++++ b/livekit-common/Cargo.toml
+@@ -22,3 +22,6 @@ uniffi = ["dep:uniffi", "dep:bytes"]
+ # `mode = "powerset"` is the full `cargo hack --feature-powerset --depth 2`:
+ [package.metadata.feature-combinations]
+ mode = "powerset"
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-data-stream/Cargo.toml b/livekit-data-stream/Cargo.toml
+index aeb49ab33491ad9568484adc2a69dfdc2b51faee..768f6b057b9f749a0433ff718652b70df87232b5 100644
+--- a/livekit-data-stream/Cargo.toml
++++ b/livekit-data-stream/Cargo.toml
+@@ -36,3 +36,6 @@ rand = { workspace = true, optional = true }
+ [dev-dependencies]
+ tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time"] }
+ rand = { workspace = true }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-datatrack/Cargo.toml b/livekit-datatrack/Cargo.toml
+index 86da16480b8255c397abbeab89337aaca69f3636..2e1b0a526f4dd0f53d1fe3bb1579f586256ed4ee 100644
+--- a/livekit-datatrack/Cargo.toml
++++ b/livekit-datatrack/Cargo.toml
+@@ -37,3 +37,6 @@ test-case = "3.3"
+ fake = { version = "4.4", features = ["derive"] }
+ futures-util = { workspace = true, default-features = false, features = ["sink"] }
+ tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time"] }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-net/Cargo.toml b/livekit-net/Cargo.toml
+index 87a82d2365822181329b7dd8e393060c7c987754..7abda5e628c23972776c9dba9587e7fd21eeb473 100644
+--- a/livekit-net/Cargo.toml
++++ b/livekit-net/Cargo.toml
+@@ -73,3 +73,6 @@ base64 = { version = "0.21", optional = true, features = ["std"] }
+ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time", "macros", "io-util"] }
+ tokio-tungstenite = { version = "0.29", features = ["url"] }
+ futures-util = { version = "0.3", default-features = false, features = ["sink"] }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-protocol/Cargo.toml b/livekit-protocol/Cargo.toml
+index e7e81103034108163895362655ffbdd63966eb3b..161bb6cf9b46e2a43754cf04be5e502571d77076 100644
+--- a/livekit-protocol/Cargo.toml
++++ b/livekit-protocol/Cargo.toml
+@@ -16,3 +16,6 @@ pbjson-types = "0.9"
+ # `.github/workflows/feature-combinations-curated.yml` via `cargo metadata`.
+ [package.metadata.feature-combinations]
+ mode = "powerset"
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-region/Cargo.toml b/livekit-region/Cargo.toml
+index f686411c0d7b7a15a86784c7a4358ab0dc2c2404..aaeecfb72c5ed5386805989a750d3d2ffd6e93fd 100644
+--- a/livekit-region/Cargo.toml
++++ b/livekit-region/Cargo.toml
+@@ -14,3 +14,6 @@ serde = { workspace = true, features = ["derive"] }
+ # `.github/workflows/feature-combinations-curated.yml` via `cargo metadata`.
+ [package.metadata.feature-combinations]
+ mode = "powerset"
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-rpc/Cargo.toml b/livekit-rpc/Cargo.toml
+index 779ba814830c6c258ce164d676c31fc33c8c53db..cf2b6e3431af281a810c7c4c09eba169e178887c 100644
+--- a/livekit-rpc/Cargo.toml
++++ b/livekit-rpc/Cargo.toml
+@@ -24,3 +24,6 @@ livekit-data-stream = { workspace = true, features = ["test-utils"] }
+ tokio = { workspace = true, default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "test-util"] }
+ bytes = { workspace = true }
+ chrono = { workspace = true }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-signaling/Cargo.toml b/livekit-signaling/Cargo.toml
+index 91d0134825f03e0fedf4ce09afbdafe45f9fd989..c64efe19cd164fc77e4003f24b93917255ddb206 100644
+--- a/livekit-signaling/Cargo.toml
++++ b/livekit-signaling/Cargo.toml
+@@ -51,3 +51,6 @@ url = "2.3"
+ livekit-token = { workspace = true }
+ async-trait = "0.1"
+ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time", "macros", "io-util"] }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit-token/Cargo.toml b/livekit-token/Cargo.toml
+index 8f51423b75226dca932a91d80138e4d4c51cc0b1..d12812adf9efc0a0883d6b8e5ccdf42fd08b772e 100644
+--- a/livekit-token/Cargo.toml
++++ b/livekit-token/Cargo.toml
+@@ -26,3 +26,6 @@ serde_json = { workspace = true }
+ # `.github/workflows/feature-combinations-curated.yml` via `cargo metadata`.
+ [package.metadata.feature-combinations]
+ mode = "powerset"
++
++[lints.rust]
++warnings = "allow"
+diff --git a/livekit/Cargo.toml b/livekit/Cargo.toml
+index e96b0ba9fee10d77b12dfcf1cdbd0cba43b49988..e915bfcadd48e786ebde827434d7f174107b9e43 100644
+--- a/livekit/Cargo.toml
++++ b/livekit/Cargo.toml
+@@ -89,3 +89,6 @@ test-case = "3.3"
+ serial_test = "3.0"
+ http = "1.1"
+ rand = { workspace = true }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/webrtc-sys/Cargo.toml b/webrtc-sys/Cargo.toml
+index c44d791924878bd1ef74554c708a767c54c62288..5c56aa14a987ceec3b5130596131482c7ab3de27 100644
+--- a/webrtc-sys/Cargo.toml
++++ b/webrtc-sys/Cargo.toml
+@@ -28,3 +28,6 @@ pkg-config = "0.3.22"
+ 
+ [target.'cfg(target_os = "linux")'.build-dependencies]
+ pkg-config = "0.3.22"
++
++[lints.rust]
++warnings = "allow"
+diff --git a/webrtc-sys/build/Cargo.toml b/webrtc-sys/build/Cargo.toml
+index 824ea98662254af118f0600f0620e2e99eb65a08..1322165845a38f3a595c05adb5c431cbf3453fbb 100644
+--- a/webrtc-sys/build/Cargo.toml
++++ b/webrtc-sys/build/Cargo.toml
+@@ -14,3 +14,6 @@ scratch = "1.0"
+ fs2 = "0.4"
+ semver = "1.0"
+ anyhow = { workspace = true }
++
++[lints.rust]
++warnings = "allow"

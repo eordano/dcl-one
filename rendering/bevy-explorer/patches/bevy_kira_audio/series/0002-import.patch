@@ -1,0 +1,18 @@
+From bd5bdcaf90ade0c8833b297c93e653942ae9b12b
+Subject: import
+Origin: https://github.com/robtfm/bevy_kira_audio/commit/bd5bdcaf90ade0c8833b297c93e653942ae9b12b
+Date: 2024-08-10T16:56:01+01:00
+
+---
+diff --git a/src/instance.rs b/src/instance.rs
+index c40fd362e778ca8f79dba6f1660842ffe2423fa3..2072456d2960c79bf234370a1bf63ec206704588 100644
+--- a/src/instance.rs
++++ b/src/instance.rs
+@@ -1,6 +1,6 @@
+ use crate::{AudioTween, PlaybackState};
+ use bevy::asset::{Asset, Assets, Handle};
+-use kira::sound::static_sound::StaticSoundHandle;
++use kira::sound::{static_sound::StaticSoundHandle, Region};
+ use kira::tween::Value;
+ use kira::Volume;
+ 

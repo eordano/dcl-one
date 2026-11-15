@@ -1,0 +1,20 @@
+[package]
+name = "bevy_dui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.79"
+bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.16-dcl", default-features = false }
+quick-xml = "0.31"
+bevy_ecss = { git = "https://github.com/robtfm/bevy_ecss", branch = "0.16" }
+
+[dev-dependencies]
+bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.16-dcl", default-features = true }
+
+# [patch."https://github.com/robtfm/bevy"]
+# bevy = { path = "../bevy" }
+
+# [patch."https://github.com/robtfm/bevy_ecss"]
+# bevy_ecss = { path = "../bevy_ecss" }

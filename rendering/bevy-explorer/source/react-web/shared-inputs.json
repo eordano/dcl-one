@@ -4227,7 +4227,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/package.json",
-      "sha256": "0c35145bee22ecc4795a1027b8e2a030cf54bfa10eb1666bed6416f9c6611357"
+      "sha256": "325946e1110b2758f2d172f0c6676117458b965f9f22ce09907d9f50e8d27ef8"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bevy-api.ts",
@@ -4607,7 +4607,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/vite.config.ts",
-      "sha256": "465f908edff99fe491a5f0d5496fdbd4dd4514f754179f07528beeee644200b5"
+      "sha256": "864f44a674e528fe6f097abcc2b8e080b1dd743143cf8e27774190964eedf416"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/vite.shared.ts",

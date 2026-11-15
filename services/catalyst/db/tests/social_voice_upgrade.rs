@@ -88,8 +88,9 @@ impl Database {
             .await
             .unwrap();
         let name = format!(
-            "catalyst_test_social_voice_{}",
-            uuid::Uuid::new_v4().simple()
+            "catalyst_test_lib_{}_social_voice_{}",
+            std::process::id(),
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
         );
         sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
             .execute(&admin)
@@ -127,6 +128,30 @@ impl Database {
             name,
             options,
         })
+    }
+    /// Waits until this database has exactly `expected` client sessions.
+    /// `PgPool::close` returns once it has sent each connection's Terminate;
+    /// the server process leaves `pg_stat_activity` when it exits, after that.
+    async fn await_client_sessions(&self, expected: i64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let sessions: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND {}",
+                schema_migrate::CLIENT_SESSION
+            )))
+            .bind(&self.name)
+            .fetch_one(&self.admin)
+            .await
+            .unwrap();
+            if sessions == expected {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{sessions} client sessions remain, expected {expected}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
     async fn close(self) {
         self.pool.close().await;
@@ -577,6 +602,7 @@ async fn migrate_with_release_takes_both_v2_origins_to_v3_once_every_other_sessi
         }
         drop(writer);
         db.pool.close().await;
+        db.await_client_sessions(1).await;
 
         // A failure after every statement of the release, stamp included,
         // rolls the whole run back.
@@ -691,6 +717,8 @@ async fn the_release_guard_counts_sessions_of_roles_it_cannot_inspect() {
         "the writer's session type is hidden from the migrator"
     );
     db.pool.close().await;
+    // Only the writer's and the migrator's sessions remain.
+    db.await_client_sessions(2).await;
     match schema_migrate::migrate_with_release(
         &migrating,
         SCHEMA_SQL,

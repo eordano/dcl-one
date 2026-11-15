@@ -63,6 +63,17 @@ pub struct Entity {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// `@dcl/schemas` `IPFSv2.validate`, `^(ba)[a-zA-Z0-9]{57}$`: a base32
+/// CIDv1 of any codec and hash, as the entity and content hashes since ADR-45.
+pub fn is_ipfs_v2(hash: &str) -> bool {
+    hash.len() == 59 && hash.starts_with("ba") && hash.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// `@dcl/schemas` `IPFSv1.validate`, `^(Qm)[a-zA-Z0-9]{44}$`: a base58 CIDv0.
+pub fn is_ipfs_v1(hash: &str) -> bool {
+    hash.len() == 46 && hash.starts_with("Qm") && hash.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// The version of an entity file that names none.
 pub const DEFAULT_ENTITY_VERSION: &str = "v3";
 
@@ -157,6 +168,41 @@ pub(crate) fn deployment_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipfs_hashes_follow_the_schema_patterns() {
+        let v2 = |tail: &str| format!("ba{tail}");
+        for (hash, want) in [
+            (v2(&"a".repeat(57)), true),
+            (
+                "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenosa7776".to_string(),
+                true,
+            ),
+            // Another CID prefix, still 59 base32 characters.
+            (format!("bag{}", "a".repeat(56)), true),
+            ("bafkrei".to_string(), false),
+            (format!("bafy{}", "a".repeat(56)), false),
+            (v2(&"a".repeat(56)), false),
+            (v2(&"a".repeat(58)), false),
+            (format!("ba{}-", "a".repeat(56)), false),
+            (format!("ba{}\u{e9}", "a".repeat(55)), false),
+            (format!("Ba{}", "a".repeat(57)), false),
+            (
+                "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG".to_string(),
+                false,
+            ),
+        ] {
+            assert_eq!(is_ipfs_v2(&hash), want, "{hash:?}");
+        }
+        assert!(is_ipfs_v1("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"));
+        assert!(!is_ipfs_v1("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbd"));
+        assert!(!is_ipfs_v1(
+            "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPb_G"
+        ));
+        assert!(!is_ipfs_v1(
+            "qmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+        ));
+    }
 
     #[test]
     fn deployment_metadata_retains_order_and_exact_scalars() {

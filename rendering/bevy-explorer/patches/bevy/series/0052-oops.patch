@@ -1,0 +1,19 @@
+From d2ec0194089677da8e9ae10a450c9937c8576817
+Subject: oops
+Origin: https://github.com/robtfm/bevy/commit/d2ec0194089677da8e9ae10a450c9937c8576817
+Date: 2026-01-17T21:09:19Z
+
+---
+diff --git a/crates/bevy_render/src/texture/gpu_image.rs b/crates/bevy_render/src/texture/gpu_image.rs
+index 532d152c0ab061fe2bb1581ba7444837b38d8083..4026a048f57a8e3a204a387485f57bbadfc4f3b3 100644
+--- a/crates/bevy_render/src/texture/gpu_image.rs
++++ b/crates/bevy_render/src/texture/gpu_image.rs
+@@ -8,7 +8,7 @@ use bevy_ecs::system::{lifetimeless::SRes, SystemParamItem};
+ use bevy_image::{Image, ImageSampler, TextureFormatPixelInfo};
+ use bevy_math::{AspectRatio, UVec2};
+ use tracing::{error, warn};
+-use wgpu::{Extent3d, TexelCopyBufferLayout, TextureFormat};
++use wgpu::{Extent3d, TexelCopyBufferLayout, TextureFormat, TextureUsages};
+ use wgpu_types::{TextureDescriptor, TextureViewDescriptor};
+ 
+ /// The GPU-representation of an [`Image`].

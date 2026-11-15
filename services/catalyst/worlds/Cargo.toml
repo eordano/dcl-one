@@ -37,7 +37,6 @@ uuid.workspace = true
 tokio-util.workspace = true
 dashmap.workspace = true
 hashlink.workspace = true
-dragonbox_ecma.workspace = true
 parking_lot.workspace = true
 hex.workspace = true
 sha2.workspace = true

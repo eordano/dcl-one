@@ -37,10 +37,7 @@ pub enum SignatureError {
 }
 
 fn parse_u256(s: &str) -> Result<U256, SignatureError> {
-    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(SignatureError::InvalidNumber(s.to_string()));
-    }
-    U256::from_str_radix(s, 10).map_err(|_| SignatureError::InvalidNumber(s.to_string()))
+    crate::types::parse_decimal(s).map_err(|_| SignatureError::InvalidNumber(s.to_string()))
 }
 
 fn parse_address(addr: &str) -> Result<Address, SignatureError> {
@@ -143,6 +140,20 @@ pub fn verify_rentals_listing_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listing_numbers_are_plain_decimal_uint256() {
+        assert_eq!(
+            parse_u256(&format!("{}1", "0".repeat(77))).unwrap(),
+            U256::from(1u64)
+        );
+        for bad in ["", "1_0", "0x1", " 1", &format!("{}1", "0".repeat(78))] {
+            assert!(
+                matches!(parse_u256(bad), Err(SignatureError::InvalidNumber(ref s)) if s == bad),
+                "{bad:?}"
+            );
+        }
+    }
 
     fn vector() -> ContractRentalListing {
         ContractRentalListing {

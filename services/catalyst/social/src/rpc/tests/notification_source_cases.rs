@@ -4,7 +4,9 @@ use serde_json::Value;
 
 #[tokio::test]
 async fn friendship_native_inbox_metadata_and_delivery_failures_preserve_committed_actions() {
-    let Some(database) = super::fanout::OwnedDatabase::new().await else {
+    let Some(database) =
+        super::fanout::OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = database.pool.clone();
@@ -136,5 +138,5 @@ async fn friendship_native_inbox_metadata_and_delivery_failures_preserve_committ
     for (address, entity) in deployed {
         drop_profile(&pool, address, &entity).await;
     }
-    database.close().await;
+    database.drop().await;
 }

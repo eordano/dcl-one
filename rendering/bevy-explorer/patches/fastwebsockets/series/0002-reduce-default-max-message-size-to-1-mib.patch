@@ -1,0 +1,26 @@
+From 1db2dbc2d1db519e6ba76741fd76f13519ab76f7
+Subject: reduce default max_message_size to 1 MiB
+Origin: https://github.com/robtfm/fastwebsockets/commit/1db2dbc2d1db519e6ba76741fd76f13519ab76f7
+Date: 2026-08-11T12:33:41+01:00
+
+This fork backs the bevy-explorer scene sandbox, where sockets are opened
+by untrusted scene code. The explorer's pinned deno_websocket (robtfm/deno
+1_46_hotfix) exposes no path to set_max_message_size, so the library
+default is the effective cap on inbound message size (per frame, and per
+fragmented total via the previous commit).
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 81fbe821d5c35bef6fe41c54e837dd78de94ce9e..bbad420c86b4a30172732292f6bcf436feccc2fd 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -556,7 +556,9 @@ impl ReadHalf {
+       auto_close: true,
+       auto_pong: true,
+       writev_threshold: 1024,
+-      max_message_size: 64 << 20,
++      // scene message cap for bevy-explorer; the pinned deno_websocket exposes no path
++      // to set_max_message_size, so the default is the cap
++      max_message_size: 1 << 20,
+       buffer,
+     }
+   }

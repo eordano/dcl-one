@@ -1,0 +1,206 @@
+From 1d3d84559da96ae6033035a17ac57b36cc447416
+Subject: fix: clamp bin indices in the binned BVH builder
+Origin: https://github.com/robtfm/parry/commit/1d3d84559da96ae6033035a17ac57b36cc447416
+Date: 2026-08-07T19:38:12+02:00
+
+Fix dimforge/rapier#961
+
+(cherry picked from commit e6bca12832bf61c4205cda1d620a0318e9750e5b)
+---
+diff --git a/crates/parry3d/tests/issue_961_bvh_binned_build_panic.rs b/crates/parry3d/tests/issue_961_bvh_binned_build_panic.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..82494842fd8fd82b31742e8b00a9e29e3bdd32a2
+--- /dev/null
++++ b/crates/parry3d/tests/issue_961_bvh_binned_build_panic.rs
+@@ -0,0 +1,164 @@
++// Regression test for https://github.com/dimforge/rapier/issues/961
++//
++// The binned BVH builder computed bin indices without clamping them to the bin count, so
++// degenerate leaf AABBs (huge, zero-extent, or non-finite) could panic out-of-bounds.
++
++use parry3d::bounding_volume::Aabb;
++use parry3d::math::Real;
++use parry3d::na::{Point3, Vector3};
++
++type Vector = Vector3<Real>;
++use parry3d::partitioning::{Bvh, BvhBuildStrategy, BvhWorkspace};
++
++/// Tiny deterministic LCG so the fuzz-style tests don't depend on rand seeding.
++struct Lcg(u64);
++
++impl Lcg {
++    fn next_u32(&mut self) -> u32 {
++        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
++        (self.0 >> 32) as u32
++    }
++
++    fn real(&mut self, min: f32, max: f32) -> f32 {
++        min + (max - min) * (self.next_u32() as f32 / u32::MAX as f32)
++    }
++}
++
++fn aabb(mins: Vector, maxs: Vector) -> Aabb {
++    Aabb::new(Point3::from(mins), Point3::from(maxs))
++}
++
++fn exercise(leaves: &[Aabb]) {
++    // Build (binned) directly from the leaves.
++    let mut bvh = Bvh::from_leaves(BvhBuildStrategy::Binned, leaves);
++    let mut workspace = BvhWorkspace::default();
++
++    // Explicit full rebuilds.
++    bvh.rebuild(&mut workspace, BvhBuildStrategy::Binned);
++
++    // Insert/remove churn + incremental optimization, mimicking the
++    // broad-phase update loop from the original report.
++    for k in 0..8 {
++        for i in 0..leaves.len() {
++            if (i + k) % 3 == 0 {
++                bvh.remove(i as u32);
++            }
++        }
++        for (i, aabb) in leaves.iter().enumerate() {
++            if (i + k) % 3 == 0 {
++                bvh.insert(*aabb, i as u32);
++            }
++        }
++        bvh.optimize_incremental(&mut workspace);
++    }
++}
++
++#[test]
++fn coincident_aabbs() {
++    let unit = aabb(Vector::new(-1.0, -1.0, -1.0), Vector::new(1.0, 1.0, 1.0));
++    exercise(&[unit; 32]);
++}
++
++#[test]
++fn one_enormous_aabb() {
++    let mut leaves = vec![];
++    for i in 0..31 {
++        let c = Vector::new(i as f32, 0.0, 0.0);
++        leaves.push(aabb(c - Vector::repeat(0.5), c + Vector::repeat(0.5)));
++    }
++    leaves.push(aabb(Vector::repeat(-1.0e30), Vector::repeat(1.0e30)));
++    exercise(&leaves);
++}
++
++#[test]
++fn huge_translated_aabbs() {
++    // AABBs whose coordinates are large enough for `mins + maxs` to overflow
++    // to infinity when computing centers.
++    let mut leaves = vec![];
++    for i in 0..16 {
++        let c = Vector::repeat(2.0e38) + Vector::new(i as f32, 0.0, 0.0);
++        leaves.push(aabb(c - Vector::repeat(0.5), c + Vector::repeat(0.5)));
++    }
++    for i in 0..16 {
++        let c = Vector::new(i as f32, 0.0, 0.0);
++        leaves.push(aabb(c - Vector::repeat(0.5), c + Vector::repeat(0.5)));
++    }
++    exercise(&leaves);
++}
++
++#[test]
++fn zero_extent_aabbs() {
++    let mut leaves = vec![];
++    for i in 0..32 {
++        let c = Vector::new(i as f32 * 0.25, -(i as f32), 3.0);
++        leaves.push(aabb(c, c));
++    }
++    exercise(&leaves);
++}
++
++#[test]
++fn non_finite_aabbs() {
++    let mut leaves = vec![];
++    for i in 0..16 {
++        let c = Vector::new(i as f32, 0.0, 0.0);
++        leaves.push(aabb(c - Vector::repeat(0.5), c + Vector::repeat(0.5)));
++    }
++    leaves.push(aabb(Vector::repeat(f32::NAN), Vector::repeat(f32::NAN)));
++    leaves.push(aabb(Vector::repeat(f32::INFINITY), Vector::repeat(f32::INFINITY)));
++    leaves.push(aabb(Vector::repeat(f32::NEG_INFINITY), Vector::repeat(f32::INFINITY)));
++    leaves.push(Aabb::new_invalid());
++    exercise(&leaves);
++}
++
++#[test]
++fn fuzz_mixed_degenerate_aabbs() {
++    let mut rng = Lcg(0x961_961_961);
++
++    for _ in 0..64 {
++        let n = 8 + (rng.next_u32() % 64) as usize;
++        let mut leaves = vec![];
++
++        for _ in 0..n {
++            let kind = rng.next_u32() % 5;
++            let leaf = match kind {
++                0 => {
++                    // Regular AABB.
++                    let c = Vector::new(
++                        rng.real(-100.0, 100.0),
++                        rng.real(-100.0, 100.0),
++                        rng.real(-100.0, 100.0),
++                    );
++                    aabb(c - Vector::repeat(0.5), c + Vector::repeat(0.5))
++                }
++                1 => {
++                    // Huge AABB.
++                    let e = rng.real(1.0e30, 3.0e38);
++                    aabb(Vector::repeat(-e), Vector::repeat(e))
++                }
++                2 => {
++                    // Zero-extent AABB, possibly at a huge coordinate.
++                    let c = Vector::repeat(rng.real(-3.0e38, 3.0e38));
++                    aabb(c, c)
++                }
++                3 => {
++                    // Non-finite AABB.
++                    let v = if rng.next_u32() % 2 == 0 {
++                        f32::NAN
++                    } else {
++                        f32::INFINITY
++                    };
++                    aabb(Vector::repeat(v), Vector::repeat(v))
++                }
++                _ => {
++                    // Tiny cluster: nearly-coincident centroids.
++                    let c = Vector::new(1.0, 2.0, 3.0);
++                    let e = rng.real(0.0, 1.0e-30);
++                    aabb(c - Vector::repeat(e), c + Vector::repeat(e))
++                }
++            };
++            leaves.push(leaf);
++        }
++
++        exercise(&leaves);
++    }
++}
+diff --git a/src/partitioning/bvh/bvh_binned_build.rs b/src/partitioning/bvh/bvh_binned_build.rs
+index 27c8b1b6e3c56983f333e675b0b3b05d23a6b44c..e44c2644430ecac5b36ea5cb3879baf8a6b45638 100644
+--- a/src/partitioning/bvh/bvh_binned_build.rs
++++ b/src/partitioning/bvh/bvh_binned_build.rs
+@@ -53,8 +53,12 @@ impl Bvh {
+         // Compute bins characteristics.
+         let k1 = NUM_BINS as Real * (1.0 - BIN_EPSILON) / (bins_range[1] - bins_range[0]);
+         let k0 = bins_range[0];
++        // NOTE: the clamp guards against degenerate leaf AABBs, whose non-finite or very
++        //       large coordinates would push the bin index outside [0, NUM_BINS - 1]
++        //       (`as usize` saturates).
++        let bin_id_unclamped = |center: Real| (k1 * (center - k0)) as usize;
+         for leaf in &*leaves {
+-            let bin_id = (k1 * (leaf.center()[bins_axis] - k0)) as usize;
++            let bin_id = bin_id_unclamped(leaf.center()[bins_axis]).min(NUM_BINS - 1);
+             let bin = &mut bins[bin_id];
+             bin.aabb.merge(&leaf.aabb());
+             bin.leaf_count += 1;
+@@ -102,7 +106,7 @@ impl Bvh {
+             // TODO PERF: try with using teh leaves_tmp instead of in-place sorting.
+             let bin = |leaves: &mut [BvhNode], id: usize| {
+                 let node = &leaves[id];
+-                (k1 * (node.center()[bins_axis] - k0)) as usize
++                bin_id_unclamped(node.center()[bins_axis]).min(NUM_BINS - 1)
+             };
+ 
+             let mut left_id = 0;

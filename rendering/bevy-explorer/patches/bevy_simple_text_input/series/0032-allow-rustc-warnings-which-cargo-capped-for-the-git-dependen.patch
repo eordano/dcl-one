@@ -1,0 +1,17 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:23+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index fa97862da29d1ef0dcdacff0b0eaee992e8025a7..ed3a662c668b6891f805ff8881c7b671fe340981 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -33,6 +33,7 @@ version = "0.16.0"
+ default-features = true
+ 
+ [lints.rust]
++warnings = { level = "allow", priority = -1 }
+ missing_docs = "warn"
+ 
+ [lints.clippy]

@@ -3,6 +3,8 @@ import { resolve, relative } from 'path'
 import { existsSync, readFileSync, writeFileSync, lstatSync, removeSync, copySync } from 'fs-extra'
 import { rmSync, globSync } from 'fs'
 
+export const PNPM = process.env.PNPM || 'corepack pnpm@11.27.0'
+
 /**
  * @returns the resolved absolute path
  */
@@ -75,7 +77,7 @@ export function itInstallsADependencyFromFolderAndCopiesTheVersion(
 ) {
   const dependencies = devDependency ? 'devDependencies' : 'dependencies'
 
-  itExecutes(`npm install --silent ${depPath}`, cwd)
+  itExecutes(`${PNPM} add --ignore-scripts ${depPath}`, cwd)
 
   it(`update ${dependencies} version ${depPath} in ${cwd}`, () => {
     const depPackageJson = readJson('package.json', depPath)

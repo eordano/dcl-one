@@ -121,15 +121,7 @@ pub(super) async fn run(pass: &Pass) -> anyhow::Result<u64> {
 /// Batches of one recount until its pass completes (or the tick's budget);
 /// returns the wallets written.
 pub(crate) async fn run_one(pass: &Pass, recount: Recount) -> anyhow::Result<u64> {
-    let mut written = 0;
-    for _ in 0..super::MAX_BATCHES_PER_TICK {
-        let (n, more) = batch(pass, recount).await?;
-        written += n;
-        if !more {
-            break;
-        }
-    }
-    Ok(written)
+    Ok(super::drain(|| batch(pass, recount)).await?)
 }
 
 async fn batch(pass: &Pass, recount: Recount) -> Result<(u64, bool), sqlx::Error> {

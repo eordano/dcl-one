@@ -925,18 +925,25 @@ fn release_pending(stamp: &Option<(String, i32)>) -> bool {
         if identity == crate::SCHEMA_IDENTITY && *version == crate::SCHEMA_VERSION - 1)
 }
 
+/// The `pg_stat_activity` predicate for a client session, the sessions that
+/// block the release. PostgreSQL hides `backend_type` (NULL) for a session of
+/// a role the caller is not a member of, unless the caller has
+/// `pg_read_all_stats`; such a row counts as a client session. A hidden row
+/// without a role (`usesysid` NULL) is a server process, such as an
+/// autovacuum worker, never a client session.
+pub const CLIENT_SESSION: &str = "(backend_type = 'client backend' \
+     OR (backend_type IS NULL AND usesysid IS NOT NULL))";
+
 /// The application name of every other client session of this database
-/// (`-` when unset or hidden). PostgreSQL hides `backend_type` (NULL) for a
-/// session of a role the caller is not a member of, unless the caller has
-/// `pg_read_all_stats`; such a row counts as a client session.
+/// (`-` when unset or hidden).
 async fn other_sessions(conn: &mut sqlx::PgConnection) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar(
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT coalesce(nullif(application_name, ''), '-') \
          FROM pg_stat_activity \
          WHERE datname = current_database() AND pid <> pg_backend_pid() \
-           AND coalesce(backend_type, 'client backend') = 'client backend' \
-         ORDER BY 1",
-    )
+           AND {CLIENT_SESSION} \
+         ORDER BY 1"
+    )))
     .fetch_all(conn)
     .await
 }

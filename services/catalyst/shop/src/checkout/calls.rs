@@ -100,8 +100,7 @@ pub fn parse_wei(label: &str, raw: &str) -> Result<U256, ApiError> {
 }
 
 pub fn parse_wei_allow_zero(label: &str, raw: &str) -> Result<U256, ApiError> {
-    let trimmed = raw.trim();
-    U256::from_str_radix(trimmed, 10).map_err(|e| {
+    crate::types::parse_decimal(raw.trim()).map_err(|e| {
         ApiError::InvalidTransaction(format!(
             "invalid {label} {raw:?}: not a decimal integer ({e})"
         ))
@@ -409,6 +408,27 @@ mod tests {
         assert_eq!(parse_item_id("7").unwrap(), U256::from(7u64));
         assert!(parse_item_id("1.5").is_err());
         assert!(parse_item_id("nope").is_err());
+    }
+
+    #[test]
+    fn wei_and_id_parsers_accept_only_plain_decimal_uint256() {
+        const MAX: &str =
+            "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        for parse in [
+            parse_token_id as fn(&str) -> Result<U256, ApiError>,
+            parse_item_id,
+            |raw| parse_wei_allow_zero("priceWei", raw),
+        ] {
+            assert_eq!(parse(" 7 ").unwrap(), U256::from(7u64));
+            assert_eq!(parse(MAX).unwrap(), U256::MAX);
+            for bad in ["", " ", "1_0", "_1", "0x1", "+1", &"1".repeat(79)] {
+                let err = parse(bad).expect_err(bad);
+                assert!(
+                    matches!(&err, ApiError::InvalidTransaction(m) if m.contains("not a decimal integer")),
+                    "{bad:?}: {err:?}"
+                );
+            }
+        }
     }
 
     #[test]

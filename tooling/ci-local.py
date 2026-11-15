@@ -69,7 +69,8 @@ def workflow_paths(name, event='pull_request', source=None):
                 'rendering/bevy-explorer/source/.cargo/**', 'rendering/bevy-explorer/source/build.rs',
                 'rendering/bevy-explorer/source/src/**', 'rendering/bevy-explorer/source/crates/**',
                 'rendering/bevy-explorer/source/Cargo.*', 'rendering/bevy-explorer/source/deploy/headless/**',
-                'rendering/bevy-explorer/bevy/**',
+                'rendering/bevy-explorer/patches/**', 'rendering/bevy-explorer/vendor/**',
+                'tooling/patched-sources.py', '.github/actions/bevy-explorer-sources/**',
                 'apps/bevy-explorer/build-headless.py', 'apps/bevy-explorer/headless-packages.py',
                 'apps/bevy-explorer/install-*.py', 'apps/bevy-explorer/prepare-native-cache.py',
                 '.github/workflows/bevy-explorer-headless*.yml', 'tooling/ci-publication.py']

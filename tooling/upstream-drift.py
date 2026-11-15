@@ -1,15 +1,26 @@
 #!/usr/bin/env python3
-"""Dependency and drift map of the pinned Explorer: raw facts for the drift site.
+"""The pinned sources of the Explorer against their upstreams.
+
+The pinned sources are every rendering/bevy-explorer/patches/<name>/source.toml (an upstream commit
+and the patch series this repository keeps on it) and every git source of
+rendering/bevy-explorer/source/Cargo.lock. Nothing here writes a tracked file.
+
+`check [NAME ...]` asks GitHub, per source (every source, or the named ones), how many commits the
+watched ref has past the pinned commit: the `ref` of source.toml, the branch or tag the lock names,
+or the default branch for a source pinned by revision alone. A tag does not move, so for a tag it
+also counts the newer tags of the same naming scheme. It prints one line per source. It fails when
+a source cannot be checked, and when a source that names its ref is not pinned on it: the pinned
+commit has commits the branch lacks, or is not the commit the tag names.
 
 `collect` gathers, into .cache/upstream-drift/data.json:
-  - every git source of the pinned Cargo.lock (rendering/bevy-explorer/forks.toml): the parent
-    repository, the release the fork is based on, the commits the fork carries on top of it, the
-    upstream releases and commits the fork is missing, and the branch's last activity
+  - every pinned source: the patches it carries, the upstream commits, releases and tags since the
+    pinned commit, and how far the watched ref moved
   - RustSec advisories against every crate version in the lock (rustsec/advisory-db)
   - the Explorer's direct crates.io dependencies against the newest release on crates.io
   - the lock's shape: sources, duplicated crates
-Every GitHub and crates.io response is cached under .cache/upstream-drift/api so reruns are cheap.
-`render` (tooling/upstream-drift-site.py) turns the data, the research and the review into the site.
+`collect` caches every GitHub and crates.io response under .cache/upstream-drift/api so reruns are
+cheap; `check` always asks. tooling/upstream-drift-site.py turns the data, the research and the
+review into the site.
 """
 import argparse
 import base64
@@ -40,22 +51,24 @@ def cached(key, fetch):
     API_CACHE.mkdir(parents=True, exist_ok=True)
     path = API_CACHE / (hashlib.sha256(key.encode()).hexdigest()[:24] + '.json')
     if path.exists():
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding='utf-8'))
     value = fetch()
     if value is not None:  # a 404 is not cached: a later run may succeed (a new tag, a fixed path)
-        path.write_text(json.dumps(value))
+        path.write_text(json.dumps(value), encoding='utf-8')
     return value
 
 
+def gh_api(path):
+    result = subprocess.run(['gh', 'api', path], capture_output=True, text=True)
+    if result.returncode:
+        if 'HTTP 404' in result.stderr or 'Not Found' in result.stderr:
+            return None
+        raise RuntimeError(f'gh api {path}: {result.stderr.strip()[:300]}')
+    return json.loads(result.stdout)
+
+
 def gh(path):
-    def fetch():
-        result = subprocess.run(['gh', 'api', path], capture_output=True, text=True)
-        if result.returncode:
-            if 'HTTP 404' in result.stderr or 'Not Found' in result.stderr:
-                return None
-            raise RuntimeError(f'gh api {path}: {result.stderr.strip()[:300]}')
-        return json.loads(result.stdout)
-    return cached('gh:' + path, fetch)
+    return cached('gh:' + path, lambda: gh_api(path))
 
 
 def gh_pages(path, per_page=100, limit=10):
@@ -86,7 +99,7 @@ def crates_io(name):
     return cached('crates:' + name, fetch)
 
 
-# ---------------------------------------------------------------- lock + manifests
+# ---------------------------------------------------------------- pinned sources
 
 def lock_packages(cargo_lock_text):
     packages = []
@@ -99,6 +112,161 @@ def lock_packages(cargo_lock_text):
 def github_repo(url):
     match = re.fullmatch(r'https://github\.com/([^/]+)/([^/]+?)(?:\.git)?', url)
     return match.groups() if match else None
+
+
+def manifests(source_dir):
+    return [source_dir / 'Cargo.toml', *sorted((source_dir / 'crates').glob('*/Cargo.toml'))]
+
+
+def patch_row(path):
+    """The origin commit a patch of a series names in its header. A patch written in this repository
+    (tooling/patched-sources.py export) names the all-zero commit and no origin: it is `local`, with
+    no commit to show."""
+    with path.open('rb') as handle:
+        head = handle.read(4096).decode('utf-8', 'replace').split('\n\n')[0]
+    fields = dict(re.findall(r'^(From|Subject:|Origin:|Date:) (.*?)\r?$', head, re.M))
+    origin = github_repo(fields.get('Origin:', '').partition('/commit/')[0])
+    sha = fields.get('From', '').strip('0') and fields['From']
+    return {'sha': sha, 'local': not sha, 'url': fields.get('Origin:', '') if sha else '', 'file': path.name,
+            'date': fields.get('Date:', '')[:10], 'title': fields.get('Subject:', path.stem),
+            'author': '/'.join(origin) if origin else ''}
+
+
+def patched_sources(patches_dir):
+    """Every <name>/source.toml: the upstream commit this repository patches, with its series."""
+    sources = []
+    for path in sorted(patches_dir.glob('*/source.toml')):
+        pin = tomllib.loads(path.read_text(encoding='utf-8'))
+        sources.append({'name': pin['name'], 'upstream': pin['upstream'], 'commit': pin['commit'], 'ref': pin.get('ref') or None,
+                        'patches': [patch_row(p) for p in sorted((path.parent / 'series').glob('*.patch'))]})
+    return sources
+
+
+def lock_git_sources(cargo_lock_text):
+    """Every git source of a Cargo.lock with the crates it supplies. `ref` is the branch or tag
+    the manifest named; a source named by revision or by nothing watches the default branch."""
+    grouped = {}
+    for package in lock_packages(cargo_lock_text):
+        if not package['source'].startswith('git+'):
+            continue
+        url, _, commit = package['source'][4:].partition('#')
+        url, _, query = url.partition('?')
+        params = dict(urllib.parse.parse_qsl(query))
+        grouped.setdefault((url, params.get('branch') or params.get('tag'), commit), []).append((package['name'], package['version']))
+    return [{'name': url.rstrip('/').rsplit('/', 1)[-1].removesuffix('.git'), 'upstream': url, 'commit': commit, 'ref': ref, 'crates': sorted(crates)}
+            for (url, ref, commit), crates in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][2]))]
+
+
+def harvest_reasons(manifest_text, urls):
+    """The `#` comment block right above the first manifest line naming each git url."""
+    lines = manifest_text.splitlines()
+    reasons = {}
+    for url in urls:
+        for index, line in enumerate(lines):
+            # the url followed by its closing quote: x/gltf must not match x/gltf-json
+            if (url + '"') not in line or line.lstrip().startswith('#'):
+                continue
+            comments = []
+            cursor = index - 1
+            while cursor >= 0 and lines[cursor].lstrip().startswith('#'):
+                comments.insert(0, lines[cursor].lstrip('# ').rstrip())
+                cursor -= 1
+            if comments:
+                reasons[url] = ' '.join(comments)
+            break
+    return reasons
+
+
+def pinned_sources(pin=PIN):
+    """The patched sources, then the git sources the lock keeps with the manifests' reasons."""
+    source_dir = pin / 'source'
+    locked = lock_git_sources((source_dir / 'Cargo.lock').read_text(encoding='utf-8'))
+    reasons = harvest_reasons('\n'.join(m.read_text(encoding='utf-8') for m in manifests(source_dir) if m.exists()),
+                              {s['upstream'] for s in locked})
+    for source in locked:
+        source['reason'] = reasons.get(source['upstream'])
+    return patched_sources(pin / 'patches') + locked
+
+
+# ---------------------------------------------------------------- check
+
+def scheme_tags(repo, ref, api):
+    """The repository's tags in the naming scheme of `ref`; a ref that is not among them is a branch.
+    GitHub answers with every matching ref at once."""
+    prefix = tag_prefix(ref)
+    rows = api(f'repos/{repo}/git/matching-refs/tags/{urllib.parse.quote(prefix)}') or []
+    return [name for name in (row['ref'].removeprefix('refs/tags/') for row in rows) if tag_prefix(name) == prefix]
+
+
+def newer_tags(tags, ref):
+    """The tags past `ref`, oldest first. Pre-releases count only when `ref` is one."""
+    newer = [tag for tag in tags if tag_order(tag) > tag_order(ref) and (tag_order(tag)[1] or not tag_order(ref)[1])]
+    return sorted(newer, key=tag_order)
+
+
+def check_source(source, api=gh_api):
+    """How far the watched ref is from the pinned commit; for a tag, also the newer tags of its
+    scheme. None when GitHub cannot compare the two."""
+    repo = github_repo(source['upstream'])
+    if repo is None:
+        return None
+    repo = '/'.join(repo)
+    ref = source['ref'] or (api(f'repos/{repo}') or {}).get('default_branch')
+    compare = api(f'repos/{repo}/compare/{source["commit"]}...{urllib.parse.quote(ref, safe="")}') if ref else None
+    if compare is None:
+        return None
+    tags = scheme_tags(repo, ref, api) if source['ref'] else []
+    return {'ref': ref, 'ahead': compare['ahead_by'], 'behind': compare['behind_by'], 'named': bool(source['ref']),
+            'tag': ref in tags, 'newer_tags': newer_tags(tags, ref) if ref in tags else []}
+
+
+def off_ref(result):
+    """Why the pinned commit is not on the ref the source names, or None. A source that names no
+    ref watches the default branch, which claims nothing about the pin."""
+    if not result['named']:
+        return None
+    if result['behind']:
+        return f'the pin has {result["behind"]} commit(s) {result["ref"]} lacks'
+    if result['tag'] and result['ahead']:
+        return f'the tag moved, or never named the pin: it is {result["ahead"]} commit(s) past it'
+    return None
+
+
+def check_report(sources, api=gh_api):
+    """(text, ok): one line per source; ok is false when a source could not be checked or is not
+    pinned on the ref it names."""
+    lines, moved, tagged, off, failed = [], 0, 0, 0, 0
+    for source in sources:
+        repo, pin = github_repo(source['upstream']), source['commit'][:10]
+        where = '/'.join(repo) if repo else source['upstream']
+        result = check_source(source, api)
+        if result is None:
+            failed += 1
+            why = f'GitHub cannot compare {source["ref"] or "the default branch"} with {pin}' if repo else 'not a GitHub repository'
+            lines.append(f'- {source["name"]}: {where} NOT CHECKED: {why}')
+            continue
+        moved += result['ahead'] > 0
+        tagged += bool(result['newer_tags'])
+        line = f'- {source["name"]}: {where} {"tag " if result["tag"] else ""}{result["ref"]} '
+        line += f'is {result["ahead"]} commit(s) past {pin}' if result['ahead'] else f'has not moved past {pin}'
+        wrong = off_ref(result)
+        if wrong:
+            off += 1
+            line += f'; PIN NOT ON ITS REF: {wrong}'
+        elif result['behind']:
+            line += f' (the pin has {result["behind"]} commit(s) the ref lacks)'
+        if 'patches' in source:
+            local = sum(1 for patch in source['patches'] if patch.get('local'))
+            line += f'; {len(source["patches"])} patch(es)' + (f', {local} local' if local else '')
+        if result['newer_tags']:
+            line += f'; {len(result["newer_tags"])} newer tag(s), newest {result["newer_tags"][-1]}'
+        lines.append(line)
+    head = (f'Pinned sources of the Explorer: {len(sources)}; upstream moved past the pin: {moved}; a newer tag: {tagged}; '
+            f'pin not on its ref: {off}; not checked: {failed}.')
+    return '\n'.join([head, '', *lines]) + '\n', not failed and not off
+
+
+# ---------------------------------------------------------------- drift map
 
 
 def commit_row(c):
@@ -129,40 +297,18 @@ def tag_prefix(tag):
     return re.match(r'^[^0-9]*', tag).group(0)
 
 
-def find_base_tag(parent, fork_repo, rev, crates, branch):
-    """The newest release tag of the parent that the fork revision contains: candidates are tags
-    naming the crate versions the lock resolved, tags matching the branch's version digits
-    ('1_46_hotfix' -> 1.46.*), then the newest tags; each is checked with a compare whose
-    behind_by == 0 means the tag is an ancestor of the fork."""
-    tags = gh_pages(f'repos/{parent}/tags', limit=15)
-    by_name = {t['name']: t['commit']['sha'] for t in tags}
-    candidates = []
-    for name, version in crates:
-        for candidate in (f'v{version}', version, f'{name}-v{version}', f'{name}-{version}', f'{name}@{version}', f'{name}/v{version}'):
-            if candidate in by_name:
-                candidates.append(candidate)
-    digits = re.findall(r'\d+', branch or '')
-    if len(digits) >= 2:
-        prefix = re.compile(r'^v?' + re.escape(digits[0]) + r'\.' + re.escape(digits[1]) + r'(\.|$)')
-        candidates += sorted((t for t in by_name if prefix.match(t)), key=version_key, reverse=True)[:12]
-    candidates += [t['name'] for t in tags[:25]]
-    owner = parent.split('/')[0]
-    # newest first: the first ancestor found is the latest release the fork contains
-    for tag in sorted(set(candidates), key=version_key, reverse=True):
-        compare = gh(f'repos/{fork_repo}/compare/{owner}:{urllib.parse.quote(tag, safe="")}...{rev}')
-        if compare and compare['behind_by'] == 0:
-            return tag, by_name[tag]
-    return None, None
-
-
-def tag_date(repo, sha):
-    commit = gh(f'repos/{repo}/commits/{sha}')
-    return commit['commit']['committer']['date'][:10] if commit else None
-
-
 def version_key(tag):
     nums = re.findall(r'\d+', tag)
     return tuple(int(n) for n in nums[:4]) + (0,) * (4 - len(nums[:4]))
+
+
+def tag_order(tag):
+    """Sort key of a tag within its scheme: (version, 1 for a release and 0 for a pre-release, the
+    pre-release label, its numbers), so 1.0.0 follows 1.0.0-rc.2, which follows 1.0.0-beta.9."""
+    version, suffix = re.match(r'([0-9.]*)(.*)', tag[len(tag_prefix(tag)):], re.S).groups()
+    numbers = [int(n) for n in version.split('.') if n][:4]
+    return (tuple(numbers) + (0,) * (4 - len(numbers)), int(not suffix),
+            ''.join(re.findall(r'[a-z]+', suffix.lower())), tuple(int(n) for n in re.findall(r'\d+', suffix)))
 
 
 def releases_since(parent, base_date, base_tag):
@@ -181,72 +327,44 @@ def releases_since(parent, base_date, base_tag):
     return sorted(out, key=lambda r: r['date'])
 
 
-def collect_sources(forks, lock_pkgs):
-    sources = []
-    for s in forks['source']:
-        url, rev = s['url'], s['rev']
+def collect_sources(sources):
+    """One entry per pinned source in the shape the site reads: `rev` is the pinned commit, `branch`
+    the watched ref, `carried` the patch series (patched sources only), `crates` what the lock takes
+    from the source (lock sources only), `upstream_since_pin` what the default branch gained,
+    `branch_since_pin` how far the watched ref moved, and for a ref that is a tag `base` and
+    `newer_tags`, the tags of its scheme past it."""
+    entries = []
+    for s in sources:
+        url, rev, ref = s['upstream'], s['commit'], s['ref']
         repo = github_repo(url)
-        entry = {'url': url, 'repo': '/'.join(repo) if repo else None, 'branch': s.get('branch'), 'manifest_rev': s.get('manifest_rev'),
-                 'rev': rev, 'parent': s.get('parent'), 'default_branch': s.get('default_branch'), 'pushed_at': s.get('pushed_at'),
-                 'reason': s.get('reason'), 'config_pin': s.get('config_pin'),
-                 'crates': [{'name': c.split(' ')[0], 'version': c.split(' ')[1]} for c in s['crates']]}
+        entry = {'name': s['name'], 'url': url, 'repo': '/'.join(repo) if repo else None, 'branch': ref, 'rev': rev,
+                 'reason': s.get('reason')}
+        if 'crates' in s:
+            entry['crates'] = [{'name': name, 'version': version} for name, version in s['crates']]
+        if 'patches' in s:
+            entry['carried'] = {'commits': s['patches']}
+        entries.append(entry)
         if repo is None:
-            sources.append(entry)
             continue
-        owner_repo = '/'.join(repo)
-        info = gh(f'repos/{owner_repo}') or {}
+        repo = entry['repo']
+        info = gh(f'repos/{repo}') or {}
         entry.update({'description': info.get('description'), 'stars': info.get('stargazers_count'), 'archived': info.get('archived')})
-        head = gh(f'repos/{owner_repo}/commits/{rev}')
+        head = gh(f'repos/{repo}/commits/{rev}')
         entry['rev_date'] = head['commit']['committer']['date'][:10] if head else None
-        if s.get('branch'):
-            tip = gh(f'repos/{owner_repo}/commits/{urllib.parse.quote(s["branch"], safe="")}')
-            entry['branch_tip'] = commit_row(tip) if tip else None
-            moved = compare_all(owner_repo, rev, urllib.parse.quote(s['branch'], safe=''))
-            entry['branch_since_pin'] = moved
-        parent = s.get('parent')
-        if parent:
-            pinfo = gh(f'repos/{parent}') or {}
-            entry['parent_info'] = {'description': pinfo.get('description'), 'stars': pinfo.get('stargazers_count'),
-                                    'default_branch': pinfo.get('default_branch'), 'pushed_at': (pinfo.get('pushed_at') or '')[:10],
-                                    'archived': pinfo.get('archived')}
-            crates = [(c['name'], c['version']) for c in entry['crates']]
-            base_tag, base_sha = find_base_tag(parent, owner_repo, rev, crates, s.get('branch'))
-            entry['base'] = {'tag': base_tag, 'sha': base_sha, 'date': tag_date(parent, base_sha) if base_sha else None}
-            default = pinfo.get('default_branch', 'main')
-            if base_tag:
-                carried = compare_all(repo[0] + '/' + repo[1], f'{parent.split("/")[0]}:{base_tag}', rev)
-                entry['carried'] = carried  # the fork's own commits on top of the release
-                missing_from_base = compare_all(parent, base_tag, default, cap=1000)
-                entry['upstream_since_base'] = missing_from_base
-            else:
-                # no release is an ancestor of the fork: measure against the parent's default branch
-                entry['carried'] = compare_all(owner_repo, f'{parent.split("/")[0]}:{default}', rev)
-                entry['upstream_since_base'] = compare_all(owner_repo, rev, f'{parent.split("/")[0]}:{default}', cap=1000)
-                entry['base_note'] = 'no upstream release tag is an ancestor of the fork; carried and missing are measured against the parent default branch'
-
-            behind = gh(f'repos/{owner_repo}/compare/{parent.split("/")[0]}:{default}...{rev}')
-            entry['vs_parent_default'] = {'ahead_by': behind['ahead_by'], 'behind_by': behind['behind_by']} if behind else None
-            # commits only the fork has: drop the upstream commits between the base tag and the fork
-            # point (an old base tag puts upstream history into the base-relative compare)
-            if entry.get('carried') and entry.get('upstream_since_base'):
-                upstream_shas = {c['sha'] for c in entry['upstream_since_base']['commits']}
-                fork_only = [c for c in entry['carried']['commits'] if c['sha'] not in upstream_shas]
-                entry['carried']['fork_only'] = fork_only
-                entry['carried']['fork_only_count'] = len(fork_only) if entry['upstream_since_base']['total_commits'] <= len(upstream_shas) else min(len(fork_only), behind['ahead_by'] if behind else len(fork_only))
-            entry['releases_since_base'] = releases_since(parent, entry['base']['date'], base_tag)
-            latest = gh(f'repos/{parent}/releases/latest')
-            entry['parent_latest_release'] = {'tag': latest['tag_name'], 'date': latest['published_at'][:10], 'url': latest['html_url']} if latest else None
-        else:
-            # not a fork: an upstream repository used at a branch or revision
-            default = info.get('default_branch', 'main')
-            since = compare_all(owner_repo, rev, default)
-            entry['upstream_since_pin'] = since
-            latest = gh(f'repos/{owner_repo}/releases/latest')
-            entry['parent_latest_release'] = {'tag': latest['tag_name'], 'date': latest['published_at'][:10], 'url': latest['html_url']} if latest else None
-        sources.append(entry)
-        print(f'  {owner_repo}: base={entry.get("base", {}).get("tag")} carried={len((entry.get("carried") or {}).get("commits", []))} '
-              f'upstream_since_base={(entry.get("upstream_since_base") or {}).get("total_commits")} releases={len(entry.get("releases_since_base", []))}', file=sys.stderr)
-    return sources
+        entry['upstream_since_pin'] = compare_all(repo, rev, info.get('default_branch', 'main'), cap=1000)
+        tags = scheme_tags(repo, ref, gh) if ref else []
+        tag = ref if ref in tags else None
+        if ref:
+            entry['branch_since_pin'] = compare_all(repo, rev, urllib.parse.quote(ref, safe=''))
+        if tag:
+            entry['base'] = {'tag': tag, 'sha': rev, 'date': entry['rev_date']}
+            entry['newer_tags'] = newer_tags(tags, tag)
+        entry['releases_since_base'] = releases_since(repo, entry['rev_date'], tag)
+        latest = gh(f'repos/{repo}/releases/latest')
+        entry['parent_latest_release'] = {'tag': latest['tag_name'], 'date': latest['published_at'][:10], 'url': latest['html_url']} if latest else None
+        print(f'  {repo}: patches={len(s.get("patches", []))} upstream_since_pin={(entry["upstream_since_pin"] or {}).get("total_commits")} '
+              f'releases={len(entry["releases_since_base"])}', file=sys.stderr)
+    return entries
 
 
 # ---------------------------------------------------------------- advisories
@@ -339,8 +457,8 @@ def collect_advisories(lock_pkgs):
 
 def direct_registry_deps(source_dir):
     deps = {}
-    for mf in [source_dir / 'Cargo.toml', *sorted((source_dir / 'crates').glob('*/Cargo.toml'))]:
-        d = tomllib.loads(mf.read_text())
+    for mf in manifests(source_dir):
+        d = tomllib.loads(mf.read_text(encoding='utf-8'))
         tables = [d.get('dependencies', {}), d.get('build-dependencies', {}), d.get('workspace', {}).get('dependencies', {})]
         tables += [t.get('dependencies', {}) for t in d.get('target', {}).values()]
         for table in tables:
@@ -401,32 +519,42 @@ def lock_shape(lock_pkgs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command', choices=['collect'])
+    parser.add_argument('command', choices=['check', 'collect'])
+    parser.add_argument('names', nargs='*', metavar='NAME', help='check: only these sources (default: every source)')
     args = parser.parse_args()
-    forks = tomllib.loads((PIN / 'forks.toml').read_text())
+    sources = pinned_sources()
+    if args.command == 'check':
+        unknown = sorted(set(args.names) - {source['name'] for source in sources})
+        if unknown:
+            parser.error(f'no pinned source named: {", ".join(unknown)}')
+        text, ok = check_report([source for source in sources if not args.names or source['name'] in args.names])
+        sys.stdout.write(text)
+        return 0 if ok else 1
+    if args.names:
+        parser.error('collect takes no source names')
     source_dir = PIN / 'source'
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    lock_pkgs = lock_packages((source_dir / 'Cargo.lock').read_text())
+    lock_pkgs = lock_packages((source_dir / 'Cargo.lock').read_text(encoding='utf-8'))
     explorer = gh(f'repos/{EXPLORER}')
     data = {'generated': datetime.date.today().isoformat(), 'explorer': {'repo': EXPLORER, 'revision': revision,
             'description': explorer.get('description') if explorer else None},
             'lock': lock_shape(lock_pkgs)}
     print('sources', file=sys.stderr)
-    data['sources'] = collect_sources(forks, lock_pkgs)
+    data['sources'] = collect_sources(sources)
     print('advisories', file=sys.stderr)
     data['advisories'] = collect_advisories(lock_pkgs)
     print('registry drift', file=sys.stderr)
     data['registry'] = collect_registry_drift(source_dir, lock_pkgs)
     CACHE.mkdir(parents=True, exist_ok=True)
-    DATA.write_text(json.dumps(data, indent=1))
+    DATA.write_text(json.dumps(data, indent=1), encoding='utf-8')
     # one file per source for the research agents, with the advisories against its crates
     slices = CACHE / 'sources'
     slices.mkdir(exist_ok=True)
     for src in data['sources']:
-        names = {c['name'] for c in src['crates']}
+        names = {c['name'] for c in src.get('crates', [])}
         payload = {**src, 'advisories': [f for f in data['advisories']['findings'] if f['crate'] in names],
                    'slug': re.sub(r'[^a-z0-9]+', '-', src['url'].lower().removeprefix('https://github.com/')).strip('-')}
-        (slices / f"{payload['slug']}.json").write_text(json.dumps(payload, indent=1))
+        (slices / f"{payload['slug']}.json").write_text(json.dumps(payload, indent=1), encoding='utf-8')
     print(f'wrote {len(data["sources"])} source slices to {slices.relative_to(ROOT)}')
     print(f'wrote {DATA.relative_to(ROOT)} ({DATA.stat().st_size // 1024} KiB)')
     return 0

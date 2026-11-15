@@ -49,7 +49,7 @@ use recommendations::{
 use recommendations::{MIN_PERSONAL_ROWS, personal_rows};
 pub use recommendations::{aggregate_sales, rank_trending};
 
-use crate::types::ManaUsdRate;
+use crate::types::{ASSET_TYPE_ERC20, ASSET_TYPE_USD_PEGGED_MANA, ManaUsdRate};
 use std::collections::HashMap;
 
 use axum::Json;
@@ -104,9 +104,6 @@ pub const RELATED_MAX_LIMIT: i64 = 50;
 
 /// 1e30 USD wei: rows above it are dropped rather than overflowing the bigint credit cast.
 pub const MAX_USD_WEI: &str = "1000000000000000000000000000000";
-
-const ASSET_TYPE_ERC20: i64 = 1;
-const ASSET_TYPE_USD_PEGGED_MANA: i64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShopListingType {

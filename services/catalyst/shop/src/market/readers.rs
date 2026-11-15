@@ -463,8 +463,48 @@ pub async fn top_rows(
     p: &GraphPage<'_>,
     want: i64,
 ) -> Result<Vec<Value>, String> {
+    read_top(state, network, url, ttl, p, want.min(DEEP_WINDOW)).await
+}
+
+/// What an aggregate over at most `max` rows read: every row, or more rows
+/// than the bound.
+pub enum Bounded {
+    Complete(Vec<Value>),
+    Overflow,
+}
+
+/// Every row of `p`'s order when there are at most `max`, else
+/// [`Bounded::Overflow`]: [`top_rows`] plus one probe row past the bound,
+/// which a list page never reads. `max` must be at most [`DEEP_WINDOW`].
+pub async fn bounded_rows(
+    state: &MarketplaceState,
+    network: Network,
+    url: &str,
+    ttl: Ttl,
+    p: &GraphPage<'_>,
+    max: i64,
+) -> Result<Bounded, String> {
+    debug_assert!(
+        (0..=DEEP_WINDOW).contains(&max),
+        "an aggregate bound of {max} is outside 0..={DEEP_WINDOW}"
+    );
+    let rows = read_top(state, network, url, ttl, p, max + 1).await?;
+    Ok(if rows.len() as i64 > max {
+        Bounded::Overflow
+    } else {
+        Bounded::Complete(rows)
+    })
+}
+
+async fn read_top(
+    state: &MarketplaceState,
+    network: Network,
+    url: &str,
+    ttl: Ttl,
+    p: &GraphPage<'_>,
+    want: i64,
+) -> Result<Vec<Value>, String> {
     let size = super::graph::THE_GRAPH_PAGE_SIZE;
-    let want = want.min(DEEP_WINDOW);
     let mut out: Vec<Value> = Vec::new();
     let mut skip = 0;
     let mut exhausted = false;

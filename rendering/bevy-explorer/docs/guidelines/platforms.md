@@ -93,7 +93,9 @@ sees a `cfg`. Backend functionality that only one caller needs lives next to tha
   `export CEF_PATH="$(cygpath -w ~/.local/share/cef)"` after `just setup-cef`.
 - **A PR runs the Windows and macOS tests only for platform inputs.** A Rust change under
   `rendering/bevy-explorer/source` runs clippy, the native test suite on Linux, the headless smoke
-  test and the web build (`tooling/bevy-ci.py` at the dcl-one root selects them). The suite adds
+  test and the web build (`tooling/bevy-ci.py` at the dcl-one root selects them). A draft does not
+  run the test suite and the headless smoke test: they start when the PR is marked ready for
+  review, or on the next push with the `ci:engine` label. The suite adds
   Windows and macOS when the PR changes the root `Cargo.toml`, a `build*.rs`, `.cargo`, the
   toolchain, `local-harness/benchmark`, `local-harness/web-driver`, a file or folder named
   `windows` or `macos`, the locked package set in `Cargo.lock`, or a CI input outside the engine
@@ -145,8 +147,8 @@ difference of two timestamps that empty compute passes write with `timestamp_wri
 `wgpu::Features::TIMESTAMP_QUERY` on the render device. The engine sets no `WgpuSettings` of its
 own (the web render worker uses the default too), so Bevy's default `Functionality` priority
 requests every feature the adapter reports, and the feature is on wherever the backend exposes
-it. Without it the engine logs one info line under `gpu_time` and has no GPU time. In the fork's
-wgpu (`robtfm/wgpu` `e25f3d4`, 24.0.5):
+it. Without it the engine logs one info line under `gpu_time` and has no GPU time. In the
+Explorer's wgpu (upstream `v24.0.5` plus the series in `rendering/bevy-explorer/patches/wgpu`):
 
 | Backend | `TIMESTAMP_QUERY` | Tick period | Checked on hardware |
 |---|---|---|---|

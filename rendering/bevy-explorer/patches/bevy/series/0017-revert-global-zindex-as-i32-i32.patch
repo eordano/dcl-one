@@ -1,0 +1,202 @@
+From 5e9dce2db6c63ae9bec440429193fd03837c3ea0
+Subject: Revert "global zindex as (i32,i32)"
+Origin: https://github.com/robtfm/bevy/commit/5e9dce2db6c63ae9bec440429193fd03837c3ea0
+Date: 2025-06-22T16:46:44+01:00
+
+This reverts commit 606cbd7b9b08ad19430eef1b43bb7d0cab917c4c.
+---
+diff --git a/crates/bevy_dev_tools/src/fps_overlay.rs b/crates/bevy_dev_tools/src/fps_overlay.rs
+index 3b4dc9c805e518bbc66280f9b765e6705b412daa..7c29ae3adc0968c2175441eea734479fe9536ceb 100644
+--- a/crates/bevy_dev_tools/src/fps_overlay.rs
++++ b/crates/bevy_dev_tools/src/fps_overlay.rs
+@@ -101,7 +101,7 @@ fn setup(mut commands: Commands, overlay_config: Res<FpsOverlayConfig>) {
+                 ..Default::default()
+             },
+             // Render overlay on top of everything
+-            GlobalZIndex((0, FPS_OVERLAY_ZINDEX)),
++            GlobalZIndex(FPS_OVERLAY_ZINDEX),
+         ))
+         .with_children(|p| {
+             p.spawn((
+diff --git a/crates/bevy_ui/src/stack.rs b/crates/bevy_ui/src/stack.rs
+index ca6bbab56323cd7d2eb74a4f3b2dddd3a9655b0d..8719d7fef909d21157865659032fb5f60ce06a3f 100644
+--- a/crates/bevy_ui/src/stack.rs
++++ b/crates/bevy_ui/src/stack.rs
+@@ -41,7 +41,7 @@ impl ChildBufferCache {
+ #[allow(clippy::too_many_arguments)]
+ pub fn ui_stack_system(
+     mut cache: Local<ChildBufferCache>,
+-    mut root_nodes: Local<Vec<(Entity, (isize, (i32, i32), i32))>>,
++    mut root_nodes: Local<Vec<(Entity, (isize, i32, i32))>>,
+     mut visited_root_nodes: Local<HashSet<Entity>>,
+     mut ui_stack: ResMut<UiStack>,
+     ui_root_nodes: UiRootNodes,
+@@ -81,7 +81,7 @@ pub fn ui_stack_system(
+                     .and_then(|cam_entity| cameras.get(cam_entity).ok())
+                     .map(|cam| cam.order)
+                     .unwrap_or(default_camera_order),
+-                maybe_global_zindex.map(|zindex| zindex.0).unwrap_or((0,0)),
++                maybe_global_zindex.map(|zindex| zindex.0).unwrap_or(0),
+                 maybe_zindex.map(|zindex| zindex.0).unwrap_or(0),
+             ),
+         ));
+@@ -171,7 +171,7 @@ mod tests {
+ 
+     fn node_with_global_and_local_zindex(
+         name: &'static str,
+-        global_zindex: (i32, i32),
++        global_zindex: i32,
+         local_zindex: i32,
+     ) -> (Label, Node, GlobalZIndex, ZIndex) {
+         (
+@@ -184,7 +184,7 @@ mod tests {
+ 
+     fn node_with_global_zindex(
+         name: &'static str,
+-        global_zindex: (i32, i32),
++        global_zindex: i32,
+     ) -> (Label, Node, GlobalZIndex) {
+         (Label(name), Node::default(), GlobalZIndex(global_zindex))
+     }
+@@ -224,10 +224,10 @@ mod tests {
+                     });
+                 parent.spawn(node_without_zindex("1-1"));
+                 parent
+-                    .spawn(node_with_global_zindex("1-2", (0, -1)))
++                    .spawn(node_with_global_zindex("1-2", -1))
+                     .with_children(|parent| {
+                         parent.spawn(node_without_zindex("1-2-0"));
+-                        parent.spawn(node_with_global_zindex("1-2-1", (0, -3)));
++                        parent.spawn(node_with_global_zindex("1-2-1", -3));
+                         parent
+                             .spawn(node_without_zindex("1-2-2"))
+                             .with_children(|_| ());
+@@ -249,7 +249,7 @@ mod tests {
+                     });
+             });
+ 
+-        commands.spawn(node_with_global_zindex("3", (0, -2)));
++        commands.spawn(node_with_global_zindex("3", -2));
+ 
+         queue.apply(&mut world);
+ 
+@@ -265,9 +265,9 @@ mod tests {
+             .map(|entity| query.get(&world, *entity).unwrap().clone())
+             .collect::<Vec<_>>();
+         let expected_result = vec![
+-            (Label("1-2-1")), // GlobalZIndex(0, -3)
+-            (Label("3")),     // GlobalZIndex(0, -2)
+-            (Label("1-2")),   // GlobalZIndex(0, -1)
++            (Label("1-2-1")), // GlobalZIndex(-3)
++            (Label("3")),     // GlobalZIndex(-2)
++            (Label("1-2")),   // GlobalZIndex(-1)
+             (Label("1-2-0")),
+             (Label("1-2-2")),
+             (Label("1-2-3")),
+@@ -282,7 +282,7 @@ mod tests {
+             (Label("1-0-1")),
+             (Label("1-1")),
+             (Label("1-3")),
+-            (Label("0")), // GlobalZIndex(0, 2)
++            (Label("0")), // GlobalZIndex(2)
+         ];
+         assert_eq!(actual_result, expected_result);
+     }
+@@ -294,16 +294,16 @@ mod tests {
+ 
+         let mut queue = CommandQueue::default();
+         let mut commands = Commands::new(&mut queue, &world);
+-        commands.spawn(node_with_global_and_local_zindex("0", (0, -1), 1));
+-        commands.spawn(node_with_global_and_local_zindex("1", (0, -1), 2));
+-        commands.spawn(node_with_global_and_local_zindex("2", (0, 1), 3));
+-        commands.spawn(node_with_global_and_local_zindex("3", (0, 1), -3));
++        commands.spawn(node_with_global_and_local_zindex("0", -1, 1));
++        commands.spawn(node_with_global_and_local_zindex("1", -1, 2));
++        commands.spawn(node_with_global_and_local_zindex("2", 1, 3));
++        commands.spawn(node_with_global_and_local_zindex("3", 1, -3));
+         commands
+             .spawn(node_without_zindex("4"))
+             .with_children(|builder| {
+-                builder.spawn(node_with_global_and_local_zindex("5", (0, 0), -1));
+-                builder.spawn(node_with_global_and_local_zindex("6", (0, 0), 1));
+-                builder.spawn(node_with_global_and_local_zindex("7", (0, -1), -1));
++                builder.spawn(node_with_global_and_local_zindex("5", 0, -1));
++                builder.spawn(node_with_global_and_local_zindex("6", 0, 1));
++                builder.spawn(node_with_global_and_local_zindex("7", -1, -1));
+                 builder.spawn(node_with_global_zindex("8", 1));
+             });
+ 
+diff --git a/crates/bevy_ui/src/ui_node.rs b/crates/bevy_ui/src/ui_node.rs
+index f533690817825f3a365d6d6b47839dde0dab7cf4..78ac2598af4c08939dc686b4fb34805808f21fe1 100644
+--- a/crates/bevy_ui/src/ui_node.rs
++++ b/crates/bevy_ui/src/ui_node.rs
+@@ -2191,7 +2191,7 @@ pub struct ZIndex(pub i32);
+ /// If two Nodes have the same `GlobalZIndex`, the node with the greater [`ZIndex`] will be drawn on top.
+ #[derive(Component, Copy, Clone, Debug, Default, PartialEq, Eq, Reflect)]
+ #[reflect(Component, Default, Debug, PartialEq, Clone)]
+-pub struct GlobalZIndex(pub (i32, i32));
++pub struct GlobalZIndex(pub i32);
+ 
+ /// Used to add rounded corners to a UI node. You can set a UI node to have uniformly
+ /// rounded corners or specify different radii for each corner. If a given radius exceeds half
+diff --git a/examples/3d/shadow_biases.rs b/examples/3d/shadow_biases.rs
+index d1b9c96d638851b28fb3d72451df5f6580fc6acf..afd469affff542712fceb11ec95a8936f9ab4077 100644
+--- a/examples/3d/shadow_biases.rs
++++ b/examples/3d/shadow_biases.rs
+@@ -100,7 +100,7 @@ fn setup(
+                 ..default()
+             },
+             BackgroundColor(Color::BLACK.with_alpha(0.75)),
+-            GlobalZIndex((0, i32::MAX)),
++            GlobalZIndex(i32::MAX),
+         ))
+         .with_children(|p| {
+             p.spawn(Text::default()).with_children(|p| {
+diff --git a/examples/stress_tests/bevymark.rs b/examples/stress_tests/bevymark.rs
+index 3de96816471a2fc2516e317bf0d7f392ce735ca5..d44fbfa7d28fa683b7585a595d3d9115bafc94a0 100644
+--- a/examples/stress_tests/bevymark.rs
++++ b/examples/stress_tests/bevymark.rs
+@@ -266,7 +266,7 @@ fn setup(
+                 ..default()
+             },
+             BackgroundColor(Color::BLACK.with_alpha(0.75)),
+-            GlobalZIndex((0, i32::MAX)),
++            GlobalZIndex(i32::MAX),
+         ))
+         .with_children(|p| {
+             p.spawn((Text::default(), StatsText)).with_children(|p| {
+diff --git a/examples/ui/z_index.rs b/examples/ui/z_index.rs
+index 181e81972827393a3571c8b9c60b85407e7c639e..ae4fb22c52542ae9b22c26b1d97f317b0511f49b 100644
+--- a/examples/ui/z_index.rs
++++ b/examples/ui/z_index.rs
+@@ -97,7 +97,7 @@ fn setup(mut commands: Commands) {
+                             ..default()
+                         },
+                         BackgroundColor(PURPLE.into()),
+-                        GlobalZIndex((0, 1)),
++                        GlobalZIndex(1),
+                     ));
+ 
+                     // spawn a node with a negative global z-index of -1.
+@@ -113,7 +113,7 @@ fn setup(mut commands: Commands) {
+                             ..default()
+                         },
+                         BackgroundColor(YELLOW.into()),
+-                        GlobalZIndex((0, -1)),
++                        GlobalZIndex(-1),
+                     ));
+                 });
+         });
+diff --git a/examples/window/window_drag_move.rs b/examples/window/window_drag_move.rs
+index 3f38564b7ff76f4b01199291622b1152bde05436..829e315d5fbb0f27552faea92aba9e24f7e9061a 100644
+--- a/examples/window/window_drag_move.rs
++++ b/examples/window/window_drag_move.rs
+@@ -68,7 +68,7 @@ fn setup(mut commands: Commands) {
+                 ..default()
+             },
+             BackgroundColor(Color::BLACK.with_alpha(0.75)),
+-            GlobalZIndex((0, i32::MAX)),
++            GlobalZIndex(i32::MAX),
+         ))
+         .with_children(|p| {
+             p.spawn(Text::default()).with_children(|p| {

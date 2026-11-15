@@ -75,14 +75,7 @@ fn equipped(metadata: &Value) -> Vec<String> {
 }
 
 pub(super) async fn run(pass: &Pass) -> anyhow::Result<u64> {
-    let mut passed = 0;
-    for _ in 0..super::MAX_BATCHES_PER_TICK {
-        let (n, more) = batch(pass).await?;
-        passed += n;
-        if !more {
-            break;
-        }
-    }
+    let passed = super::drain(|| batch(pass)).await?;
     super::report_id_lag(&pass.pool, &READ).await;
     Ok(passed)
 }

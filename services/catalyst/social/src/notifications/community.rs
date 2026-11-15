@@ -13,12 +13,13 @@
 //! the request that caused it, as upstream's fire-and-forget broadcast.
 
 use std::collections::BTreeSet;
+use std::sync::LazyLock;
 
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::store::{NewNotification, insert_notifications};
+use super::store::{NewNotification, community_opt_out, insert_notifications};
 use crate::{Address, CommunityId};
 
 const COMMUNITY_NS: Uuid = Uuid::from_bytes([
@@ -54,6 +55,27 @@ pub struct CommunityEvent {
     pub metadata: Value,
 }
 
+/// One wallet, unless it opted out of community `$2`.
+static ONE_RECIPIENT_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "SELECT $1::text WHERE NOT EXISTS ({})",
+        community_opt_out("$1", "$2")
+    )
+});
+
+/// Community `$1`'s members in roles `$2` but `$3`, unless opted out of
+/// community `$4`.
+static MEMBER_RECIPIENTS_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "SELECT m.member_address FROM social.community_members m \
+         WHERE m.community_id = $1 AND m.role = ANY($2) \
+           AND m.member_address IS DISTINCT FROM lower($3) \
+           AND NOT EXISTS ({}) \
+         ORDER BY m.member_address",
+        community_opt_out("m.member_address", "$4")
+    )
+});
+
 async fn recipients(
     pool: &PgPool,
     community: CommunityId,
@@ -61,14 +83,11 @@ async fn recipients(
 ) -> sqlx::Result<Vec<String>> {
     let (roles, except): (&[&str], Option<&str>) = match audience {
         Audience::One(address) => {
-            return sqlx::query_scalar(
-                "SELECT $1::text WHERE NOT EXISTS (SELECT 1 FROM social.subscription_opt_outs \
-                 WHERE address = $1 AND scope = 'community' AND CASE WHEN pg_input_is_valid(scope_id,'uuid') THEN scope_id::uuid END = $2)",
-            )
-            .bind(address.as_str())
-            .bind(community)
-            .fetch_all(pool)
-            .await;
+            return sqlx::query_scalar(sqlx::AssertSqlSafe(ONE_RECIPIENT_SQL.as_str()))
+                .bind(address.as_str())
+                .bind(community)
+                .fetch_all(pool)
+                .await;
         }
         Audience::Members => (&["owner", "moderator", "member"], None),
         Audience::MembersButOwner => (&["moderator", "member"], None),
@@ -81,20 +100,13 @@ async fn recipients(
         }
     };
     let roles: Vec<&str> = roles.to_vec();
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT m.member_address FROM social.community_members m \
-         WHERE m.community_id = $1 AND m.role = ANY($2) \
-           AND m.member_address IS DISTINCT FROM lower($3) \
-           AND NOT EXISTS (SELECT 1 FROM social.subscription_opt_outs o \
-                           WHERE o.address = m.member_address AND o.scope = 'community' AND CASE WHEN pg_input_is_valid(o.scope_id,'uuid') THEN o.scope_id::uuid END = $4) \
-         ORDER BY m.member_address",
-    )
-    .bind(community)
-    .bind(&roles)
-    .bind(except)
-    .bind(community)
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(MEMBER_RECIPIENTS_SQL.as_str()))
+        .bind(community)
+        .bind(&roles)
+        .bind(except)
+        .bind(community)
+        .fetch_all(pool)
+        .await?;
     Ok(match audience {
         Audience::OnlineMembersExcept { online, .. } => rows
             .into_iter()

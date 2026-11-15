@@ -348,7 +348,7 @@ The monorepo is built and tested via `make`:
 
 | Command | Purpose |
 | --- | --- |
-| `make install` | `npm install` + install protobuf binary |
+| `make install` | Build the protocol and hashing packages, `pnpm install` from the frozen lockfile + install protobuf binary |
 | `make build` | Full build: tsc all packages, generate types from protocol buffers, run build spec |
 | `make test` | Jest test suite including snapshot/golden tests |
 | `make lint-fix` | ESLint + Prettier auto-fix |

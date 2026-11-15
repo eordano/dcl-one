@@ -7,6 +7,7 @@
 //! so a key upstream adds reaches the client; `feature_flags_local` overrides
 //! individual flags.
 
+use crate::shared::js::is_js_whitespace;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -110,9 +111,7 @@ impl Snapshot {
                 .map(|value| {
                     value
                         .to_lowercase()
-                        .trim_matches(|c: char| {
-                            c == '\u{feff}' || c != '\u{85}' && c.is_whitespace()
-                        })
+                        .trim_matches(is_js_whitespace)
                         .to_string()
                 })
                 .collect(),

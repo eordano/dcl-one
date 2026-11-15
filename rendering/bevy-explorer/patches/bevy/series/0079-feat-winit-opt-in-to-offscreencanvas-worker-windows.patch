@@ -1,0 +1,113 @@
+From 8a254a74d794f4d8031aa0ce362ab163736423d2
+Subject: feat(winit): opt in to OffscreenCanvas worker windows
+Origin: https://github.com/robtfm/bevy/commit/8a254a74d794f4d8031aa0ce362ab163736423d2
+Date: 2026-09-18T19:43:31+02:00
+
+Forward the disabled-by-default web-worker feature to winit. Adopt the page-owned canvas without querying a worker document or overwriting its parent sizing. Pin the companion winit implementation.
+
+The feature needs the `atomics` target feature (shared memory);
+bevy_winit fails the build otherwise.
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 62e906c0833ca53dec765294cbf06fc97906a63b..ac5f04a38f1832fe0662936b35578f6e5d2e0318 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -123,6 +123,7 @@ unsafe_op_in_unsafe_fn = "warn"
+ unused_qualifications = "warn"
+ 
+ [features]
++web-worker = ["bevy_internal/web-worker"]
+ default = [
+   "std",
+   "async_executor",
+@@ -4343,3 +4344,6 @@ name = "Extended Bindless Material"
+ description = "Demonstrates bindless `ExtendedMaterial`"
+ category = "Shaders"
+ wasm = false
++
++[patch.crates-io]
++winit = { git = "https://github.com/eordano/winit", rev = "54e1fbb990c1ccd8cf205127381617509979dcb9" }
+diff --git a/crates/bevy_internal/Cargo.toml b/crates/bevy_internal/Cargo.toml
+index 21495079b0de14975abe9c46eefe0017d072af0e..06a7c026ca42a2143e1d18978f342fb3f87c6618 100644
+--- a/crates/bevy_internal/Cargo.toml
++++ b/crates/bevy_internal/Cargo.toml
+@@ -10,6 +10,7 @@ keywords = ["game", "engine", "gamedev", "graphics", "bevy"]
+ categories = ["game-engines", "graphics", "gui", "rendering"]
+ 
+ [features]
++web-worker = ["bevy_winit/web-worker"]
+ trace = [
+   "bevy_app/trace",
+   "bevy_asset?/trace",
+diff --git a/crates/bevy_winit/Cargo.toml b/crates/bevy_winit/Cargo.toml
+index dc8de86163253c00943bb51be88dc2a23ab5559a..015ee58706613cd8163e431e21bc24c2fef633c5 100644
+--- a/crates/bevy_winit/Cargo.toml
++++ b/crates/bevy_winit/Cargo.toml
+@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
+ keywords = ["bevy"]
+ 
+ [features]
++web-worker = ["winit/web-worker"]
+ default = ["x11"]
+ trace = []
+ wayland = ["winit/wayland", "winit/wayland-csd-adwaita"]
+diff --git a/crates/bevy_winit/src/lib.rs b/crates/bevy_winit/src/lib.rs
+index 97943cc14a98d6874d5bcc2203a3525f3986261b..fb6d13c2dff19b478069f1009f6b0ea69f63f6bc 100644
+--- a/crates/bevy_winit/src/lib.rs
++++ b/crates/bevy_winit/src/lib.rs
+@@ -12,6 +12,9 @@
+ //! The app's [runner](bevy_app::App::runner) is set by `WinitPlugin` and handles the `winit` [`EventLoop`].
+ //! See `winit_runner` for details.
+ 
++#[cfg(all(target_arch = "wasm32", feature = "web-worker", not(target_feature = "atomics")))]
++compile_error!("the `web-worker` feature needs the `atomics` target feature (shared memory)");
++
+ extern crate alloc;
+ 
+ use bevy_derive::Deref;
+diff --git a/crates/bevy_winit/src/system.rs b/crates/bevy_winit/src/system.rs
+index f4ed1a59a3028ac14e54c9722e67ca4414fe0133..11658913c3905f652b0d72c1aca7c4139d5582c5 100644
+--- a/crates/bevy_winit/src/system.rs
++++ b/crates/bevy_winit/src/system.rs
+@@ -99,7 +99,11 @@ pub fn create_windows<F: QueryFilter + 'static>(
+ 
+         #[cfg(target_arch = "wasm32")]
+         {
+-            if window.fit_canvas_to_parent {
++            let fit_canvas_to_parent = window.fit_canvas_to_parent;
++            #[cfg(feature = "web-worker")]
++            let fit_canvas_to_parent =
++                fit_canvas_to_parent && !winit::platform::web::worker_attached();
++            if fit_canvas_to_parent {
+                 let canvas = winit_window
+                     .canvas()
+                     .expect("window.canvas() can only be called in main thread.");
+diff --git a/crates/bevy_winit/src/winit_windows.rs b/crates/bevy_winit/src/winit_windows.rs
+index 119da10fe1bb358827f5dd3dcf688cbbfc0b437d..e8dafb552239069efb5b360e25aa4f9b9b66aafb 100644
+--- a/crates/bevy_winit/src/winit_windows.rs
++++ b/crates/bevy_winit/src/winit_windows.rs
+@@ -256,7 +256,11 @@ impl WinitWindows {
+             use wasm_bindgen::JsCast;
+             use winit::platform::web::WindowAttributesExtWebSys;
+ 
+-            if let Some(selector) = &window.canvas {
++            #[cfg(feature = "web-worker")]
++            let selector = window.canvas.as_ref().filter(|_| !winit::platform::web::worker_attached());
++            #[cfg(not(feature = "web-worker"))]
++            let selector = window.canvas.as_ref();
++            if let Some(selector) = selector {
+                 let window = web_sys::window().unwrap();
+                 let document = window.document().unwrap();
+                 let canvas = document
+@@ -270,6 +274,11 @@ impl WinitWindows {
+                 }
+             }
+ 
++            #[cfg(feature = "web-worker")]
++            if window.fit_canvas_to_parent && winit::platform::web::worker_attached() {
++                winit_window_attributes.inner_size = None;
++            }
++
+             winit_window_attributes =
+                 winit_window_attributes.with_prevent_default(window.prevent_default_event_handling);
+             winit_window_attributes = winit_window_attributes.with_append(true);

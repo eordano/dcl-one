@@ -959,7 +959,13 @@ async fn a_started_room_carries_the_places_and_the_thumbnail() {
     // Every voice poll sweeps all tracked rooms of its database; fixtures that
     // poll the shared scratch database would clear this START's row between
     // its write and its generation check, so it publishes nothing.
-    let Some(database) = crate::rpc::tests::fanout::OwnedDatabase::new().await else {
+    let Some(database) = crate::rpc::tests::fanout::OwnedDatabase::new(
+        "fanout",
+        crate::db::scratch::Schema::Full,
+        8,
+    )
+    .await
+    else {
         return;
     };
     let rig = Rig::with_pool(
@@ -1034,5 +1040,5 @@ async fn a_started_room_carries_the_places_and_the_thumbnail() {
     assert_eq!(thumbnail, vec![image]);
     rig.clear_world_place(&world).await;
     rig.finish();
-    database.close().await;
+    database.drop().await;
 }

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:22+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 7ec469d2049e18331c6ee473b936fd39f0d1e401..aff8ff1dec21d11b55c5e348eac93de139b654f6 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -34,3 +34,6 @@ color-print = { version = "0.3" }
+ 
+ [workspace]
+ members = ["bevy_console_derive"]
++
++[lints.rust]
++warnings = "allow"
+diff --git a/bevy_console_derive/Cargo.toml b/bevy_console_derive/Cargo.toml
+index f3b9e595e47808a74c2a5cbb589142d9e71bc858..dac098e142df55b0ba39e20389a8bb3c1878441b 100644
+--- a/bevy_console_derive/Cargo.toml
++++ b/bevy_console_derive/Cargo.toml
+@@ -17,3 +17,6 @@ better-bae = "0.1.8"
+ proc-macro2 = "1.0"
+ quote = "1.0"
+ syn = "1.0"
++
++[lints.rust]
++warnings = "allow"

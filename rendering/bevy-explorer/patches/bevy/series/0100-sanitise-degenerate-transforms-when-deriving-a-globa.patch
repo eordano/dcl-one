@@ -1,0 +1,70 @@
+From fdfca192418deb8ff2d53e7e024d142657712353
+Subject: Sanitise degenerate transforms when deriving a GlobalTransform
+Origin: https://github.com/robtfm/bevy/commit/fdfca192418deb8ff2d53e7e024d142657712353
+Date: 2026-10-24T14:31:14+01:00
+
+A zero scale component makes the affine singular, and
+to_scale_rotation_translation then yields a NaN rotation. In the
+explorer that reached rapier colliders as NaN AABBs and crashed parry's
+BVH builder (Voltaire House, zero-thickness collider walls in a glTF).
+
+Build the affine for `From<Transform>` and `mul_transform` through
+`sanitized_affine`: zero scale components become f32::EPSILON and
+non-finite parts fall back to identity. Only the derived GlobalTransform
+is affected; the Transform keeps the exact values it was given, so
+scenes can read back what they wrote.
+---
+diff --git a/crates/bevy_transform/src/components/global_transform.rs b/crates/bevy_transform/src/components/global_transform.rs
+index f606071fe19a68e2f599a54dbef3ff30c603aa53..06500b07c8367bc4058e5579099625e2aa02c638 100644
+--- a/crates/bevy_transform/src/components/global_transform.rs
++++ b/crates/bevy_transform/src/components/global_transform.rs
+@@ -296,10 +296,39 @@ impl GlobalTransform {
+     /// resulting [`GlobalTransform`]
+     #[inline]
+     pub fn mul_transform(&self, transform: Transform) -> Self {
+-        Self(self.0 * transform.compute_affine())
++        Self(self.0 * sanitized_affine(&transform))
+     }
+ }
+ 
++/// The affine of a [`Transform`] with degenerate parts made safe: a zero scale component
++/// becomes `f32::EPSILON` (a zero makes the affine singular, and decomposing a singular affine
++/// yields NaN), and non-finite parts fall back to identity. Only the derived
++/// [`GlobalTransform`] is affected; the [`Transform`] itself keeps the exact values it was
++/// given so they can be read back.
++#[inline]
++fn sanitized_affine(transform: &Transform) -> Affine3A {
++    let scale = if transform.scale.is_finite() {
++        Vec3::select(
++            transform.scale.cmpeq(Vec3::ZERO),
++            Vec3::splat(f32::EPSILON),
++            transform.scale,
++        )
++    } else {
++        Vec3::ONE
++    };
++    let rotation = if transform.rotation.is_finite() {
++        transform.rotation
++    } else {
++        Quat::IDENTITY
++    };
++    let translation = if transform.translation.is_finite() {
++        transform.translation
++    } else {
++        Vec3::ZERO
++    };
++    Affine3A::from_scale_rotation_translation(scale, rotation, translation)
++}
++
+ impl Default for GlobalTransform {
+     fn default() -> Self {
+         Self::IDENTITY
+@@ -308,7 +337,7 @@ impl Default for GlobalTransform {
+ 
+ impl From<Transform> for GlobalTransform {
+     fn from(transform: Transform) -> Self {
+-        Self(transform.compute_affine())
++        Self(sanitized_affine(&transform))
+     }
+ }
+ 

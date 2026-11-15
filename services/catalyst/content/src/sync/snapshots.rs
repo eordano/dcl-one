@@ -45,6 +45,16 @@ const MAX_REPLACED_SNAPSHOT_HASHES: usize = 1000;
 /// How many invalid /snapshots entries are logged in detail per response before the rest
 /// collapse into one summary line -- the body is attacker-sized.
 const MAX_INVALID_SNAPSHOT_LOGS: usize = 5;
+/// Longest logged preview of an invalid snapshot entry, in bytes.
+const SNAPSHOT_PREVIEW_BYTES: usize = 512;
+
+/// The logged form of an invalid entry, cut on a character boundary at or
+/// below [`SNAPSHOT_PREVIEW_BYTES`].
+fn entry_preview(item: &serde_json::Value) -> String {
+    let mut preview = item.to_string();
+    preview.truncate(preview.floor_char_boundary(SNAPSHOT_PREVIEW_BYTES));
+    preview
+}
 
 static SPOOL_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -251,8 +261,7 @@ pub(crate) fn parse_snapshots_response(
             None => {
                 discarded += 1;
                 if discarded <= MAX_INVALID_SNAPSHOT_LOGS {
-                    let mut preview = item.to_string();
-                    preview.truncate(512);
+                    let preview = entry_preview(item);
                     warn!(server, entry = %preview, "Ignoring invalid snapshot metadata entry");
                 }
             }
@@ -1042,6 +1051,15 @@ mod tests {
     const GOOD_HASH: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
     const GOOD_HASH_2: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdH";
     const GOOD_HASH_3: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdJ";
+
+    #[test]
+    fn a_long_invalid_entry_preview_is_cut_on_a_character_boundary() {
+        // `"` takes byte 0, so every `é` starts on an odd byte and byte 512 falls inside one.
+        let item = serde_json::Value::String("é".repeat(400));
+        let preview = entry_preview(&item);
+        assert_eq!(preview, format!("\"{}", "é".repeat(255)));
+        assert_eq!(preview.len(), 511);
+    }
 
     fn entry(hash: &str, init: i64, end: i64) -> serde_json::Value {
         serde_json::json!({

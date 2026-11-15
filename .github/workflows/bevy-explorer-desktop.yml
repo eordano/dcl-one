@@ -46,12 +46,14 @@ jobs:
           toolchain: 1.99.1
       - name: Prepare the pinned native toolchain for caching
         run: python ../../../apps/bevy-explorer/prepare-native-cache.py
+      - name: Rebuild the patched sources
+        uses: ./.github/actions/bevy-explorer-sources
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: rendering/bevy-explorer/source -> target
           key: bevy-explorer-desktop-${{ matrix.build_name }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
-      - name: Restore the vendored Bevy's cached file times
+      - name: Restore the rebuilt Bevy tree's cached file times
         run: python "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" restore target
       - name: add darwin target
         if: runner.os == 'macos'
@@ -71,7 +73,8 @@ jobs:
       - name: Bundle react HUD (page + bridge scene -> assets/)
         run: |-
           cd react-web && npm ci
-          cd bridge-scene && npm ci && cd ..
+          cd bridge-scene && corepack pnpm@11.27.0 install --frozen-lockfile --ignore-scripts
+          corepack pnpm@11.27.0 --filter @dcl/hashing build && cd ..
           npm run bundle:native
         shell: bash
       - name: Install ninja (macos)
@@ -145,7 +148,7 @@ jobs:
       - name: Cargo build (linux)
         if: runner.os == 'linux'
         run: cargo build --release --locked --package dcl_deno_ipc && cargo build --release --locked
-      - name: Record the vendored Bevy's file times for the cache
+      - name: Record the rebuilt Bevy tree's file times for the cache
         run: python "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" record target
       - name: Package common
         run: |-
@@ -282,7 +285,7 @@ jobs:
   release:
     needs: build
     if: inputs.publish && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

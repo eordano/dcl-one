@@ -1,14 +1,19 @@
 {
   "versionGroups": [
     {
-      "packages": ["**"],
+      "packages": [
+        "**"
+      ],
       "dependencies": [
         "@dcl/ecs",
         "@dcl/js-runtime",
         "@dcl/playground-assets",
         "@dcl/sdk",
         "@dcl/sdk-commands",
-        "@dcl/react-ecs"
+        "@dcl/react-ecs",
+        "@dcl/hashing",
+        "@dcl/protocol",
+        "typescript"
       ],
       "isIgnored": true
     }

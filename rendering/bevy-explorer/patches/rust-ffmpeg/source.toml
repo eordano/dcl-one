@@ -1,0 +1,12 @@
+name       = "rust-ffmpeg"
+upstream   = "https://github.com/zmwangx/rust-ffmpeg"
+commit     = "c53730e7abe0e37d65d3f1e13dd8b28fd826a64c"
+ref        = "master"
+origin     = "https://github.com/robtfm/rust-ffmpeg"
+origin_rev = "140c74769d0ecceff78997542392afac95fe6ca3"
+license    = "WTFPL"
+paths      = ["."]
+exclude    = []
+base_tree  = "cc8e9fe1be3ed49b686ce8dcb226b540b95f06c1"
+tree       = "f3ac38881507cdf5a7f7a989428a497effd216bc"
+nix_hash   = "sha256-nYSBlqgeE+hU+3X9t0qUivSo/ZGiVHwcQ7Y1duNQvSc="

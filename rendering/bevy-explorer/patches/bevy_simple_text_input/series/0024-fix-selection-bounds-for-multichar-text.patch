@@ -1,0 +1,31 @@
+From a60012f1c52e963b426125cfd6996a8926b5c23d
+Subject: fix selection bounds for multichar text
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/a60012f1c52e963b426125cfd6996a8926b5c23d
+Date: 2025-12-12T12:03:22+00:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 52a6ecd9def292cc36624221557510ba009ae07f..b1a80c78069ec8bb9b2a3391a62bd9205f9c416a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -487,19 +487,7 @@ impl CosmicEditor {
+                         .map(|line| line.text().len() + 1)
+                         .sum();
+ 
+-                    let line_sum = lines
+-                        .next()
+-                        .map(|line| {
+-                            line.text()
+-                                .char_indices()
+-                                .enumerate()
+-                                .find(|(_, ci)| ci.0 == c.index)
+-                                .map(|(ix, _)| ix)
+-                                .unwrap_or(line.text().len())
+-                        })
+-                        .unwrap_or(0);
+-
+-                    prior_sum + line_sum
++                    prior_sum + c.index
+                 })
+             };
+ 

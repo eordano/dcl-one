@@ -1,0 +1,56 @@
+{
+  "repository": "https://github.com/decentraland/rpc-rust",
+  "revision": "cc6f792e91873f3aee65d19a5ed7e7f1352b73a1",
+  "branch": "feat/wasm-compat",
+  "package": "dcl-rpc",
+  "version": "2.3.7",
+  "path_in_vcs": "rpc",
+  "license": {
+    "spdx": "Apache-2.0",
+    "path": "LICENSE",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "normalization": "Exact file bytes of the pinned revision, written from Git objects without a checkout. Repository .gitattributes disables newline conversion for this subtree. upstream-files.sha256 lists every file of the revision, UTF-8 with LF lines and lexicographically sorted repository-relative paths. No Git metadata or Cargo cache marker is imported.",
+  "manifests": {
+    "upstream-files.sha256": "6cb2f9654403f6b5938bf301f0067032fe43a4014e30b6f559ec66a02f1b71a6"
+  },
+  "omitted": {
+    "reason": "The workspace root manifest, the two example members, the integration test of the rpc member, the readme, the CI workflows, the justfile and editor settings. The rpc member inherits nothing from the workspace root, and Cargo builds it from rpc/Cargo.toml, rpc/build.rs and rpc/src alone. Each path stays in upstream-files.sha256 with its upstream digest and must be absent here.",
+    "paths": [
+      ".github/workflows/publish.yml",
+      ".github/workflows/test.yml",
+      ".gitignore",
+      ".vscode/settings.json",
+      "Cargo.toml",
+      "README.md",
+      "examples/integration-multi-lang/Cargo.toml",
+      "examples/integration-multi-lang/README.md",
+      "examples/integration-multi-lang/api.proto",
+      "examples/integration-multi-lang/build.rs",
+      "examples/integration-multi-lang/rpc-client-ts/api.ts",
+      "examples/integration-multi-lang/rpc-client-ts/index.ts",
+      "examples/integration-multi-lang/rpc-client-ts/package.json",
+      "examples/integration-multi-lang/rpc-client-ts/tsconfig.json",
+      "examples/integration-multi-lang/src/lib.rs",
+      "examples/integration-multi-lang/src/main.rs",
+      "examples/integration-multi-lang/src/service/book_service.rs",
+      "examples/integration-multi-lang/src/service/mod.rs",
+      "examples/integration/Cargo.toml",
+      "examples/integration/README.md",
+      "examples/integration/build.rs",
+      "examples/integration/src/lib.rs",
+      "examples/integration/src/main.rs",
+      "examples/integration/src/service/book.proto",
+      "examples/integration/src/service/book_service.rs",
+      "examples/integration/src/service/mod.rs",
+      "justfile",
+      "rpc/tests/memory_transport.rs"
+    ]
+  },
+  "update_instructions": [
+    "Import an exact reviewed revision from Git objects (git archive or cat-file), without .git or .cargo-ok. Do not normalize imported files.",
+    "Regenerate upstream-files.sha256 from every file of the revision; record its digest, the revision, the package version and the licence digests here; revise the omitted paths.",
+    "Run python3 tooling/vendor-provenance.py rendering/bevy-explorer/vendor/rpc-rust.",
+    "Review the diff between the two revisions and the dependency list in Cargo.lock before updating the pin."
+  ]
+}

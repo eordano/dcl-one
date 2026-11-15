@@ -1,0 +1,37 @@
+{
+  "repository": "https://github.com/robtfm/bevy_dui",
+  "revision": "3a66d2583a205daf4fd07c9bcf92d7f3d7f04ca2",
+  "branch": "0.16",
+  "package": "bevy_dui",
+  "version": "0.1.0",
+  "license": {
+    "spdx": "MIT OR Apache-2.0",
+    "path": null,
+    "sha256": null,
+    "note": "The revision has no licence file. The package manifest declares the licence."
+  },
+  "normalization": "Exact file bytes of the pinned revision, written from Git objects without a checkout. Repository .gitattributes disables newline conversion for this subtree. upstream-files.sha256 lists every file of the revision, UTF-8 with LF lines and lexicographically sorted repository-relative paths. No Git metadata or Cargo cache marker is imported.",
+  "manifests": {
+    "upstream-files.sha256": "3cb07a0829902ee855254e975ea38d92a4c0a6ea829e1122c1e92efe1c1f0a04"
+  },
+  "omitted": {
+    "reason": "The examples, the assets only they load, the readme and .gitignore. Cargo builds the library from Cargo.toml and src alone. Each path stays in upstream-files.sha256 with its upstream digest and must be absent here.",
+    "paths": [
+      ".gitignore",
+      "assets/branding/bevy_logo_dark_big.png",
+      "assets/components/component-ui.dui",
+      "assets/components/simple-ui.dui",
+      "assets/fonts/FiraSans-Bold.ttf",
+      "assets/sheets/simple_ui.css",
+      "examples/component_ui.rs",
+      "examples/simple_ui.rs",
+      "readme.md"
+    ]
+  },
+  "update_instructions": [
+    "Import an exact reviewed revision from Git objects (git archive or cat-file), without .git or .cargo-ok. Do not normalize imported files.",
+    "Regenerate upstream-files.sha256 from every file of the revision; record its digest, the revision, the package version and the licence digests here; revise the omitted paths.",
+    "Run python3 tooling/vendor-provenance.py rendering/bevy-explorer/vendor/bevy_dui.",
+    "Review the diff between the two revisions and the dependency list in Cargo.lock before updating the pin."
+  ]
+}

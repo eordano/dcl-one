@@ -2,7 +2,8 @@
 //! points at and seeded with schema.sql, so the global sync state (the frontier, the
 //! cursors, resolve_deleter_deployments over the whole table) can be asserted without
 //! other tests in the way. Dropped on teardown; a test that panics leaves its
-//! `catalyst_test_*` database behind for the next `DROP DATABASE`.
+//! `catalyst_test_lib_<pid>_*` database behind until a later test process,
+//! finding that pid gone, drops it with its own scratch databases.
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use std::time::Duration;
@@ -14,6 +15,17 @@ pub struct ScratchDb {
 }
 
 pub async fn scratch_database() -> Option<ScratchDb> {
+    create(&format!("catalyst_test_lib_{}_db", std::process::id())).await
+}
+
+/// A scratch database outside the swept family, for a run that keeps it
+/// (`EXPLORE_PARITY_KEEP_DB`); a later run reuses it by name.
+#[allow(dead_code)]
+pub async fn kept_database() -> Option<ScratchDb> {
+    create("catalyst_kept").await
+}
+
+async fn create(prefix: &str) -> Option<ScratchDb> {
     let url = std::env::var("CATALYST_TEST_DATABASE_URL").ok()?;
     let base: PgConnectOptions = url
         .parse()
@@ -24,7 +36,10 @@ pub async fn scratch_database() -> Option<ScratchDb> {
         .connect_with(base.clone().database("postgres"))
         .await
         .unwrap_or_else(|e| panic!("connecting to disposable PostgreSQL: {e}"));
-    let name = format!("catalyst_test_{}", uuid::Uuid::new_v4().simple());
+    let name = format!(
+        "{prefix}_{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..12]
+    );
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
         .execute(&admin)
         .await

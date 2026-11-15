@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Authenticate the reviewed ENet import against public Git blobs; never check out code."""
+"""Authenticate the reviewed ENet import against public Git blobs; never check out code.
+
+The Explorer's in-tree crates are proved by tooling/vendor-provenance.py, which reads the fetch
+and the manifest reader from this file.
+"""
 import hashlib
 import json
 import os
@@ -120,7 +124,9 @@ def validate_workflow(workflow):
             "online provenance step missing/conditional/changed; retain explicit failure")
 
 
-def main():
+def main(arguments):
+    require(not arguments, "usage: enet-provenance.py (no arguments); "
+            "tooling/vendor-provenance.py proves the Explorer's in-tree crates")
     validate_workflow((ROOT / ".github/workflows/development.yml").read_text())
     pin = json.loads((SOURCE / "upstream.lock.json").read_text())
     manifest_bytes = (SOURCE / "upstream-files.sha256").read_bytes()
@@ -131,6 +137,6 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        main(sys.argv[1:])
     except (OSError, ValueError, KeyError) as error:
         sys.exit(f"ENet public provenance: {error}")

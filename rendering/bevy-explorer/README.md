@@ -73,13 +73,27 @@ serve; guest sessions work.
 
 ## Forks and drift
 
-`tooling/upstream-forks.py` writes `forks.toml` (git sources, locked revisions, crates; ahead/behind
-with `--check-upstream`) and `cargo-patches.toml` (`[patch.crates-io]` pins for
-`cargo --config rendering/bevy-explorer/cargo-patches.toml …`) from `source/Cargo.lock`;
-`--check` fails on drift, `--verify` resolves a lock copy. The daily
-`bevy-explorer-upstream.yml` runs it, opens the `upstream/forks` PR and uploads the drift page
-(`tooling/upstream-drift.py`, `tooling/upstream-drift-site.py`). Bevy is not among these forks:
-it is vendored at `bevy/` and changed in place ([the bevy fork](docs/guidelines/bevy-fork.md)).
+Bevy and 17 forked sources are tracked as an upstream commit and a patch series under
+`patches/<name>/` ([ADR](../../docs/adr/2026-11-14-explorer-sources-as-patches.md)).
+`python3 tooling/patched-sources.py materialise` writes the rebuilt trees at `bevy/` and
+`forks/<name>/`, which git ignores. Run it before any `cargo` command;
+[the bevy fork](docs/guidelines/bevy-fork.md#changing-bevy) has `export`, the options and the
+stale-tree check. `bevy_dui`, `boimp` and `rpc-rust` (package `dcl-rpc`) are exact upstream bytes
+under `vendor/`.
+
+Licences: each `patches/<name>/source.toml` records the licence of its source in `license`, and
+each crate under `vendor/` records its own in its `Cargo.toml`.
+
+The Nix build (`infra/packages/bevy-explorer.nix`, `nix build .#bevy-explorer`) makes one
+derivation per source: it fetches `commit` with the `nix_hash` of `source.toml`, then runs the
+same tool offline. `nix_hash` is the hash of a checkout of `commit` without submodules, and each
+`[[submodule]]` has its own. CI does not build the Nix package, so nothing there proves
+`nix_hash`: after a change of `commit`, run `nix build .#bevy-explorer.sources`, which fails with
+the hash to record.
+
+`python3 tooling/upstream-drift.py check` compares each source's pinned commit with its upstream
+ref. The daily `bevy-explorer-upstream.yml` runs it and uploads the drift page
+(`tooling/upstream-drift.py collect`, `tooling/upstream-drift-site.py`).
 
 ## Native builds and HUD updates
 

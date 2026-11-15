@@ -1,0 +1,17 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:24+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index aa82d173e5383ee776efb547273d26a31e7cbfb8..16d4e41cd6fd29c5e8f884b818eae2e56ba1bf47 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -8,6 +8,7 @@ members = [
+ resolver = "2"
+ 
+ [workspace.lints]
++rust.warnings = { level = "allow", priority = -1 }
+ rust.unexpected_cfgs = { level = "warn", check-cfg = [
+     'cfg(feature, values("dim2", "dim3", "f32", "f64"))',
+     # "wavefront" is only used for 3D crates.

@@ -17,7 +17,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::storage::OpenedContent;
-use dcl_auth::{hash_bytes_v1, is_canonical_cid};
+use dcl_auth::{hash_bytes_v1, is_canonical_cid, is_eth_address};
 
 use super::http::ApiError;
 use super::items::{CollectionMetaOut, CollectionMetaRow, ItemsComponent};
@@ -168,11 +168,11 @@ impl ItemDraft {
                 "Price must be an integer amount in MANA wei",
             ));
         }
-        if self.beneficiary.as_ref().is_some_and(|address| {
-            address.len() != 42
-                || !address.starts_with("0x")
-                || !address[2..].bytes().all(|b| b.is_ascii_hexdigit())
-        }) {
+        if self
+            .beneficiary
+            .as_ref()
+            .is_some_and(|address| !is_eth_address(address))
+        {
             return Err(ApiError::bad_request("Invalid beneficiary address"));
         }
         if self.rarity.as_deref().is_some_and(|rarity| {

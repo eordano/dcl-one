@@ -1,6 +1,8 @@
 .PHONY: buf-lint buf-build buf-breaking test all install list-components-ids check-component-id
 
 BIN="./node_modules/.bin"
+# The SDK installs this package with the same command and lockfile; a machine with pnpm on its PATH can pass PNPM=pnpm
+PNPM ?= corepack pnpm@11.27.0
 BUF_VERSION=1.8.0
 OS = $(shell uname -s)
 OS_ARCH = $(shell uname -m)
@@ -28,9 +30,11 @@ test: buf-lint
 all: buf-lint buf-build test
 
 install:
-	npm i
+	$(PNPM) install --frozen-lockfile --ignore-scripts
 	rm -rf proto/google || true
-	cp -r node_modules/protobufjs/google proto/google
+	# The well-known types come from the pinned protoc (config.protocVersion). The first protoc run installs it.
+	node_modules/.bin/protoc --version
+	cp -r node_modules/@protobuf-ts/protoc/installed/protoc-$$(node -p "require('./package.json').config.protocVersion")-*/include/google proto/google
 
 list-components-ids:
 	@bash scripts/list-components-ids.sh

@@ -451,7 +451,7 @@ async fn publish_statistics_with<F: Future<Output = bool>>(
         let Ok(previous) =
             shared
                 .statistics_sequence
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
         else {
             return;
         };

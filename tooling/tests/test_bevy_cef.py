@@ -1,5 +1,6 @@
 """The CI CEF install reads no build index, verifies its archive and keeps the export layout."""
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -7,8 +8,10 @@ from pathlib import Path
 import re
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('bevy_cef', ROOT / 'apps/bevy-explorer/install-cef.py')
@@ -36,6 +39,66 @@ BUILD_FILES = {'CMakeLists.txt': b'cmake', 'cmake/cef_variables.cmake': b'variab
 LINUX = {'Release/libcef.so': b'library', 'Release/v8_context_snapshot.bin': b'snapshot',
          'Resources/icudtl.dat': b'icu', 'Resources/locales/en-US.pak': b'locale', **BUILD_FILES}
 MACOS = {'Release/Chromium Embedded Framework.framework/Resources/icudtl.dat': b'icu', **BUILD_FILES}
+
+
+class Body(io.BytesIO):
+    """A response body; `length` is the Content-Length the server states."""
+
+    def __init__(self, data, length=None):
+        super().__init__(data)
+        self.headers = {} if length is None else {'Content-Length': str(length)}
+
+
+class CefDownloadTest(unittest.TestCase):
+    URL = 'https://example.invalid/cef.tar.bz2'
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.target = Path(temporary.name) / 'cef.tar.bz2'
+
+    def download(self, *responses):
+        with patch.object(cef.urllib.request, 'urlopen', side_effect=list(responses)) as fetch, \
+                patch.object(cef.time, 'sleep') as sleep, patch('builtins.print') as report:
+            try:
+                cef.download(self.URL, self.target)
+            finally:
+                self.calls = (fetch.call_count, sleep.call_count, report.call_count)
+
+    def test_a_body_cut_short_is_downloaded_again_from_its_start(self):
+        self.download(Body(b'archi', 7), Body(b'archive', 7))
+        self.assertEqual(self.target.read_bytes(), b'archive')
+        # One line names each failed try.
+        self.assertEqual(self.calls, (2, 1, 1))
+
+    def test_a_body_with_no_stated_length_is_kept(self):
+        self.download(Body(b'archive'))
+        self.assertEqual((self.target.read_bytes(), self.calls), (b'archive', (1, 0, 0)))
+
+    def test_failures_of_the_network_are_retried_and_a_missing_archive_is_not(self):
+        unavailable = urllib.error.HTTPError(self.URL, 503, 'unavailable', {}, None)
+        self.download(urllib.error.URLError('temporary'), unavailable, http.client.IncompleteRead(b'part'),
+                      Body(b'a longer body that fails', 99), Body(b'archive', 7))
+        self.assertEqual((self.target.read_bytes(), self.calls), (b'archive', (5, 4, 4)))
+        with self.assertRaises(urllib.error.HTTPError):
+            self.download(urllib.error.HTTPError(self.URL, 404, 'missing', {}, None), Body(b'archive', 7))
+        self.assertEqual(self.calls, (1, 0, 0))
+
+    def test_the_retries_end_with_the_budget(self):
+        clock = [0.0]
+        with patch.object(cef.urllib.request, 'urlopen', side_effect=urllib.error.URLError('unavailable')) as fetch, \
+                patch.object(cef.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(cef.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+                patch('builtins.print'), self.assertRaises(urllib.error.URLError):
+            cef.download(self.URL, self.target)
+        # Waits of 1, 2, 4, 8 and 16 s, eight of 30 s and the last 29 s: fourteen waits, fifteen tries.
+        self.assertEqual((clock[0], fetch.call_count), (cef.RETRY_BUDGET, 15))
+
+    def test_a_target_that_cannot_be_written_fails_with_no_request(self):
+        self.target = self.target.parent / 'missing' / 'cef.tar.bz2'
+        with self.assertRaises(FileNotFoundError):
+            self.download(Body(b'archive', 7))
+        self.assertEqual(self.calls, (0, 0, 0))
 
 
 class CefTest(unittest.TestCase):
@@ -91,6 +154,14 @@ class CefTest(unittest.TestCase):
                 self.assertEqual((self.destination / 'icudtl.dat').is_file(), system != 'Darwin')
         with self.assertRaises(KeyError):
             cef.install('Linux', 'riscv64', self.destination)
+
+    def test_a_python_with_no_extraction_filter_fails_before_the_download(self):
+        # A tarfile module with no extraction filter, as in a Python that predates it.
+        with patch.object(cef, 'tarfile', types.SimpleNamespace()), patch.object(cef, 'download') as download:
+            with self.assertRaisesRegex(RuntimeError, r'tarfile\.tar_filter.*Python 3\.12'):
+                cef.install('Linux', 'x86_64', self.destination)
+        download.assert_not_called()
+        self.assertFalse(self.destination.parent.exists() and any(self.destination.parent.iterdir()))
 
     def test_a_changed_archive_fails_and_keeps_the_installed_directory(self):
         self.install('Linux', 'x86_64', archive('linux64', LINUX))

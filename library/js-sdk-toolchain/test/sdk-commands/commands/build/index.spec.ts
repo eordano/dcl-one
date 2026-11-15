@@ -8,7 +8,7 @@ import {
   generateInitializeScriptsModule
 } from '../../../../packages/@dcl/sdk-commands/src/logic/bundle'
 import { createFsComponent } from '../../../../packages/@dcl/sdk-commands/src/components/fs'
-import esbuild from '../../../../packages/@dcl/sdk-commands/node_modules/esbuild'
+import esbuild from 'esbuild'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'

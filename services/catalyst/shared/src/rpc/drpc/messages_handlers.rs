@@ -546,16 +546,24 @@ impl<T: Transport + ?Sized + 'static> ClientMessagesHandler<T> {
     }
 }
 
+/// Identifies one stream message awaiting its acknowledge: port, message
+/// number and sequence id.
+type AckKey = (u32, u32, u32);
+
+fn ack_key(port: u32, message: u32, sequence: u32) -> AckKey {
+    (port, message, sequence)
+}
+
 /// Holds the per-message acknowledge listeners that pace stream sending.
 #[derive(Default)]
 pub struct StreamsHandler {
-    ack_listeners: std::sync::Mutex<HashMap<String, OneShotSender<Vec<u8>>>>,
+    ack_listeners: std::sync::Mutex<HashMap<AckKey, OneShotSender<Vec<u8>>>>,
 }
 
 // Synchronous short map lock makes cleanup cancellation-safe on every exit branch.
 struct AckReservation<'a> {
     handler: &'a StreamsHandler,
-    key: String,
+    key: AckKey,
 }
 impl Drop for AckReservation<'_> {
     fn drop(&mut self) {
@@ -597,7 +605,7 @@ impl StreamsHandler {
             .ack_listeners
             .lock()
             .unwrap()
-            .remove(&format!("{port}-{message}-{sequence}"))
+            .remove(&ack_key(port, message, sequence))
         {
             let _ = sender.send(bytes);
         }
@@ -759,9 +767,9 @@ impl StreamsHandler {
                 port_id,
                 payload: item.value,
             };
-            let key = format!("{port_id}-{message_number}-{candidate}");
+            let key = ack_key(port_id, message_number, candidate);
             let (tx, rx) = oneshot_channel();
-            self.ack_listeners.lock().unwrap().insert(key.clone(), tx);
+            self.ack_listeners.lock().unwrap().insert(key, tx);
             let _reservation = AckReservation { handler: self, key };
             let handed_off = std::sync::atomic::AtomicBool::new(false);
             let exchange = async {
@@ -881,10 +889,7 @@ impl StreamsHandler {
             let mut lock = self.ack_listeners.lock().unwrap();
             if lock
                 .insert(
-                    format!(
-                        "{}-{}-{}",
-                        message.port_id, message_number, message.sequence_id
-                    ),
+                    ack_key(message.port_id, message_number, message.sequence_id),
                     tx,
                 )
                 .is_some()
@@ -902,9 +907,10 @@ impl StreamsHandler {
             );
             {
                 let mut lock = self.ack_listeners.lock().unwrap();
-                lock.remove(&format!(
-                    "{}-{}-{}",
-                    message.port_id, message_number, message.sequence_id
+                lock.remove(&ack_key(
+                    message.port_id,
+                    message_number,
+                    message.sequence_id,
                 ));
             }
             if !matches!(error, TransportError::Closed) {
@@ -924,9 +930,10 @@ impl StreamsHandler {
                 Ok((_, _, stream_message)) => {
                     let listener = {
                         let mut lock = self.ack_listeners.lock().unwrap();
-                        lock.remove(&format!(
-                            "{}-{}-{}",
-                            stream_message.port_id, message_number, stream_message.sequence_id
+                        lock.remove(&ack_key(
+                            stream_message.port_id,
+                            message_number,
+                            stream_message.sequence_id,
                         ))
                     };
                     match listener {
@@ -969,5 +976,26 @@ async fn send_remote_error<T: Transport + ?Sized>(
         error!(
             "> send_remote_error > Error while sending the remote error through a transport > RemoteError: {remote_error:?} - Error: {err:?}"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ack_listeners_are_keyed_by_port_message_and_sequence() {
+        let handler = StreamsHandler::new();
+        let (first, mut first_rx) = oneshot_channel();
+        let (second, mut second_rx) = oneshot_channel();
+        {
+            let mut listeners = handler.ack_listeners.lock().unwrap();
+            listeners.insert(ack_key(1, 7, 1), first);
+            listeners.insert(ack_key(2, 7, 1), second);
+        }
+        handler.complete_test_ack(2, 7, 1, vec![2]);
+        assert_eq!(second_rx.try_recv().unwrap(), vec![2]);
+        assert!(first_rx.try_recv().is_err());
+        assert_eq!(handler.pending_ack_count(), 1);
     }
 }

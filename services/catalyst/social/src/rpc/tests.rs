@@ -1346,7 +1346,9 @@ async fn a_former_owner_cannot_start_or_end_voice_chat_in_a_deleted_community() 
 #[tokio::test]
 async fn community_voice_start_join_and_ban_semantics() {
     // Other fixtures' fake media pollers must not clear this room's generation.
-    let Some(database) = fanout::OwnedDatabase::new().await else {
+    let Some(database) =
+        fanout::OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = database.pool.clone();
@@ -1528,7 +1530,7 @@ async fn community_voice_start_join_and_ban_semantics() {
     );
 
     drop_community(&pool, community).await;
-    database.close().await;
+    database.drop().await;
 }
 
 struct Server {

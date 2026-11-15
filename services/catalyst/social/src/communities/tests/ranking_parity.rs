@@ -201,32 +201,16 @@ async fn local_event_ends_use_occurrence_receipts_local_attendees_and_the_tracki
 
 #[tokio::test]
 async fn ranking_upgrade_retains_nonempty_rows_and_starts_tracking_without_replaying_history() {
-    let Ok(base) = std::env::var("CATALYST_TEST_DATABASE_URL") else {
+    let Some(database) = crate::db::scratch::OwnedDatabase::new(
+        "ranking_upgrade",
+        crate::db::scratch::Schema::Blank,
+        2,
+    )
+    .await
+    else {
         return;
     };
-    let admin = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&base)
-        .await
-        .unwrap();
-    let database = format!(
-        "catalyst_test_ranking_upgrade_{}_{}",
-        std::process::id(),
-        Uuid::new_v4().simple()
-    );
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE DATABASE \"{database}\""
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
-    let mut url = url::Url::parse(&base).unwrap();
-    url.set_path(&format!("/{database}"));
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(2)
-        .connect(url.as_str())
-        .await
-        .unwrap();
+    let pool = database.pool.clone();
     sqlx::raw_sql("CREATE SCHEMA meta; CREATE TABLE meta.schema(id integer PRIMARY KEY,identity text NOT NULL,version integer NOT NULL,applied_at timestamp NOT NULL DEFAULT timezone('UTC',now()));
         CREATE SCHEMA social; CREATE SCHEMA camera_reel;
         CREATE TABLE social.communities(id uuid PRIMARY KEY, ranking_score real NOT NULL DEFAULT 0, retained jsonb NOT NULL);
@@ -302,10 +286,5 @@ async fn ranking_upgrade_retains_nonempty_rows_and_starts_tracking_without_repla
     );
     let index:String=sqlx::query_scalar("SELECT indexdef FROM pg_indexes WHERE schemaname='camera_reel' AND indexname='images_ranking_pending_idx'").fetch_one(&pool).await.unwrap();
     assert!(index.contains("WHERE (NOT ranking_published)"));
-    pool.close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE \"{database}\"")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
+    database.drop().await;
 }

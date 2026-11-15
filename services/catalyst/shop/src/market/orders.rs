@@ -180,20 +180,10 @@ pub(crate) fn parse_open_by_items(
     }
     let mut items = Vec::with_capacity(raw.len());
     for entry in &raw {
-        let Some((contract, item_id)) = entry.trim().split_once('-') else {
+        let Some(item) = super::wire::split_item_wire_id(entry) else {
             return Err(InvalidParameterError::new("item", entry.clone()));
         };
-        let contract = contract.to_ascii_lowercase();
-        let is_addr = contract
-            .strip_prefix("0x")
-            .is_some_and(|hex| hex.len() == 40 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
-        let is_item = !item_id.is_empty()
-            && item_id.len() <= 77
-            && item_id.bytes().all(|b| b.is_ascii_digit());
-        if !is_addr || !is_item {
-            return Err(InvalidParameterError::new("item", entry.clone()));
-        }
-        items.push((contract, item_id.to_string()));
+        items.push(item);
     }
     let per_contract = p
         .get_number("perContract", None)
@@ -739,6 +729,26 @@ mod tests {
             );
         }
         assert!(parse_open_by_items(&[]).is_err());
+        let max_id = alloy_primitives::U256::MAX.to_string();
+        let (items, _) = parse_open_by_items(&pairs(&[(
+            "item",
+            &format!("0x016A61FEB6377239E34425B82E5C4B367E52457F-{max_id}"),
+        )]))
+        .unwrap();
+        assert_eq!(
+            items,
+            vec![(
+                "0x016a61feb6377239e34425b82e5c4b367e52457f".to_string(),
+                max_id.clone()
+            )]
+        );
+        assert!(
+            parse_open_by_items(&pairs(&[(
+                "item",
+                &format!("0x016a61feb6377239e34425b82e5c4b367e52457f-{max_id}0"),
+            )]))
+            .is_err()
+        );
     }
 
     #[test]

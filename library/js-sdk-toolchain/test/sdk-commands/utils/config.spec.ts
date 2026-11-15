@@ -1,5 +1,5 @@
 import { isCI, getSdkCommandsVersion, getCatalystBaseUrl } from '../../../packages/@dcl/sdk-commands/src/logic/config'
-import { createRecordConfigComponent } from '../../../packages/@dcl/sdk-commands/node_modules/@well-known-components/env-config-provider/dist'
+import { createRecordConfigComponent } from '@well-known-components/env-config-provider/dist'
 import { requireStringConfig } from '../../../packages/@dcl/sdk-commands/src/components/config'
 
 afterEach(() => {

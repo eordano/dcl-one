@@ -156,7 +156,11 @@ async fn with_schema(schema: &str) -> Option<Old> {
         .connect_with(base.clone().database("postgres"))
         .await
         .unwrap();
-    let name = format!("catalyst_test_{}", uuid::Uuid::new_v4().simple());
+    let name = format!(
+        "catalyst_test_lib_{}_closure_{}",
+        std::process::id(),
+        &uuid::Uuid::new_v4().simple().to_string()[..12]
+    );
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
         .execute(&admin)
         .await

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:23+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index f713407493c15cab943754e05917c2ed968881e7..3e4a1cd204c639b815f5343871f03b4b73d44d9d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -76,3 +76,6 @@ required-features = ["default"]
+ name = "splitscreen"
+ path = "examples/splitscreen.rs"
+ required-features = ["default"]
++
++[lints.rust]
++warnings = "allow"
+diff --git a/macros/Cargo.toml b/macros/Cargo.toml
+index 71d1477a4b900a8a44978b4932fee018ed5eaaa2..77df476582743ef462a8fc5214cbc9c46583f13c 100644
+--- a/macros/Cargo.toml
++++ b/macros/Cargo.toml
+@@ -20,3 +20,6 @@ bevy_macro_utils = "0.16"
+ syn = "2.0"
+ proc-macro2 = "1.0"
+ quote = "1.0"
++
++[lints.rust]
++warnings = "allow"

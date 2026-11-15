@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::auth::is_eth_address;
 use crate::comms::world_identity::{Parcel, ParcelError, ParcelSet, WorldName};
 use crate::content::validation;
 use crate::policy::Permission;
@@ -76,9 +77,7 @@ fn parse_address(raw: &str) -> Result<Address, ApiError> {
 /// A path `:address`, as upstream's `EthAddress.validate`: exactly
 /// `^0x[a-fA-F0-9]{40}$` (no padding, no `0X`).
 fn parse_path_address(raw: &str) -> Result<Address, ApiError> {
-    let strict =
-        raw.len() == 42 && raw.starts_with("0x") && raw[2..].bytes().all(|b| b.is_ascii_hexdigit());
-    if !strict {
+    if !is_eth_address(raw) {
         return Err(ApiError::bad_request(format!("Invalid address: {raw}.")));
     }
     parse_address(raw)

@@ -1,0 +1,95 @@
+From 2fa8805e577c21d4e7131e3cfe19188f8c50db14
+Subject: add mouse to examples
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/2fa8805e577c21d4e7131e3cfe19188f8c50db14
+Date: 2025-07-22T10:53:24+01:00
+
+---
+diff --git a/examples/basic.rs b/examples/basic.rs
+index d56faebb473c6437c488f2d94d50651450e63ccf..e33f652c26ec79b35887f236e65901ae8fc7c7d2 100644
+--- a/examples/basic.rs
++++ b/examples/basic.rs
+@@ -2,8 +2,8 @@
+ 
+ use bevy::prelude::*;
+ use bevy_simple_text_input::{
+-    TextInput, TextInputPlugin, TextInputSubmitEvent, TextInputSystem, TextInputTextColor,
+-    TextInputTextFont,
++    TextInput, TextInputPlugin, TextInputPointerAction, TextInputPointerEvent,
++    TextInputSubmitEvent, TextInputSystem, TextInputTextColor, TextInputTextFont,
+ };
+ 
+ const BORDER_COLOR_ACTIVE: Color = Color::srgb(0.75, 0.52, 0.99);
+@@ -16,6 +16,7 @@ fn main() {
+         .add_plugins(TextInputPlugin)
+         .add_systems(Startup, setup)
+         .add_systems(Update, listener.after(TextInputSystem))
++        .add_systems(Update, send_mouse)
+         .run();
+ }
+ 
+@@ -58,3 +59,41 @@ fn listener(mut events: EventReader<TextInputSubmitEvent>) {
+         info!("{:?} submitted: {}", event.entity, event.value);
+     }
+ }
++
++fn send_mouse(
++    window: Query<&Window>,
++    button: Res<ButtonInput<MouseButton>>,
++    mut was_pressed: Local<bool>,
++    mut prev_pos: Local<Vec2>,
++    mut pointer: EventWriter<TextInputPointerEvent>,
++    interaction_check: Query<&Interaction, With<TextInput>>,
++) {
++    let just_pressed = button.just_pressed(MouseButton::Left);
++    let still_pressed = *was_pressed && button.pressed(MouseButton::Left);
++
++    let position = window
++        .single()
++        .unwrap()
++        .cursor_position()
++        .unwrap_or_default();
++
++    if just_pressed && interaction_check.single().unwrap() != &Interaction::None {
++        pointer.write(TextInputPointerEvent {
++            position,
++            action: TextInputPointerAction::Press,
++        });
++    } else if still_pressed && *prev_pos != position {
++        pointer.write(TextInputPointerEvent {
++            position,
++            action: TextInputPointerAction::Drag,
++        });
++    } else if *was_pressed && !still_pressed {
++        pointer.write(TextInputPointerEvent {
++            position,
++            action: TextInputPointerAction::Release,
++        });
++    }
++
++    *was_pressed = just_pressed || still_pressed;
++    *prev_pos = position;
++}
+diff --git a/examples/multiline.rs b/examples/multiline.rs
+index 6d303490267cff6f35b963a338f470ce6a863e16..20a9c0e69b0d9315f793560ebe02db4819173599 100644
+--- a/examples/multiline.rs
++++ b/examples/multiline.rs
+@@ -36,8 +36,8 @@ fn setup(mut commands: Commands) {
+         .with_children(|parent| {
+             parent.spawn((
+                 Node {
+-                        width: Val::Px(400.0),
+-                        height: Val::Px(200.0),
++                        width: Val::Px(800.0),
++                        height: Val::Px(400.0),
+                         border: UiRect::all(Val::Px(5.0)),
+                         padding: UiRect::all(Val::Px(5.0)),
+                         ..default()
+@@ -46,7 +46,7 @@ fn setup(mut commands: Commands) {
+                 BackgroundColor::from(BACKGROUND_COLOR),
+                 TextInput,
+                 TextInputTextFont(TextFont {
+-                    font_size: 40.,
++                    font_size: 20.,
+                     ..Default::default()
+                 }),
+                 TextInputTextColor(TextColor(TEXT_COLOR)),

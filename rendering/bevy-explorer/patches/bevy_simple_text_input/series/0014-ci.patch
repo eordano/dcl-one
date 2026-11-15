@@ -1,0 +1,20 @@
+From 3a824afa0c599e27807e2e27427ea7dbdfe662bf
+Subject: ci
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/3a824afa0c599e27807e2e27427ea7dbdfe662bf
+Date: 2025-07-15T13:01:25+01:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index c305a28e2baa5a1380dd6da4d8e75610a4efe538..59c8ddc85c6bf3a611a9461097f8925e1cbab137 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1143,7 +1143,8 @@ fn set_positions(
+         {
+             // println!("update");
+             let req_px = parent_size * 0.5 - cursor_position;
+-            let mut req_px = req_px.clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO);
++            let mut req_px =
++                req_px.clamp(parent_size - child_size - cursor_size * Vec2::X, Vec2::ZERO);
+             if settings.multiline {
+                 req_px.x = 0.0;
+             }

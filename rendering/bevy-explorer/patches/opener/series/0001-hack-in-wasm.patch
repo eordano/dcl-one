@@ -1,0 +1,78 @@
+From 462051236eb3882332930b1ecf0319e3505ae0a8
+Subject: hack in wasm
+Origin: https://github.com/robtfm/opener/commit/462051236eb3882332930b1ecf0319e3505ae0a8
+Date: 2025-06-03T16:56:22+01:00
+
+---
+diff --git a/opener/Cargo.toml b/opener/Cargo.toml
+index 992f2b656af1ef8fbe450479fd1aec158bc0e5d6..c172fe15c85ee624816746c94984f51e71940847 100644
+--- a/opener/Cargo.toml
++++ b/opener/Cargo.toml
+@@ -33,6 +33,10 @@ windows-sys = { version = "0.59", features = [
+     "Win32_UI_WindowsAndMessaging",
+ ] }
+ 
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++wasm-bindgen = "0.2"
++web-sys = { version = "0.3", features = [ "Window" ] }
++
+ [package.metadata.docs.rs]
+ all-features = true
+ rustdoc-args = ["--cfg", "docsrs"]
+diff --git a/opener/src/lib.rs b/opener/src/lib.rs
+index 972660c59a2afe36aae86f95ced3d78cb8ad276b..05f1450e15751a97dda7c4eb46402c91195f97d4 100644
+--- a/opener/src/lib.rs
++++ b/opener/src/lib.rs
+@@ -32,19 +32,23 @@
+ 
+ #[cfg(all(feature = "reveal", target_os = "linux"))]
+ mod freedesktop;
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_os = "macos", target_arch="wasm32")))]
+ mod linux_and_more;
+ #[cfg(target_os = "macos")]
+ mod macos;
+ #[cfg(target_os = "windows")]
+ mod windows;
++#[cfg(target_arch = "wasm32")]
++mod wasm;
+ 
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_os = "macos", target_arch = "wasm32")))]
+ use crate::linux_and_more as sys;
+ #[cfg(target_os = "macos")]
+ use crate::macos as sys;
+ #[cfg(target_os = "windows")]
+ use crate::windows as sys;
++#[cfg(target_arch = "wasm32")]
++use crate::wasm as sys;
+ 
+ use std::error::Error;
+ use std::ffi::{OsStr, OsString};
+@@ -240,7 +244,7 @@ fn wsl_to_windows_path(_path: &OsStr) -> Option<OsString> {
+     unreachable!()
+ }
+ 
+-#[cfg(not(target_os = "windows"))]
++#[cfg(not(any(target_os = "windows", target_arch="wasm32")))]
+ fn wait_child(child: &mut std::process::Child, cmd_name: &'static str) -> Result<(), OpenError> {
+     use std::io::Read;
+ 
+diff --git a/opener/src/wasm.rs b/opener/src/wasm.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..50cf9bcb5d66a9f09ea51290e6ffdc6346dfa57d
+--- /dev/null
++++ b/opener/src/wasm.rs
+@@ -0,0 +1,12 @@
++use crate::OpenError;
++use std::ffi::OsStr;
++use std::io;
++
++pub fn open(path: &OsStr) -> Result<(), OpenError> {
++    let url = path.to_string_lossy();
++    let window = web_sys::window().ok_or(OpenError::Io(io::Error::other("window not found")))?;
++    window
++        .open_with_url_and_target(&url, "_blank")
++        .map(|_| ())
++        .map_err(|e| OpenError::Io(io::Error::other(format!("{e:?}"))))
++}

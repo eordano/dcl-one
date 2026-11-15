@@ -17,6 +17,7 @@ pub mod errors;
 pub mod health;
 pub mod http_util;
 pub mod identity;
+pub mod js;
 pub mod livekit;
 pub mod nul_guard;
 pub mod openapi;

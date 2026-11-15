@@ -18,6 +18,9 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::store::{NewNotification, insert_notifications};
+use crate::identity::Address;
+
 pub const KIND: &str = "land_transfer_received";
 const PAGE_SIZE: i64 = 200;
 const POLL_SECS: u64 = 60;
@@ -49,9 +52,7 @@ struct TransferRow {
 }
 
 fn is_recipient(address: &str, registries: &Registries) -> bool {
-    address.len() == 42
-        && address.starts_with("0x")
-        && address[2..].bytes().all(|b| b.is_ascii_hexdigit())
+    crate::auth::is_eth_address(address)
         && address != crate::shared::identity::ZERO_ADDRESS
         && address != registries.land_registry
         && address != registries.estate_registry
@@ -129,31 +130,28 @@ pub async fn run_once(pool: &PgPool) -> anyhow::Result<u64> {
             break;
         };
         let (last_block, last_log) = (last.block_number, last.log_index);
-        for row in &rows {
-            let Some(recipient) = row
-                .account
-                .as_deref()
-                .filter(|a| is_recipient(a, &registries))
-            else {
-                continue;
-            };
-            let parcel = row.token_address == registries.land_registry;
-            let occurred_at = chrono::DateTime::from_timestamp(row.block_time, 0)
-                .unwrap_or_default()
-                .naive_utc();
-            let inserted = sqlx::query(
-                "INSERT INTO social.notifications (id, address, type, metadata, occurred_at, created_at) \
-                 VALUES ($1, $2, $3, $4, $5, timezone('UTC', now())) ON CONFLICT (id) DO NOTHING",
-            )
-            .bind(notification_id(row.block_number, row.log_index))
-            .bind(recipient)
-            .bind(KIND)
-            .bind(metadata(row, parcel))
-            .bind(occurred_at)
-            .execute(&mut *txn)
-            .await?;
-            emitted += inserted.rows_affected();
-        }
+        let batch: Vec<NewNotification> = rows
+            .iter()
+            .filter_map(|row| {
+                let recipient = row
+                    .account
+                    .as_deref()
+                    .filter(|a| is_recipient(a, &registries))?;
+                let parcel = row.token_address == registries.land_registry;
+                Some(NewNotification {
+                    id: notification_id(row.block_number, row.log_index),
+                    address: Address::parse(recipient).ok()?,
+                    kind: KIND.to_string(),
+                    metadata: metadata(row, parcel),
+                    occurred_at: chrono::DateTime::from_timestamp(row.block_time, 0)
+                        .unwrap_or_default()
+                        .naive_utc(),
+                })
+            })
+            .collect();
+        // With their delivery rows, in the cursor's transaction; a replayed
+        // page's ids conflict and insert nothing.
+        emitted += insert_notifications(&mut *txn, &batch).await?;
         sqlx::query("UPDATE social.land_transfer_cursor SET block_number = $1, log_index = $2, updated_at = timezone('UTC', now()) WHERE id = 1")
             .bind(last_block)
             .bind(last_log)
@@ -304,6 +302,28 @@ mod tests {
         assert_eq!(
             rows[1].0["description"],
             "Your wallet received Genesis estate #42."
+        );
+        // Every notification carries its delivery decision, as every other
+        // producer's does: this type has no email template.
+        let deliveries: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT d.state, d.last_error FROM social.notifications n \
+             LEFT JOIN social.notification_deliveries d ON d.notification_id = n.id AND d.channel = 'email' \
+             WHERE n.address = $1 AND n.type = $2",
+        )
+        .bind(&wallet)
+        .bind(KIND)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            deliveries,
+            vec![
+                (
+                    Some("skipped".to_string()),
+                    Some("no email template".to_string())
+                );
+                2
+            ]
         );
         let cursor: (i64, i32) =
             sqlx::query_as("SELECT block_number, log_index FROM social.land_transfer_cursor")

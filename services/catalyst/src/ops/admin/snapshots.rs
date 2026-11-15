@@ -80,55 +80,28 @@ pub async fn regenerate(session: AdminSession, State(state): State<SnapshotsStat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::SyncState;
     use crate::content::snapshot_gen::Settings as GenSettings;
-    use crate::content::{ContentState, Settings as ContentSettings, SyncState};
-    use crate::jobs::Jobs;
-    use crate::ops::admin::{RawSettings, Settings, State, session};
-    use crate::storage::Storage;
+    use crate::ops::admin::tests::{HOST, admin_state, lazy_pool, minted_cookie as cookie};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, header};
     use serde_json::Value;
     use tower::ServiceExt;
 
-    const HOST: &str = "realm.test";
     const ADMIN: &str = "0x00000000000000000000000000000000000000aa";
 
     async fn harness(
         writes_enabled: bool,
         generation: bool,
     ) -> (Router, SharedState, Option<Arc<SnapshotGenerator>>) {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .acquire_timeout(std::time::Duration::from_millis(500))
-            .connect_lazy("postgres://nobody@127.0.0.1:1/nowhere")
-            .unwrap();
-        let tmp = std::env::temp_dir().join(format!(
-            "catalyst-admin-snapshots-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        let storage = Arc::new(Storage::from_config(&tmp).await.unwrap());
-        let content = Arc::new(ContentState::new(
-            pool.clone(),
-            ContentSettings::for_tests(),
-            storage,
-        ));
-        let settings = Settings::parse(RawSettings {
-            session_secret: Some("test-secret-key-0123456789".to_string()),
-            admin_addresses: ADMIN.to_string(),
-            session_ttl_secs: 0,
-            cookie_insecure: true,
-            eth_network: "mainnet".to_string(),
-            writes_enabled,
+        let admin = Arc::new(admin_state(lazy_pool(), writes_enabled, ADMIN, None).await);
+        let generator = generation.then(|| {
+            SnapshotGenerator::new(
+                admin.content.clone(),
+                true,
+                GenSettings::from_hours(6).unwrap(),
+            )
         });
-        let admin = Arc::new(State::new(
-            pool,
-            settings,
-            content.clone(),
-            Arc::new(Jobs::new()),
-            None,
-        ));
-        let generator = generation
-            .then(|| SnapshotGenerator::new(content, true, GenSettings::from_hours(6).unwrap()));
         (router(admin.clone(), generator.clone()), admin, generator)
     }
 
@@ -150,13 +123,6 @@ mod tests {
         (
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
-    }
-
-    fn cookie(admin: &SharedState, wallet: &str) -> String {
-        format!(
-            "cat_admin={}",
-            session::mint(&admin.settings, wallet).unwrap()
         )
     }
 

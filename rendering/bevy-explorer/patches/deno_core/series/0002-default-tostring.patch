@@ -1,0 +1,46 @@
+From 9b59a4e33f4729799409c20f85a80764f1d447e5
+Subject: default toString
+Origin: https://github.com/robtfm/deno_core/commit/9b59a4e33f4729799409c20f85a80764f1d447e5
+Date: 2024-09-20T13:38:36+01:00
+
+---
+diff --git a/serde_v8/ser.rs b/serde_v8/ser.rs
+index dc07216647e486a5a84f38219a1f9936982baa9a..5c6a3f1e052bcb3961f658a20c27614e738a2079 100644
+--- a/serde_v8/ser.rs
++++ b/serde_v8/ser.rs
+@@ -1,6 +1,7 @@
+ // Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
+ use serde::ser;
+ use serde::ser::Serialize;
++use v8::PropertyAttribute;
+ 
+ use std::cell::RefCell;
+ use std::ops::DerefMut;
+@@ -194,6 +195,15 @@ impl<'a, 'b, 'c> ObjectSerializer<'a, 'b, 'c> {
+   }
+ }
+ 
++fn default_to_string(
++  scope: &mut v8::HandleScope,
++  _args: v8::FunctionCallbackArguments,
++  mut rv: v8::ReturnValue,
++) { 
++  let result = v8::String::new_from_utf8(scope, "[object]".as_bytes(), v8::NewStringType::Internalized).unwrap();
++  rv.set(result.into());
++}
++
+ impl<'a, 'b, 'c> ser::SerializeStruct for ObjectSerializer<'a, 'b, 'c> {
+   type Ok = JsValue<'a>;
+   type Error = Error;
+@@ -220,6 +230,11 @@ impl<'a, 'b, 'c> ser::SerializeStruct for ObjectSerializer<'a, 'b, 'c> {
+       &self.keys[..],
+       &self.values[..],
+     );
++
++    let name = v8::String::new_from_utf8(scope, "toString".as_bytes(), v8::NewStringType::Internalized).unwrap();
++    let func = v8::Function::new(scope, default_to_string).unwrap();
++    let _ = obj.define_own_property(scope, name.into(), func.into(), PropertyAttribute::NONE);
++
+     Ok(obj.into())
+   }
+ }

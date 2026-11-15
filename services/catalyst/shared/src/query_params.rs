@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use crate::js::is_js_whitespace;
+
 pub const MAX_PAGE_SIZE: u32 = 1000;
 
 pub const MAX_QUERY_PARAMS: usize = 2000;
@@ -182,12 +184,6 @@ pub fn js_parse_int(s: &str, hex_prefix: bool) -> Option<i64> {
 /// the slice).
 pub fn parse_int_js(s: &str) -> Option<i64> {
     js_parse_int(s, false)
-}
-
-/// JavaScript's `WhiteSpace` and `LineTerminator`, which `parseInt` skips:
-/// Unicode `White_Space` without U+0085, plus U+FEFF.
-fn is_js_whitespace(c: char) -> bool {
-    c == '\u{feff}' || (c != '\u{85}' && c.is_whitespace())
 }
 
 /// The `[start, end)` of JavaScript's `elements.slice(offset, offset +

@@ -1,5 +1,6 @@
 //! Worlds settings persistence on the shared pool.
 use super::*;
+use crate::index::content_file_hash;
 
 /// What a deployed scene expresses about its world's settings; a value out
 /// of policy is "not expressed" rather than a deployment failure.
@@ -60,17 +61,8 @@ pub(crate) fn scene_settings_from_entity(entity: &Value) -> DerivedSceneSettings
     let thumbnail_hash = display
         .and_then(|d| d.get("navmapThumbnail"))
         .and_then(|v| v.as_str())
-        .and_then(|file| {
-            entity
-                .get("content")
-                .and_then(|c| c.as_array())
-                .and_then(|arr| {
-                    arr.iter()
-                        .find(|c| c.get("file").and_then(|f| f.as_str()) == Some(file))
-                        .and_then(|c| c.get("hash").and_then(|h| h.as_str()))
-                        .map(str::to_string)
-                })
-        });
+        .and_then(|file| content_file_hash(entity, file))
+        .map(str::to_string);
 
     DerivedSceneSettings {
         spawn_coordinates,

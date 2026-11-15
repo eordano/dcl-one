@@ -1,4 +1,5 @@
 //! Full moderation snapshots over the existing moderator HTTP route.
+use crate::Address;
 use futures::StreamExt;
 use reqwest::header::{AUTHORIZATION, ETAG, HeaderValue, IF_NONE_MATCH};
 use serde::Deserialize;
@@ -131,14 +132,9 @@ impl Snapshot {
         self.data
             .into_iter()
             .map(|entry| {
-                let address = entry.banned_address.trim();
-                let hex = address
-                    .strip_prefix("0x")
-                    .or_else(|| address.strip_prefix("0X"));
-                if !hex.is_some_and(|v| v.len() == 40 && v.bytes().all(|b| b.is_ascii_hexdigit())) {
-                    anyhow::bail!("malformed banned wallet in snapshot");
-                }
-                Ok(address.to_ascii_lowercase())
+                Address::parse(&entry.banned_address)
+                    .map(Address::into_string)
+                    .map_err(|_| anyhow::anyhow!("malformed banned wallet in snapshot"))
             })
             .collect()
     }
@@ -191,6 +187,20 @@ mod tests {
         }
         assert!(config("http://gatekeeper.example/bans", None).is_err());
         assert!(config("https://secret@gatekeeper.example/bans", None).is_err());
+    }
+    #[test]
+    fn bans_snapshot_normalizes_case_prefix_and_whitespace() {
+        let body = serde_json::json!({"data":[
+            {"bannedAddress": " 0XAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"},
+            {"bannedAddress": WALLET},
+        ]});
+        assert_eq!(
+            serde_json::from_value::<Snapshot>(body)
+                .unwrap()
+                .addresses()
+                .unwrap(),
+            [WALLET, WALLET]
+        );
     }
     #[test]
     fn bans_snapshot_rejects_malformed_entries_atomically() {

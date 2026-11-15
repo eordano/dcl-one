@@ -98,11 +98,7 @@ fn gatekeeper_identifiers(
         });
     let invalid = if !canonical {
         Some(INVALID_GATEKEEPER_COMMUNITY_ID)
-    } else if target.is_some_and(|address| {
-        address.len() != 42
-            || !address.starts_with("0x")
-            || !address.as_bytes()[2..].iter().all(u8::is_ascii_hexdigit)
-    }) {
+    } else if target.is_some_and(|address| !crate::auth::is_eth_address(address)) {
         Some("Invalid Gatekeeper user address")
     } else {
         None

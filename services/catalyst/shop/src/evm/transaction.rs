@@ -28,6 +28,7 @@ use super::signer::DirectSigner;
 use super::transfer_shortfall;
 use super::upstream::UpstreamForwarder;
 use super::{QUOTA_WINDOW_SECS, Settings};
+use crate::types::is_hex_address;
 
 #[derive(Debug, Clone)]
 pub struct TransactionData {
@@ -879,13 +880,6 @@ pub fn is_paid_call(settings: &Settings, tx: &TransactionData) -> bool {
         return false;
     };
     abi::get_sale_price(&full_data, settings.collections_chain_id, kind).is_some()
-}
-
-pub fn is_hex_address(s: &str) -> bool {
-    match s.strip_prefix("0x") {
-        Some(rest) => rest.len() == 40 && rest.bytes().all(|b| b.is_ascii_hexdigit()),
-        None => false,
-    }
 }
 
 fn is_hex_data(s: &str) -> bool {

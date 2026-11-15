@@ -10,6 +10,7 @@ use chrono::NaiveDateTime;
 use serde::Serialize;
 use sqlx::Row;
 
+use crate::auth::is_eth_address;
 use crate::shared::identity::Address;
 use crate::shared::signed_fetch::SignedPath;
 
@@ -109,10 +110,6 @@ pub struct WalletStats {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub blocked_since: Option<String>,
-}
-
-fn is_eth_address(raw: &str) -> bool {
-    raw.len() == 42 && raw.starts_with("0x") && raw[2..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// GET /wallet/{wallet}/stats

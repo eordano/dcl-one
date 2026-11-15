@@ -1,0 +1,43 @@
+From f594988aaa0e89f0f9f22b5d6b982d788e885653
+Subject: Download the ffmpeg/BoringSSL-prefixed libwebrtc prebuilts
+Origin: https://github.com/robtfm/client-sdk-rust/commit/f594988aaa0e89f0f9f22b5d6b982d788e885653
+Date: 2026-10-25T00:53:05+01:00
+
+Upstream's webrtc-a545de4 prebuilts for macOS and Windows ship Chromium's
+ffmpeg and BoringSSL with unprefixed symbols (the LK_ prefixing added in
+livekit/rust-sdks#1534 is applied by build_linux.sh only). Linked
+statically into an executable that also links its own ffmpeg, those
+definitions win: ffmpeg loses its network protocols ("Protocol not found"
+on https sources) and decoders. The Linux archives also leave 229
+BoringSSL exports unprefixed.
+
+The webrtc-a545de4-prefixed release re-hosts upstream's six desktop
+archives unchanged except that the ffmpeg and BoringSSL symbol families
+are renamed with llvm-objcopy (webrtc_ prefix, remap-webrtc.sh attached
+to the release). WEBRTC_TAG changes too so the download cache directory
+does not alias the stock archive.
+
+(cherry picked from commit 1aff3eb093597161137078d0d094d073772e03f6)
+---
+diff --git a/webrtc-sys/build/src/lib.rs b/webrtc-sys/build/src/lib.rs
+index 4dc7d89a2a71959726eb0bf40af16045a8552878..473f78f16125e1f1e1c2b50ee2c857ae1b5e9729 100644
+--- a/webrtc-sys/build/src/lib.rs
++++ b/webrtc-sys/build/src/lib.rs
+@@ -28,7 +28,7 @@ use regex::Regex;
+ use reqwest::StatusCode;
+ 
+ pub const SCRATH_PATH: &str = "livekit_webrtc";
+-pub const WEBRTC_TAG: &str = "webrtc-a545de4";
++pub const WEBRTC_TAG: &str = "webrtc-a545de4-prefixed";
+ pub const IGNORE_DEFINES: [&str; 2] = ["CR_CLANG_REVISION", "CR_XCODE_VERSION"];
+ 
+ pub fn target_os() -> String {
+@@ -100,7 +100,7 @@ pub fn prebuilt_dir() -> path::PathBuf {
+ 
+ pub fn download_url() -> String {
+     format!(
+-        "https://github.com/livekit/rust-sdks/releases/download/{}/{}.zip",
++        "https://github.com/robtfm/client-sdk-rust/releases/download/{}/{}.zip",
+         WEBRTC_TAG,
+         format!("webrtc-{}", webrtc_triple())
+     )

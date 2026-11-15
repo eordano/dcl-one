@@ -1,0 +1,12 @@
+name       = "copypwasmta"
+upstream   = "https://github.com/alacritty/copypasta"
+commit     = "c429615bb13f9341676bdb23457a4360cfa9d9e3"
+ref        = "master"
+origin     = "https://github.com/robtfm/copypwasmta"
+origin_rev = "586bfd836b98aadc87ad4e30d65174ad4c9ac7a5"
+license    = "MIT OR Apache-2.0"
+paths      = ["."]
+exclude    = []
+base_tree  = "1d0090219efb3b4f5017b8bd1f9bf09c8dec48b7"
+tree       = "1c8bf66d0e975b409ec282c0b2ac11f5a741ef9c"
+nix_hash   = "sha256-h5vzCR10YtSKTP7L96Wr1MX5qjSFa2Y4M9l0pPICUew="

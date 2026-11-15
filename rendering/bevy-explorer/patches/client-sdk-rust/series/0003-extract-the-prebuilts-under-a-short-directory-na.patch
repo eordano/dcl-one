@@ -1,0 +1,34 @@
+From 6c55a77002c56bf19176a229dae734d9b8fb6156
+Subject: Extract the prebuilts under a short directory name
+Origin: https://github.com/robtfm/client-sdk-rust/commit/6c55a77002c56bf19176a229dae734d9b8fb6156
+Date: 2026-10-25T19:04:13+00:00
+
+The abseil headers inside the archive sit deep enough that, from a typical
+cargo target directory on Windows, the full release tag in the directory
+name put constexpr_parser.h at 263 characters, past MAX_PATH; cl.exe then
+reports it as missing. The release tag is unchanged; only the local
+directory is shortened.
+---
+diff --git a/webrtc-sys/build/src/lib.rs b/webrtc-sys/build/src/lib.rs
+index 473f78f16125e1f1e1c2b50ee2c857ae1b5e9729..75a5fe1bf998d489ecd9583ecfea6f0c3791c694 100644
+--- a/webrtc-sys/build/src/lib.rs
++++ b/webrtc-sys/build/src/lib.rs
+@@ -29,6 +29,9 @@ use reqwest::StatusCode;
+ 
+ pub const SCRATH_PATH: &str = "livekit_webrtc";
+ pub const WEBRTC_TAG: &str = "webrtc-a545de4-prefixed";
++/// Directory the prebuilts are extracted under: short, so the abseil headers below it
++/// stay inside the Windows MAX_PATH limit from a typical cargo target directory.
++const WEBRTC_DIR: &str = "a545de4p";
+ pub const IGNORE_DEFINES: [&str; 2] = ["CR_CLANG_REVISION", "CR_XCODE_VERSION"];
+ 
+ pub fn target_os() -> String {
+@@ -93,7 +96,7 @@ pub fn prebuilt_dir() -> path::PathBuf {
+     path::Path::new(&target_dir).join(format!(
+         "livekit/{}-{}/{}",
+         webrtc_triple(),
+-        WEBRTC_TAG,
++        WEBRTC_DIR,
+         webrtc_triple()
+     ))
+ }

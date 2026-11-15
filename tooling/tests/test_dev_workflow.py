@@ -28,8 +28,27 @@ def disk_steps():
     sources['social-voice-release'] = WORKFLOW.with_name('social-voice-release.yml').read_text()
     for name, body in sources.items():
         step = re.search(r"(?ms)^      - name: Reserve disk space for the Rust test build\n"
-                         r"        if: runner\.os == 'Linux'\n        run: \|\n(.*?)(?=^      - )", body)
+                         r"        if: runner\.os == 'Linux' && runner\.environment == 'github-hosted'\n        run: \|\n(.*?)(?=^      - )", body)
         found[name] = (textwrap.dedent(step.group(1)), body.index(step.group(0)) < body.index('uses: actions/checkout@'))
+    return found
+
+
+def runner_jobs(path):
+    """Each job of a workflow: its text, the variables its runner reads, whether it is privileged."""
+    text = path.read_text()
+    shared = re.search(r"(?ms)^permissions:(.*?)(?=^[\w']|\Z)", text)
+    body = re.search(r"(?ms)^jobs:\n(.*?)(?=^[\w']|\Z)", text)[1]
+    found = {}
+    for job in re.split(r'(?m)^(?=  [\w-]+:\s*(?:#.*)?\n)', body):
+        runners = re.findall(r'(?ms)^    runs-on:(.*?)(?=^    \S|\Z)', job)
+        if any('matrix.' in runner for runner in runners):
+            runners += re.findall(r'(?ms)^    strategy:(.*?)(?=^    \S|\Z)', job)
+        own = re.search(r'(?ms)^    permissions:(.*?)(?=^    \S|\Z)', job) or shared
+        privileged = (own is None or re.search(r':\s*write\b|write-all', own[1])
+                      or re.search(r'(?m)^    environment:', job)
+                      or re.search(r'secrets\.(?!GITHUB_TOKEN\b)\w', job))
+        names = [name for runner in runners for name in re.findall(r'\bvars\W*(\w*)', runner)]
+        found[job.split(':', 1)[0].strip()] = (job, names, bool(privileged))
     return found
 
 
@@ -59,7 +78,7 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         rust, smoke = jobs()['rust'], jobs()['smoke']
         for job in (rust, smoke):
             # Both platforms on main; PRs add macOS with the ci:macos label.
-            self.assertRegex(job, r'os: (\[ubuntu-26\.04, macos-26\]|.*"ubuntu-26\.04", "macos-26")')
+            self.assertRegex(job, r'os: (\[ubuntu-26\.04, macos-15\]|.*"ubuntu-26\.04", "macos-15")')
         # The shards cover every test executable: the matrix lists 1 to n and the script gets i/n.
         self.assertIn('        shard: [1, 2, 3]\n', rust)
         self.assertIn('      CATALYST_TEST_SHARD: ${{ matrix.shard }}/3\n', rust)
@@ -85,6 +104,27 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         self.assertIn('steps.rust-cache.outputs.cache-primary-key', saves[0])
         self.assertIn('bash tooling/dev-smoke.sh', smoke)
         self.assertIn('bash tooling/dev-test.sh e2e', smoke)
+
+    def test_no_privileged_job_takes_its_runner_from_a_variable(self):
+        # The RUNNER_* variables can name a fork's own runners. A job with a write permission, an
+        # environment or a secret names its hosted label instead, so its token and its secrets
+        # stay off those runners. A job with no permissions block counts as privileged: its
+        # token is the repository default or its caller's. The GPU scenarios job is the one
+        # exception, on its own switch. The jobs on the variables still supply what privileged
+        # jobs publish: docs/development.md, "CI runners", states what their runners must be.
+        found, unset = set(), set()
+        for path in sorted(WORKFLOW.parent.glob('*.y*ml')):
+            # A called workflow names each secret it reads, so the secret check finds it.
+            self.assertNotIn('secrets: inherit', path.read_text())
+            for name, (job, names, privileged) in runner_jobs(path).items():
+                if names and privileged:
+                    found.add(f'{path.name}:{name}')
+                # A job on a variable names the hosted label as the fallback of each variable.
+                for runner in re.findall(r'(?ms)^    runs-on:(.*?)(?=^    \S|\Z)', job):
+                    if len(re.findall(r'\bvars\.RUNNER_\w+', runner)) != len(re.findall(r"\bvars\.RUNNER_\w+ \|\| '[\w.-]+'", runner)):
+                        unset.add(f'{path.name}:{name}')
+        self.assertEqual(found, {'bevy-explorer-e2e.yml:scenarios'})
+        self.assertEqual(unset, set())
 
     def test_smoke_gives_unchanged_sources_the_snapshot_file_times(self):
         # Cargo decides by file time. The snapshot is of no use to Cargo unless the checkout's

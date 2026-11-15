@@ -241,7 +241,7 @@ impl Rig {
     }
 
     /// On `pool`, e.g. an owned database that no other fixture's voice poll
-    /// sweeps (`rpc::tests::fanout::OwnedDatabase`).
+    /// sweeps (`db::scratch::OwnedDatabase`).
     async fn with_pool(
         settings: Settings,
         explore: impl FnOnce(&PgPool) -> crate::explore::SharedState,

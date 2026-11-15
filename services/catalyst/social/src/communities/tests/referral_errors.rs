@@ -4,29 +4,13 @@ use super::*;
 
 #[tokio::test]
 async fn referral_and_privacy_errors_match_executed_source_handler_boundaries() {
-    let Ok(base) = std::env::var("CATALYST_TEST_DATABASE_URL") else {
+    let Some(database) =
+        crate::db::scratch::OwnedDatabase::new("errors", crate::db::scratch::Schema::Blank, 2)
+            .await
+    else {
         return;
     };
-    let options: sqlx::postgres::PgConnectOptions = base.parse().unwrap();
-    let admin = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect_with(options.clone().database("postgres"))
-        .await
-        .unwrap();
-    let database = format!(
-        "catalyst_test_lib_{}_errors_{}",
-        std::process::id(),
-        Uuid::new_v4().simple()
-    );
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(2)
-        .connect_with(options.database(&database))
-        .await
-        .unwrap();
+    let pool = database.pool.clone();
     // An owned database avoids changing shared relations or cache facts. The
     // views raise the same server error for actual SQLx route dependency reads.
     sqlx::raw_sql("CREATE SCHEMA social;
@@ -97,13 +81,6 @@ async fn referral_and_privacy_errors_match_executed_source_handler_boundaries() 
         );
         assert_eq!(body, case["response"]["body"], "{method} {path}");
     }
-    pool.close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE {database} WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
-    admin.close().await;
+    database.drop().await;
     let _ = std::fs::remove_dir_all(storage_dir);
 }

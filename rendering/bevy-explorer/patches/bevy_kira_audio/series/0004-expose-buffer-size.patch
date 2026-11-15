@@ -1,0 +1,58 @@
+From a399357a9d8b0a155727086a26ad75970886d52a
+Subject: expose buffer_size
+Origin: https://github.com/robtfm/bevy_kira_audio/commit/a399357a9d8b0a155727086a26ad75970886d52a
+Date: 2025-07-18T17:51:28+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 17c5ce4971a9fa4c3cbe80951feea3b7f893aaef..311d2c07450b54e257d166ace438a3cd9e5b1c88 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -28,6 +28,7 @@ bevy_math = { version = "0.16.0" }
+ anyhow = "1.0"
+ uuid = { version = "1", features = ["fast-rng"] }
+ kira = { version = "0.9.6", default-features = false, features = ["cpal"] }
++cpal = { version = "0.15.1" }
+ ron = { version = "0.8", optional = true }
+ serde = { version = "1.0", features = ["derive"], optional = true }
+ parking_lot = "0.12"
+diff --git a/src/backend_settings.rs b/src/backend_settings.rs
+index 3eb8b66e77350b51dd83c42c7127d440ed0a53ab..bbbf63756d637c6e705242807dd3943c91fe5806 100644
+--- a/src/backend_settings.rs
++++ b/src/backend_settings.rs
+@@ -1,6 +1,6 @@
+ use bevy::ecs::resource::Resource;
+ use bevy::utils::default;
+-use kira::manager::backend::DefaultBackend;
++use kira::manager::backend::{cpal::CpalBackendSettings, DefaultBackend};
+ use kira::manager::{AudioManagerSettings, Capacities};
+ 
+ /// This resource is used to configure the audio backend at creation
+@@ -18,6 +18,8 @@ pub struct AudioSettings {
+     pub command_capacity: usize,
+     /// The maximum number of sounds that can be playing at a time.
+     pub sound_capacity: u16,
++    /// buffer size override
++    pub buffer_size: Option<u32>,
+ }
+ 
+ impl Default for AudioSettings {
+@@ -25,6 +27,7 @@ impl Default for AudioSettings {
+         Self {
+             command_capacity: 128,
+             sound_capacity: 128,
++            buffer_size: None,
+         }
+     }
+ }
+@@ -37,6 +40,10 @@ impl From<AudioSettings> for AudioManagerSettings<DefaultBackend> {
+                 sound_capacity: settings.sound_capacity,
+                 ..default()
+             },
++            backend_settings: CpalBackendSettings {
++                buffer_size: settings.buffer_size.map(|sz| cpal::BufferSize::Fixed(sz)).unwrap_or(cpal::BufferSize::Default),
++                ..Default::default()
++            },
+             ..default()
+         }
+     }

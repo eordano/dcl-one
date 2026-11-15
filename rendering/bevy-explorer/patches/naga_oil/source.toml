@@ -1,0 +1,12 @@
+name       = "naga_oil"
+upstream   = "https://github.com/bevyengine/naga_oil"
+commit     = "6c7081ac0619386db8017ccef1fe2e476609c607"
+ref        = "0.17.1"
+origin     = "https://github.com/robtfm/naga_oil"
+origin_rev = "9007b2ffe3e8f509ffc9b1481f039de78cf31699"
+license    = "MIT OR Apache-2.0"
+paths      = ["."]
+exclude    = []
+base_tree  = "cb29c522dc7f2c072117bfcb6fe75202cf6e2882"
+tree       = "6a6abb91f193e6b5968c270f8c1f2be130b3f406"
+nix_hash   = "sha256-OxjwPrUZJtjOwVq4rhFPpuAzcSpZNHA7lOVVa6T6Uoo="

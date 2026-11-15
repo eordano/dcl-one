@@ -5,7 +5,7 @@
   "author": "DCL",
   "bugs": "https://github.com/decentraland/js-sdk-toolchain/issues",
   "dependencies": {
-    "@dcl/ecs": "file:../ecs",
+    "@dcl/ecs": "workspace:*",
     "react": "^18.2.0",
     "react-reconciler": "^0.29.0"
   },

@@ -7,6 +7,7 @@
 //! `/v1/events` is dcl-one's own and keeps the lenient parse with its extra
 //! `recurrent`, `with_recurrent_dates` and `allow_deleted` params.
 
+use crate::shared::js::{number_from_str, number_to_string};
 use axum::Json;
 use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::HeaderMap;
@@ -319,8 +320,8 @@ fn parse_filters(
     // getEventList.ts:240-248: `String(Number(query.estate_id))`, so `0042`
     // filters on `42`; a non-finite value is `[]`.
     let estate_id = match q.estate_id.as_deref() {
-        Some(e) if !e.is_empty() => match js_number(e) {
-            Some(n) if n.is_finite() => Some(js_number_string(n)),
+        Some(e) if !e.is_empty() => match number_from_str(e) {
+            n if n.is_finite() => Some(number_to_string(n)),
             _ => return Ok(None),
         },
         _ => None,
@@ -384,58 +385,6 @@ fn js_falsy(v: &Value) -> bool {
         Value::Number(n) => n.as_f64() == Some(0.0),
         Value::String(s) => s.is_empty(),
         _ => false,
-    }
-}
-
-/// JavaScript's `Number(string)` on a query value: trimmed, decimal with an
-/// optional exponent, `0x`/`0o`/`0b` integers, `Infinity`; anything else is
-/// `NaN` (`None`). An empty or blank string is `0`.
-fn js_number(s: &str) -> Option<f64> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Some(0.0);
-    }
-    let (sign, body) = match s.as_bytes()[0] {
-        b'-' => (-1.0, &s[1..]),
-        b'+' => (1.0, &s[1..]),
-        _ => (1.0, s),
-    };
-    if body == "Infinity" {
-        return Some(sign * f64::INFINITY);
-    }
-    let radix = match body.get(..2) {
-        Some("0x" | "0X") => Some(16),
-        Some("0o" | "0O") => Some(8),
-        Some("0b" | "0B") => Some(2),
-        _ => None,
-    };
-    if let Some(radix) = radix {
-        // No sign before a radix prefix in JS.
-        if sign < 0.0 || s.starts_with('+') {
-            return None;
-        }
-        return u64::from_str_radix(&body[2..], radix)
-            .ok()
-            .map(|n| n as f64);
-    }
-    let decimal = !body.starts_with(['+', '-'])
-        && body
-            .bytes()
-            .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'))
-        && body.bytes().any(|b| b.is_ascii_digit());
-    if !decimal {
-        return None;
-    }
-    body.parse::<f64>().ok().map(|n| sign * n)
-}
-
-/// `String(n)` for a finite number: integers without a fraction, the rest
-/// as Rust prints them (the same for the values a query carries).
-fn js_number_string(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e21 {
-        format!("{}", n as i128)
-    } else {
-        n.to_string()
     }
 }
 
@@ -1072,12 +1021,17 @@ mod tests {
             (" 7 ", "7"),
             ("-3", "-3"),
             ("-0", "0"),
+            ("\u{FEFF}5", "5"),
+            ("0xfffffffffffffffff", "295147905179352830000"),
+            ("1e21", "1e+21"),
+            ("0.000001", "0.000001"),
         ] {
             let f = filters_of(&[("estate_id", given)]).unwrap();
             assert_eq!(f.estate_id.as_deref(), Some(expected), "{given}");
         }
         for not_finite in [
-            "abc", "Infinity", "1e400", "+-1", "0x", "1_000", "nan", "inf",
+            "abc", "Infinity", "1e400", "+-1", "0x", "1_000", "nan", "inf", "0x+5", "-0x5",
+            "\u{85}5",
         ] {
             assert!(
                 filters_of(&[("estate_id", not_finite)]).is_none(),
@@ -1085,8 +1039,13 @@ mod tests {
             );
         }
         assert_eq!(filters_of(&[("estate_id", "")]).unwrap().estate_id, None);
-        assert_eq!(js_number_string(1e21), "1000000000000000000000");
-        assert_eq!(js_number("   "), Some(0.0));
+        assert_eq!(
+            filters_of(&[("estate_id", "   ")])
+                .unwrap()
+                .estate_id
+                .as_deref(),
+            Some("0")
+        );
     }
 
     /// `getEventList.ts:204-230`, `model.ts:168-179,242-249`: `position` wins

@@ -16,8 +16,8 @@
 //! `CATALYRST_RPC_ALLOW_PRIVATE_UPSTREAM` (a compose service name such as
 //! `http://geth:8545` has to stay reachable); then the pooled client sends
 //! as is and only the host's own stack, the reserved ranges and the cloud
-//! metadata endpoint are refused (`admin::blocks_local_upstream_only`), the
-//! old opt-in's exact rule. The old vhost answered at `rpc.<domain>/`; the
+//! metadata endpoint are refused (`admin::blocks_local_upstream_only`), with
+//! the host read the way the HTTP client reads it. The old vhost answered at `rpc.<domain>/`; the
 //! router is mounted under `/rpc` and its `GET /` lists the configured
 //! networks the way the old nginx `= /` location did.
 

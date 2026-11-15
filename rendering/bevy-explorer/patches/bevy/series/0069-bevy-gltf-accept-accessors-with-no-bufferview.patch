@@ -1,0 +1,58 @@
+From 16b085d52ec448adf4d16aca25361e2ce78b88f2
+Subject: bevy_gltf: accept accessors with no bufferView
+Origin: https://github.com/robtfm/bevy/commit/16b085d52ec448adf4d16aca25361e2ce78b88f2
+Date: 2026-07-14T12:29:28+01:00
+
+The glTF 2.0 spec allows an accessor to omit both bufferView and
+sparse: it is zero-filled, and sparse data may overlay a missing base
+view. Blender exports morph targets this way (all-zero displacement
+targets alongside sparse ones). The gltf crate's validation rejects
+these files outright (accessors[N].bufferView: Missing data) even
+though its accessor readers already yield zeros for them.
+
+When parsing fails and every reported error is a Missing bufferView on
+an accessor, retry without validation. Draco-compressed accessors also
+legitimately lack bufferViews but their data lives in an undecodable
+extension blob, so keep returning the original error when the document
+declares KHR_draco_mesh_compression rather than silently loading empty
+meshes.
+---
+diff --git a/crates/bevy_gltf/src/loader/mod.rs b/crates/bevy_gltf/src/loader/mod.rs
+index 3782672d4dab51b814de1e5b9bdecf29c8f7dcac..d591c5330023f0c35df356ec9a442f55dad33105 100644
+--- a/crates/bevy_gltf/src/loader/mod.rs
++++ b/crates/bevy_gltf/src/loader/mod.rs
+@@ -225,7 +225,33 @@ async fn load_gltf<'a, 'b, 'c>(
+     load_context: &'b mut LoadContext<'c>,
+     settings: &'b GltfLoaderSettings,
+ ) -> Result<Gltf, GltfError> {
+-    let gltf = gltf::Gltf::from_slice(bytes)?;
++    let gltf = match gltf::Gltf::from_slice(bytes) {
++        Ok(gltf) => gltf,
++        // the gltf crate requires every non-sparse accessor to have a bufferView, but the
++        // spec allows both to be omitted (the accessor is zero-filled, optionally overlaid
++        // with sparse data - blender exports morph targets like this). the accessor readers
++        // already yield zeros in that case, so retry without validation when that is the
++        // only kind of error reported. draco-compressed accessors also lack bufferViews but
++        // their data is not readable, so keep failing for those.
++        Err(gltf::Error::Validation(errors))
++            if errors.iter().all(|(path, error)| {
++                matches!(error, gltf::json::validation::Error::Missing)
++                    && path.0.starts_with("accessors[")
++                    && path.0.ends_with(".bufferView")
++            }) =>
++        {
++            let gltf = gltf::Gltf::from_slice_without_validation(bytes)?;
++            if gltf
++                .document
++                .extensions_used()
++                .any(|ext| ext == "KHR_draco_mesh_compression")
++            {
++                return Err(GltfError::Gltf(gltf::Error::Validation(errors)));
++            }
++            gltf
++        }
++        Err(e) => return Err(e.into()),
++    };
+ 
+     let file_name = load_context
+         .asset_path()

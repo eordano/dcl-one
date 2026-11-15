@@ -13,6 +13,8 @@ on:
       - tooling/bevy-ci.py
       - tooling/ci_paths.py
       - tooling/bevy-mtimes.py
+      - tooling/patched-sources.py
+      - .github/actions/bevy-explorer-sources/**
       - tooling/tests/test_bevy_*.py
       - .github/workflows/bevy-explorer-scenes.yml
   workflow_dispatch:
@@ -35,7 +37,7 @@ jobs:
     # Dispatch main explicitly so its caches
     # are accessible and the actual tested revision belongs to main.
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       actions: write
@@ -47,7 +49,7 @@ jobs:
         run: gh api --method POST "repos/$GH_REPO/actions/workflows/bevy-explorer-scenes.yml/dispatches" -f ref=main
   changes:
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 10
     outputs:
       scenes: ${{ steps.plan.outputs.scenes }}
@@ -66,13 +68,13 @@ jobs:
     needs:
       - changes
     if: ${{ needs.changes.outputs.scenes == 'true' && github.actor != 'dependabot[bot]' }}
-    runs-on: ubuntu-22.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86_UBUNTU_24_04 || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.changes.outputs.sha }}
       - name: Reserve disk space on the hosted Linux runner
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         working-directory: .
         run: |-
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
@@ -82,6 +84,8 @@ jobs:
           toolchain: 1.99.1
       - name: Prepare the pinned native toolchain for caching
         run: python ../../../apps/bevy-explorer/prepare-native-cache.py
+      - name: Rebuild the patched sources
+        uses: ./.github/actions/bevy-explorer-sources
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
@@ -89,7 +93,7 @@ jobs:
           cache-on-failure: true
           workspaces: rendering/bevy-explorer/source -> target
           key: bevy-explorer-native
-      - name: Restore the vendored Bevy's cached file times
+      - name: Restore the rebuilt Bevy tree's cached file times
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" restore target
       - name: Install protoc
         run: python ../../../apps/bevy-explorer/install-protoc.py
@@ -108,12 +112,12 @@ jobs:
           echo "CEF_PATH=$HOME/.local/share/cef" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$HOME/.local/share/cef:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
       - name: install xvfb, llvmpipe and lavapipe
-        run: sudo apt install -y xvfb libegl1-mesa libgl1-mesa-dri libxcb-xfixes0-dev mesa-vulkan-drivers
+        run: sudo apt install -y xvfb libegl1 libgl1-mesa-dri libxcb-xfixes0-dev mesa-vulkan-drivers
       - name: Build the graphical test engine and scene runtime sidecar
         # Cargo unifies the engine and sidecar features here, including dcl_deno/inspect.
         # Desktop and Headless packaging build their sidecars in separate invocations.
         run: cargo build --release --locked --timings -p decentra-bevy -p dcl_deno_ipc --bin decentra-bevy --bin dcl_deno_ipc
-      - name: Record the vendored Bevy's file times for the cache
+      - name: Record the rebuilt Bevy tree's file times for the cache
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" record target
       - name: Configure virtual audio for graphical tests
         run: |

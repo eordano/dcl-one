@@ -1,0 +1,123 @@
+From 0aa91e1a2985965615a093db0692bc9923a14494
+Subject: fix dropped sampler for downsized images
+Origin: https://github.com/robtfm/bevy/commit/0aa91e1a2985965615a093db0692bc9923a14494
+Date: 2025-11-19T14:16:57Z
+
+---
+diff --git a/crates/bevy_gltf/src/loader/mod.rs b/crates/bevy_gltf/src/loader/mod.rs
+index feb53564cfa1eea8dd947ab1b5a9f64d9fa490d9..ca6a73425da1a8804f6ad5a686faa4d98ac023f5 100644
+--- a/crates/bevy_gltf/src/loader/mod.rs
++++ b/crates/bevy_gltf/src/loader/mod.rs
+@@ -1019,6 +1019,15 @@ fn load_image<'a, 'b>(
+                 let asset_usage = image.asset_usage;
+                 let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
+ 
++                let empty_image = Image {
++                    data: None,
++                    texture_descriptor: image.texture_descriptor.clone(),
++                    sampler: image.sampler.clone(),
++                    texture_view_descriptor: image.texture_view_descriptor.clone(),
++                    asset_usage: image.asset_usage,
++                    immediate_upload: image.immediate_upload,
++                };
++
+                 match image.try_into_dynamic() {
+                     Ok(dyn_image) => {
+                         let dyn_image = dyn_image.resize(
+@@ -1026,7 +1035,16 @@ fn load_image<'a, 'b>(
+                             1024 * 4 / pixel_size,
+                             image::imageops::FilterType::CatmullRom,
+                         );
+-                        Image::from_dynamic(dyn_image, is_srgb, asset_usage)
++                        let resized_image = Image::from_dynamic(dyn_image, is_srgb, asset_usage);
++                        let mut texture_descriptor = resized_image.texture_descriptor;
++                        texture_descriptor.usage = empty_image.texture_descriptor.usage;
++                        texture_descriptor.view_formats =
++                            empty_image.texture_descriptor.view_formats;
++                        Image {
++                            data: resized_image.data,
++                            texture_descriptor,
++                            ..empty_image
++                        }
+                     }
+                     Err(e) => {
+                         let image = e.image();
+@@ -1095,11 +1113,20 @@ fn load_image<'a, 'b>(
+                 #[cfg(feature = "reduce_image_sizes")]
+                 let image = if image.data.as_ref().unwrap().len() > 1024 * 1024 * 4 {
+                     use bevy_image::TextureFormatPixelInfo;
+-                    
++
+                     let is_srgb = image.texture_descriptor.format.is_srgb();
+                     let asset_usage = image.asset_usage;
+                     let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
+ 
++                    let empty_image = Image {
++                        data: None,
++                        texture_descriptor: image.texture_descriptor.clone(),
++                        sampler: image.sampler.clone(),
++                        texture_view_descriptor: image.texture_view_descriptor.clone(),
++                        asset_usage: image.asset_usage,
++                        immediate_upload: image.immediate_upload,
++                    };
++
+                     match image.try_into_dynamic() {
+                         Ok(dyn_image) => {
+                             let dyn_image = dyn_image.resize(
+@@ -1107,7 +1134,17 @@ fn load_image<'a, 'b>(
+                                 1024 * 4 / pixel_size,
+                                 image::imageops::FilterType::CatmullRom,
+                             );
+-                            Image::from_dynamic(dyn_image, is_srgb, asset_usage)
++                            let resized_image =
++                                Image::from_dynamic(dyn_image, is_srgb, asset_usage);
++                            let mut texture_descriptor = resized_image.texture_descriptor;
++                            texture_descriptor.usage = empty_image.texture_descriptor.usage;
++                            texture_descriptor.view_formats =
++                                empty_image.texture_descriptor.view_formats;
++                            Image {
++                                data: resized_image.data,
++                                texture_descriptor,
++                                ..empty_image
++                            }
+                         }
+                         Err(e) => {
+                             let image = e.image();
+diff --git a/crates/bevy_image/src/image_loader.rs b/crates/bevy_image/src/image_loader.rs
+index a6ca903d2c8419d9ca38542f77c247243d67513a..71dd2b35b46a446a1b9e8208d3219c07f1e743c9 100644
+--- a/crates/bevy_image/src/image_loader.rs
++++ b/crates/bevy_image/src/image_loader.rs
+@@ -197,14 +197,32 @@ impl AssetLoader for ImageLoader {
+             let asset_usage = image.asset_usage;
+             let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
+ 
++            let empty_image = Image {
++                data: None,
++                texture_descriptor: image.texture_descriptor.clone(),
++                sampler: image.sampler.clone(),
++                texture_view_descriptor: image.texture_view_descriptor.clone(),
++                asset_usage: image.asset_usage,
++                immediate_upload: image.immediate_upload,
++            };
++
+             match image.try_into_dynamic() {
+                 Ok(dyn_image) => {
++
+                     let dyn_image = dyn_image.resize(
+                         1024 * 4 / pixel_size,
+                         1024 * 4 / pixel_size,
+                         image::imageops::FilterType::CatmullRom,
+                     );
+-                    Image::from_dynamic(dyn_image, is_srgb, asset_usage)
++                    let resized_image = Image::from_dynamic(dyn_image, is_srgb, asset_usage);
++                    let mut texture_descriptor = resized_image.texture_descriptor;
++                    texture_descriptor.usage = empty_image.texture_descriptor.usage;
++                    texture_descriptor.view_formats = empty_image.texture_descriptor.view_formats;
++                    Image {
++                        data: resized_image.data,
++                        texture_descriptor,
++                        ..empty_image
++                    }
+                 }
+                 Err(e) => {
+                     let image = e.image();

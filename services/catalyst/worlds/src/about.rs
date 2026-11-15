@@ -9,6 +9,7 @@ use super::SharedState;
 use super::queries::{self, WorldScene};
 use crate::core::http::ApiError;
 use crate::core::settings_policy::js_truthy;
+use crate::index::content_file_hash;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -384,14 +385,8 @@ impl RuntimeMeta {
             .and_then(Value::as_number)
             .cloned();
 
-        let content = scene.entity.get("content").and_then(Value::as_array);
         let resolve = |filename: &str| -> Option<String> {
-            content.and_then(|arr| {
-                arr.iter()
-                    .find(|c| c.get("file").and_then(Value::as_str) == Some(filename))
-                    .and_then(|c| c.get("hash").and_then(Value::as_str))
-                    .map(str::to_string)
-            })
+            content_file_hash(&scene.entity, filename).map(str::to_string)
         };
         let minimap_data_image = mini_map
             .and_then(|m| m.get("dataImage"))

@@ -186,7 +186,7 @@ fn scene_summary(scene: &WorldScene, base_url: &str, now_ms: i64) -> IndexSceneS
     let thumbnail = display
         .and_then(|d| d.get("navmapThumbnail"))
         .and_then(Value::as_str)
-        .and_then(|file| resolve_content(&scene.entity, file))
+        .and_then(|file| content_file_hash(&scene.entity, file))
         .map(|hash| format!("{base_url}/contents/{hash}"));
     let timestamp = crate::core::store::entity_timestamp_ms(&scene.entity)
         .filter(|&t| t != 0)
@@ -208,14 +208,16 @@ fn scene_summary(scene: &WorldScene, base_url: &str, now_ms: i64) -> IndexSceneS
     }
 }
 
-fn resolve_content(entity: &Value, file: &str) -> Option<String> {
+/// The hash of the entity's content file named `file`: the first content
+/// entry with that name, as `entity.content.find(c => c.file === file).hash`.
+pub(crate) fn content_file_hash<'a>(entity: &'a Value, file: &str) -> Option<&'a str> {
     entity
         .get("content")?
         .as_array()?
         .iter()
-        .find(|c| c.get("file").and_then(Value::as_str) == Some(file))
-        .and_then(|c| c.get("hash").and_then(Value::as_str))
-        .map(str::to_string)
+        .find(|c| c.get("file").and_then(Value::as_str) == Some(file))?
+        .get("hash")?
+        .as_str()
 }
 
 #[cfg(test)]

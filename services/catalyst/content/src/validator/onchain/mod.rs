@@ -211,16 +211,6 @@ pub fn timestamp_bounds(timestamp_ms: i64) -> (i64, i64) {
     (upper, (upper - 60 * 5 - 7).max(0))
 }
 
-/// Whether a JSON-RPC error is the call's own revert (geth's code 3, the
-/// "execution reverted" of hosted providers, Nethermind's "VM execution error").
-fn is_revert(e: &RpcError) -> bool {
-    matches!(e, RpcError::Response { code, message }
-    if *code == 3 || {
-        let m = message.to_ascii_lowercase();
-        m.contains("revert") || m.contains("vm execution error")
-    })
-}
-
 fn query_failed(what: &str, e: impl std::fmt::Display) -> ValidatorError {
     ValidatorError::BlockchainQuery(format!("{what}: {e}"))
 }
@@ -310,7 +300,7 @@ impl Chain {
             Ok(hex) => hex::decode(hex.trim_start_matches("0x"))
                 .map(Some)
                 .map_err(|e| query_failed(&format!("{} eth_call", self.name), e)),
-            Err(e) if is_revert(&e) => Ok(None),
+            Err(e) if e.is_revert() => Ok(None),
             Err(e) => Err(query_failed(&format!("{} eth_call", self.name), e)),
         }
     }

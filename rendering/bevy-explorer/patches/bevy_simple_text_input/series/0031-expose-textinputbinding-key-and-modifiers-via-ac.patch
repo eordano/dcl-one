@@ -1,0 +1,30 @@
+From f63341739ea3c14dc1e98395115dc58969469297
+Subject: Expose TextInputBinding key and modifiers via accessors
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/f63341739ea3c14dc1e98395115dc58969469297
+Date: 2026-07-09T14:38:51+01:00
+
+Lets hosts reuse TextInputNavigationBindings as the authoritative
+shortcut table outside the crate's own listener (e.g. translating
+editing shortcuts for an embedded webview).
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 7795c0ff0f6bb05e8394d02d23eb654e7210e156..f799f8fdf010728505d6cb2226dffc9af7b60e81 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -239,6 +239,16 @@ impl TextInputBinding {
+             modifiers: modifiers.into(),
+         }
+     }
++
++    /// Primary key of this binding.
++    pub fn key(&self) -> KeyCode {
++        self.key
++    }
++
++    /// Modifier keys that must be held for this binding to apply.
++    pub fn modifiers(&self) -> &[KeyCode] {
++        &self.modifiers
++    }
+ }
+ 
+ impl Default for TextInputNavigationBindings {

@@ -1,7 +1,7 @@
 jest.mock('../../packages/@dcl/sdk-commands/src/logic/open', () => ({ __esModule: true, default: jest.fn() }))
 
 import * as net from 'net'
-import { Router } from '../../packages/@dcl/sdk-commands/node_modules/@well-known-components/http-server'
+import { Router } from '@well-known-components/http-server'
 import { runDapp } from '../../packages/@dcl/sdk-commands/src/run-dapp'
 import { deployLinkerUri } from '../../packages/@dcl/sdk-commands/src/commands/deploy/utils'
 

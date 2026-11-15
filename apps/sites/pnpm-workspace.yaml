@@ -16,3 +16,10 @@ minimumReleaseAgeExclude:
   - zod@4.6.1
   - '@stripe/react-stripe-js@6.11.0'
   - '@stripe/stripe-js@9.17.0'
+overrides:
+  'dompurify@<3.4.17': '^3.4.17'
+  'viem>ws': '-'
+  'isows>ws': '-'
+  '@walletconnect/jsonrpc-ws-connection>ws': '-'
+  'body-parser@>=2.0.0 <2.4.0': '^2.4.0'
+  'bn.js@<4.12.3': '^4.12.5'

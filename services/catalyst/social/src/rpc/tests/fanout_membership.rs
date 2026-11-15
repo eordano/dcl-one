@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 #[tokio::test]
 async fn community_voice_membership_pages_match_executed_source_failure_boundaries() {
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = &database.pool;
@@ -143,5 +144,5 @@ async fn community_voice_membership_pages_match_executed_source_failure_boundari
                 .all(|read| read["emitted_before_read"] == 0 && read["includes_creator"] == false)
         );
     }
-    database.close().await;
+    database.drop().await;
 }

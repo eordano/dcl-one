@@ -1,0 +1,28 @@
+From 7a15884a46bee74b796ccb7ca7a56d08a6bf50d5
+Subject: oops x2
+Origin: https://github.com/robtfm/bevy/commit/7a15884a46bee74b796ccb7ca7a56d08a6bf50d5
+Date: 2025-08-13T11:28:38+01:00
+
+---
+diff --git a/crates/bevy_ui/src/focus.rs b/crates/bevy_ui/src/focus.rs
+index 0b6bbd5e79922f8ee3a5e57225d9f28b72e14e56..81c05c6e60d8149cc3efd0e99eb1d223ec604df7 100644
+--- a/crates/bevy_ui/src/focus.rs
++++ b/crates/bevy_ui/src/focus.rs
+@@ -163,7 +163,7 @@ pub fn set_camera_window_cursor_position(
+     let primary_window = primary_window.iter().next();
+     let primary_scale_factor = primary_window
+         .and_then(|pw| windows.get(pw).ok())
+-        .and_then(|pw| pw.scale_factor())
++        .map(|pw| pw.scale_factor())
+         .unwrap_or(1.0);
+     for (camera_entity, camera, maybe_cursor) in &mut camera_query {
+         let maybe_window_ref = match camera.target.normalize(primary_window) {
+@@ -185,7 +185,7 @@ pub fn set_camera_window_cursor_position(
+                     .map(|rect| rect.min)
+                     .unwrap_or_default();
+ 
+-                raw_cursor_position - viewport_position
++                raw_cursor_position - viewport_position.as_vec2()
+             });
+ 
+         // update or insert

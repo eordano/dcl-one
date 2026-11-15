@@ -2,7 +2,7 @@ import {
   ContentClient,
   PartialDeploymentNotSupportedError,
   PartialDeploymentValidationError
-} from '../../../../packages/@dcl/sdk-commands/node_modules/dcl-catalyst-client'
+} from 'dcl-catalyst-client'
 import {
   MAX_SINGLE_REQUEST_BYTES,
   MIN_PARTIAL_DEPLOYMENT_BYTES,

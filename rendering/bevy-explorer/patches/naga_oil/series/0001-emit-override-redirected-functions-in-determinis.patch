@@ -1,0 +1,45 @@
+From 9007b2ffe3e8f509ffc9b1481f039de78cf31699
+Subject: Emit override-redirected functions in deterministic order
+Origin: https://github.com/robtfm/naga_oil/commit/9007b2ffe3e8f509ffc9b1481f039de78cf31699
+Date: 2026-06-24T18:01:10+01:00
+
+`Redirector::into_module` topologically sorts functions so dependents are
+emitted before their callers, but it drove the emission order by iterating a
+`HashMap`. That order is valid but arbitrary and reseeds per process (per
+page-load on wasm), so a module containing a function `override` composes to
+byte-unstable output each run. Any cache keyed on the generated source — wgpu's
+pipeline cache, browser/driver shader caches — then misses every load and pays
+a full cold recompile.
+
+Use an `IndexMap` so same-level functions emit in the deterministic
+function-arena order. Only reachable when a function override is present.
+---
+diff --git a/src/redirect.rs b/src/redirect.rs
+index f0f7faabf8b003b62336470dff0247a565ed0ff6..b7840311ce05b40f1ac1f84529fb7e94fff380a6 100644
+--- a/src/redirect.rs
++++ b/src/redirect.rs
+@@ -1,5 +1,6 @@
+-use std::collections::{HashMap, HashSet};
++use std::collections::HashSet;
+ 
++use indexmap::IndexMap;
+ use naga::{Block, Expression, Function, Handle, Module, Statement};
+ use thiserror::Error;
+ 
+@@ -180,8 +181,14 @@ impl Redirector {
+     }
+ 
+     pub fn into_module(self) -> Result<naga::Module, RedirectError> {
+-        // reorder functions so that dependents come first
+-        let mut requirements: HashMap<_, _> = self
++        // reorder functions so that dependents come first.
++        // IndexMap (not HashMap) so the toposort emits same-level functions in
++        // the deterministic function-arena order. With a HashMap the retain()
++        // below walks in random per-process iteration order, producing a
++        // different (but still valid) emission order each run; on wasm the map
++        // is reseeded per page-load, so composed shaders — and therefore GPU
++        // pipeline-cache keys — never stabilise.
++        let mut requirements: IndexMap<_, _> = self
+             .module
+             .functions
+             .iter()

@@ -37,6 +37,8 @@ const monaco = fileURLToPath(new URL("./node_modules/monaco-editor", import.meta
 const three = fileURLToPath(new URL("./node_modules/three", import.meta.url));
 const qrcode = fileURLToPath(new URL("./node_modules/qrcode-generator", import.meta.url));
 const reactQuery = fileURLToPath(new URL("./node_modules/@tanstack/react-query", import.meta.url));
+// `ws` is not installed (pnpm-workspace.yaml removes it): the packages that import it get the platform WebSocket.
+const platformWebSocket = fileURLToPath(new URL("./src/core/lib/platform-websocket.ts", import.meta.url));
 
 // The ONE base: the v2 node the SSR process reads. The dev proxy forwards the
 // prefixes browsers call directly to the same node (nginx does this on a host).
@@ -274,6 +276,7 @@ export default defineConfig({
       three,
       "qrcode-generator": qrcode,
       "@tanstack/react-query": reactQuery,
+      ws: platformWebSocket,
     },
     dedupe: ["viem", "react", "react-dom", "zod"],
   },

@@ -439,26 +439,15 @@ async fn statement_budget_keeps_prior_page_progress_and_resumes_the_rolled_back_
 
 #[tokio::test]
 async fn hundred_thousand_completed_events_use_bounded_pages_and_finish_a_cycle_without_writes() {
-    let Some(admin) = crate::db::scratch::pool(2).await else {
-        return;
-    };
     // An owned database keeps this history workload and its cursor independent
     // of the other scanner fixtures and their deliberate failure barriers.
-    let database = format!(
-        "catalyst_test_lib_{}_ranking_{}",
-        std::process::id(),
-        Uuid::new_v4().simple()
-    );
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(2)
-        .connect_with((*admin.connect_options()).clone().database(&database))
-        .await
-        .unwrap();
-    crate::db::apply_schema(&pool).await.unwrap();
+    let Some(database) =
+        crate::db::scratch::OwnedDatabase::new("ranking", crate::db::scratch::Schema::Full, 2)
+            .await
+    else {
+        return;
+    };
+    let pool = database.pool.clone();
     let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
         .unwrap()
         .naive_utc();
@@ -499,9 +488,5 @@ async fn hundred_thousand_completed_events_use_bounded_pages_and_finish_a_cycle_
         "ranking 100k completed history: {passes} passes, {:.3}ms active scan, zero receipt/counter writes",
         elapsed.as_secs_f64() * 1000.0
     );
-    pool.close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
-        .execute(&admin)
-        .await
-        .unwrap();
+    database.drop().await;
 }

@@ -1,0 +1,16 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:24+00:00
+
+---
+diff --git a/opener/Cargo.toml b/opener/Cargo.toml
+index c172fe15c85ee624816746c94984f51e71940847..5e7d92a9b48b5643cdc2dea7046cfb129f6f7231 100644
+--- a/opener/Cargo.toml
++++ b/opener/Cargo.toml
+@@ -40,3 +40,6 @@ web-sys = { version = "0.3", features = [ "Window" ] }
+ [package.metadata.docs.rs]
+ all-features = true
+ rustdoc-args = ["--cfg", "docsrs"]
++
++[lints.rust]
++warnings = "allow"

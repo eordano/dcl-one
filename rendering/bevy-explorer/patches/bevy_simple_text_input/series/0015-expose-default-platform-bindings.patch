@@ -1,0 +1,47 @@
+From 4142702c05c1218a2f1460aecb1694ee373fddb7
+Subject: expose default platform bindings
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/4142702c05c1218a2f1460aecb1694ee373fddb7
+Date: 2025-07-15T15:43:34+01:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 59c8ddc85c6bf3a611a9461097f8925e1cbab137..454189e9d7e6909ab17ef78525efe8c7db98dd91 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -239,9 +239,20 @@ impl TextInputBinding {
+     }
+ }
+ 
+-#[cfg(not(target_os = "macos"))]
+ impl Default for TextInputNavigationBindings {
+     fn default() -> Self {
++        #[cfg(not(target_os = "macos"))]
++        return Self::non_macos_default();
++
++        #[cfg(target_os = "macos")]
++        Self::macos_default()
++    }
++}
++
++impl TextInputNavigationBindings {
++    /// default key bindings for all except macos.
++    /// usually Default::default is fine, but on wasm you need to specify manually
++    pub fn non_macos_default() -> Self {
+         use KeyCode::*;
+         use TextInputAction::*;
+         Self(vec![
+@@ -317,11 +328,10 @@ impl Default for TextInputNavigationBindings {
+             ),
+         ])
+     }
+-}
+ 
+-#[cfg(target_os = "macos")]
+-impl Default for TextInputNavigationBindings {
+-    fn default() -> Self {
++    /// default key bindings for macos
++    /// usually Default::default is fine, but on wasm you need to specify manually
++    pub fn macos_default() -> Self {
+         use KeyCode::*;
+         use TextInputAction::*;
+         Self(vec![

@@ -1,0 +1,1424 @@
+From 88471436f1c053772164e6cc5973ef9e2e41ea78
+Subject: Light Textures (#18031)
+Origin: https://github.com/robtfm/bevy/commit/88471436f1c053772164e6cc5973ef9e2e41ea78
+Date: 2025-06-30T22:56:17+01:00
+
+add support for light textures (also known as light cookies, light
+functions, and light projectors)
+
+![image](https://github.com/user-attachments/assets/afdb23e2-b35f-4bf0-bf92-f883cd7db771)
+
+- add components:
+
+```rs
+/// Add to a [`PointLight`] to add a light texture effect.
+/// A texture mask is applied to the light source to modulate its intensity,
+/// simulating patterns like window shadows, gobo/cookie effects, or soft falloffs.
+pub struct PointLightTexture {
+    /// The texture image. Only the R channel is read.
+    pub image: Handle<Image>,
+    /// The cubemap layout. The image should be a packed cubemap in one of the formats described by the [`CubemapLayout`] enum.
+    pub cubemap_layout: CubemapLayout,
+}
+
+/// Add to a [`SpotLight`] to add a light texture effect.
+/// A texture mask is applied to the light source to modulate its intensity,
+/// simulating patterns like window shadows, gobo/cookie effects, or soft falloffs.
+pub struct SpotLightTexture {
+    /// The texture image. Only the R channel is read.
+    /// Note the border of the image should be entirely black to avoid leaking light.
+    pub image: Handle<Image>,
+}
+
+/// Add to a [`DirectionalLight`] to add a light texture effect.
+/// A texture mask is applied to the light source to modulate its intensity,
+/// simulating patterns like window shadows, gobo/cookie effects, or soft falloffs.
+pub struct DirectionalLightTexture {
+    /// The texture image. Only the R channel is read.
+    pub image: Handle<Image>,
+    /// Whether to tile the image infinitely, or use only a single tile centered at the light's translation
+    pub tiled: bool,
+}
+```
+
+- store images to the `RenderClusteredDecals` buffer
+- read the image and modulate the lights
+- add `light_textures` example to showcase the new features
+
+see light_textures example
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index bf61a03c94b08a88d2008eda6906ec03ced3101e..92bb780dd66b3de2888ed389580ccc9373cea633 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -455,6 +455,12 @@ shader_format_wesl = ["bevy_internal/shader_format_wesl"]
+ # Enable support for transmission-related textures in the `StandardMaterial`, at the risk of blowing past the global, per-shader texture limit on older/lower-end GPUs
+ pbr_transmission_textures = ["bevy_internal/pbr_transmission_textures"]
+ 
++# Enable support for Clustered Decals
++pbr_clustered_decals = ["bevy_internal/pbr_clustered_decals"]
++
++# Enable support for Light Textures
++pbr_light_textures = ["bevy_internal/pbr_light_textures"]
++
+ # Enable support for multi-layer material textures in the `StandardMaterial`, at the risk of blowing past the global, per-shader texture limit on older/lower-end GPUs
+ pbr_multi_layer_material_textures = [
+   "bevy_internal/pbr_multi_layer_material_textures",
+@@ -4266,6 +4272,17 @@ description = "Demonstrates clustered decals"
+ category = "3D Rendering"
+ wasm = false
+ 
++[[example]]
++name = "light_textures"
++path = "examples/3d/light_textures.rs"
++doc-scrape-examples = true
++
++[package.metadata.example.light_textures]
++name = "Light Textures"
++description = "Demonstrates light textures"
++category = "3D Rendering"
++wasm = false
++
+ [[example]]
+ name = "occlusion_culling"
+ path = "examples/3d/occlusion_culling.rs"
+diff --git a/crates/bevy_internal/Cargo.toml b/crates/bevy_internal/Cargo.toml
+index fd2e9256e253afbc2704495f541d46646a492f8f..484432621e3723f3ff68b8d363fc4ac49bd8d141 100644
+--- a/crates/bevy_internal/Cargo.toml
++++ b/crates/bevy_internal/Cargo.toml
+@@ -128,6 +128,15 @@ pbr_transmission_textures = [
+   "bevy_gltf?/pbr_transmission_textures",
+ ]
+ 
++# Clustered Decal support
++pbr_clustered_decals = ["bevy_pbr?/pbr_clustered_decals"]
++
++# Light Texture support
++pbr_light_textures = [
++  "bevy_pbr?/pbr_clustered_decals",
++  "bevy_pbr?/pbr_light_textures",
++]
++
+ # Multi-layer material textures in `StandardMaterial`:
+ pbr_multi_layer_material_textures = [
+   "bevy_pbr?/pbr_multi_layer_material_textures",
+diff --git a/crates/bevy_pbr/Cargo.toml b/crates/bevy_pbr/Cargo.toml
+index f00bdb6e6088f0d77e575af7bdc367f17984f4b7..9c98406b92dc1dd43fe2ebfbe0065a8aab7c8c21 100644
+--- a/crates/bevy_pbr/Cargo.toml
++++ b/crates/bevy_pbr/Cargo.toml
+@@ -16,6 +16,8 @@ pbr_multi_layer_material_textures = []
+ pbr_anisotropy_texture = []
+ experimental_pbr_pcss = []
+ pbr_specular_textures = []
++pbr_clustered_decals = []
++pbr_light_textures = []
+ shader_format_glsl = ["bevy_render/shader_format_glsl"]
+ trace = ["bevy_render/trace"]
+ # Enables the meshlet renderer for dense high-poly scenes (experimental)
+diff --git a/crates/bevy_pbr/src/cluster/mod.rs b/crates/bevy_pbr/src/cluster/mod.rs
+index 3113333be303f99eb4b386a9c8bdacb30ae58cc4..7a6eea7ee9b269020c07b172aa4f7efb4da89f6d 100644
+--- a/crates/bevy_pbr/src/cluster/mod.rs
++++ b/crates/bevy_pbr/src/cluster/mod.rs
+@@ -162,8 +162,8 @@ pub struct GpuClusterableObject {
+     pub(crate) spot_light_tan_angle: f32,
+     pub(crate) soft_shadow_size: f32,
+     pub(crate) shadow_map_near_z: f32,
+-    pub(crate) pad_a: f32,
+-    pub(crate) pad_b: f32,
++    pub(crate) decal_index: u32,
++    pub(crate) pad: f32,
+ }
+ 
+ pub enum GpuClusterableObjects {
+diff --git a/crates/bevy_pbr/src/decal/clustered.rs b/crates/bevy_pbr/src/decal/clustered.rs
+index 5272bce80c64d66ac7a0252eae8eea91991d9228..28ea0530c961b7973bd2c9c5c2ffe170f9a84fc4 100644
+--- a/crates/bevy_pbr/src/decal/clustered.rs
++++ b/crates/bevy_pbr/src/decal/clustered.rs
+@@ -49,7 +49,8 @@ use bevy_transform::{components::GlobalTransform, prelude::Transform};
+ use bytemuck::{Pod, Zeroable};
+ 
+ use crate::{
+-    binding_arrays_are_usable, prepare_lights, GlobalClusterableObjectMeta, LightVisibilityClass,
++    binding_arrays_are_usable, prepare_lights, DirectionalLight, GlobalClusterableObjectMeta,
++    LightVisibilityClass, PointLight, SpotLight,
+ };
+ 
+ /// The handle to the `clustered.wgsl` shader.
+@@ -97,6 +98,80 @@ pub struct ClusteredDecal {
+     pub tag: u32,
+ }
+ 
++/// Cubemap layout defines the order of images in a packed cubemap image.
++#[derive(Default, Reflect, Debug, Clone, Copy)]
++pub enum CubemapLayout {
++    /// layout in a vertical cross format
++    /// ```text
++    ///    +y
++    /// -x -z +x
++    ///    -y
++    ///    +z
++    /// ```
++    #[default]
++    CrossVertical = 0,
++    /// layout in a horizontal cross format
++    /// ```text
++    ///    +y
++    /// -x -z +x +z
++    ///    -y
++    /// ```
++    CrossHorizontal = 1,
++    /// layout in a vertical sequence
++    /// ```text
++    ///   +x
++    ///   -y
++    ///   +y
++    ///   -y
++    ///   -z
++    ///   +z
++    /// ```
++    SequenceVertical = 2,
++    /// layout in a horizontal sequence
++    /// ```text
++    /// +x -y +y -y -z +z
++    /// ```
++    SequenceHorizontal = 3,
++}
++
++/// Add to a [`PointLight`] to add a light texture effect.
++/// A texture mask is applied to the light source to modulate its intensity,  
++/// simulating patterns like window shadows, gobo/cookie effects, or soft falloffs.
++#[derive(Clone, Component, Debug, Reflect)]
++#[reflect(Component, Debug)]
++#[require(PointLight)]
++pub struct PointLightTexture {
++    /// The texture image. Only the R channel is read.
++    pub image: Handle<Image>,
++    /// The cubemap layout. The image should be a packed cubemap in one of the formats described by the [`CubemapLayout`] enum.
++    pub cubemap_layout: CubemapLayout,
++}
++
++/// Add to a [`SpotLight`] to add a light texture effect.
++/// A texture mask is applied to the light source to modulate its intensity,  
++/// simulating patterns like window shadows, gobo/cookie effects, or soft falloffs.
++#[derive(Clone, Component, Debug, Reflect)]
++#[reflect(Component, Debug)]
++#[require(SpotLight)]
++pub struct SpotLightTexture {
++    /// The texture image. Only the R channel is read.
++    /// Note the border of the image should be entirely black to avoid leaking light.
++    pub image: Handle<Image>,
++}
++
++/// Add to a [`DirectionalLight`] to add a light texture effect.
++/// A texture mask is applied to the light source to modulate its intensity,  
++/// simulating patterns like window shadows, gobo/cookie effects, or soft falloffs.
++#[derive(Clone, Component, Debug, Reflect)]
++#[reflect(Component, Debug)]
++#[require(DirectionalLight)]
++pub struct DirectionalLightTexture {
++    /// The texture image. Only the R channel is read.
++    pub image: Handle<Image>,
++    /// Whether to tile the image infinitely, or use only a single tile centered at the light's translation
++    pub tiled: bool,
++}
++
+ /// Stores information about all the clustered decals in the scene.
+ #[derive(Resource, Default)]
+ pub struct RenderClusteredDecals {
+@@ -124,6 +199,29 @@ impl RenderClusteredDecals {
+         self.decals.clear();
+         self.entity_to_decal_index.clear();
+     }
++
++    pub fn insert_decal(
++        &mut self,
++        entity: Entity,
++        image: &AssetId<Image>,
++        local_from_world: Mat4,
++        tag: u32,
++    ) {
++        let image_index = self.get_or_insert_image(image);
++        let decal_index = self.decals.len();
++        self.decals.push(RenderClusteredDecal {
++            local_from_world,
++            image_index,
++            tag,
++            pad_a: 0,
++            pad_b: 0,
++        });
++        self.entity_to_decal_index.insert(entity, decal_index);
++    }
++
++    pub fn get(&self, entity: Entity) -> Option<usize> {
++        self.entity_to_decal_index.get(&entity).copied()
++    }
+ }
+ 
+ /// The per-view bind group entries pertaining to decals.
+@@ -209,6 +307,30 @@ pub fn extract_decals(
+             &ViewVisibility,
+         )>,
+     >,
++    spot_light_textures: Extract<
++        Query<(
++            RenderEntity,
++            &SpotLightTexture,
++            &GlobalTransform,
++            &ViewVisibility,
++        )>,
++    >,
++    point_light_textures: Extract<
++        Query<(
++            RenderEntity,
++            &PointLightTexture,
++            &GlobalTransform,
++            &ViewVisibility,
++        )>,
++    >,
++    directional_light_textures: Extract<
++        Query<(
++            RenderEntity,
++            &DirectionalLightTexture,
++            &GlobalTransform,
++            &ViewVisibility,
++        )>,
++    >,
+     mut render_decals: ResMut<RenderClusteredDecals>,
+ ) {
+     // Clear out the `RenderDecals` in preparation for a new frame.
+@@ -221,22 +343,54 @@ pub fn extract_decals(
+             continue;
+         }
+ 
+-        // Insert or add the image.
+-        let image_index = render_decals.get_or_insert_image(&clustered_decal.image.id());
++        render_decals.insert_decal(
++            decal_entity,
++            &clustered_decal.image.id(),
++            global_transform.affine().inverse().into(),
++            clustered_decal.tag,
++        );
++    }
+ 
+-        // Record the decal.
+-        let decal_index = render_decals.decals.len();
+-        render_decals
+-            .entity_to_decal_index
+-            .insert(decal_entity, decal_index);
++    for (decal_entity, texture, global_transform, view_visibility) in &spot_light_textures {
++        // If the decal is invisible, skip it.
++        if !view_visibility.get() {
++            continue;
++        }
+ 
+-        render_decals.decals.push(RenderClusteredDecal {
+-            local_from_world: global_transform.affine().inverse().into(),
+-            image_index,
+-            tag: clustered_decal.tag,
+-            pad_a: 0,
+-            pad_b: 0,
+-        });
++        render_decals.insert_decal(
++            decal_entity,
++            &texture.image.id(),
++            global_transform.affine().inverse().into(),
++            0,
++        );
++    }
++
++    for (decal_entity, texture, global_transform, view_visibility) in &point_light_textures {
++        // If the decal is invisible, skip it.
++        if !view_visibility.get() {
++            continue;
++        }
++
++        render_decals.insert_decal(
++            decal_entity,
++            &texture.image.id(),
++            global_transform.affine().inverse().into(),
++            texture.cubemap_layout as u32,
++        );
++    }
++
++    for (decal_entity, texture, global_transform, view_visibility) in &directional_light_textures {
++        // If the decal is invisible, skip it.
++        if !view_visibility.get() {
++            continue;
++        }
++
++        render_decals.insert_decal(
++            decal_entity,
++            &texture.image.id(),
++            global_transform.affine().inverse().into(),
++            if texture.tiled { 1 } else { 0 },
++        );
+     }
+ }
+ 
+@@ -382,4 +536,5 @@ pub fn clustered_decals_are_usable(
+     // Re-enable this when `wgpu` has first-class bindless.
+     binding_arrays_are_usable(render_device, render_adapter)
+         && cfg!(not(any(target_os = "macos", target_os = "ios")))
++        && cfg!(feature = "pbr_clustered_decals")
+ }
+diff --git a/crates/bevy_pbr/src/render/light.rs b/crates/bevy_pbr/src/render/light.rs
+index e779dbc84182f166c26918560003adc9a7501a60..ba8d95fb1a0a2eee42ab2e7b4245e6011d8edeee 100644
+--- a/crates/bevy_pbr/src/render/light.rs
++++ b/crates/bevy_pbr/src/render/light.rs
+@@ -45,6 +45,7 @@ use bevy_render::{
+ use bevy_transform::{components::GlobalTransform, prelude::Transform};
+ use bevy_utils::default;
+ use core::{hash::Hash, marker::PhantomData, ops::Range};
++use decal::clustered::RenderClusteredDecals;
+ #[cfg(feature = "trace")]
+ use tracing::info_span;
+ use tracing::{error, warn};
+@@ -121,6 +122,7 @@ pub struct GpuDirectionalLight {
+     num_cascades: u32,
+     cascades_overlap_proportion: f32,
+     depth_texture_base_index: u32,
++    decal_index: u32,
+ }
+ 
+ // NOTE: These must match the bit flags in bevy_pbr/src/render/mesh_view_types.wgsl!
+@@ -777,7 +779,10 @@ pub fn prepare_lights(
+     directional_lights: Query<(Entity, &MainEntity, &ExtractedDirectionalLight)>,
+     mut light_view_entities: Query<&mut LightViewEntities>,
+     sorted_cameras: Res<SortedCameras>,
+-    gpu_preprocessing_support: Res<GpuPreprocessingSupport>,
++    (gpu_preprocessing_support, decals): (
++        Res<GpuPreprocessingSupport>,
++        Option<Res<RenderClusteredDecals>>,
++    ),
+ ) {
+     let views_iter = views.iter();
+     let views_count = views_iter.len();
+@@ -997,8 +1002,12 @@ pub fn prepare_lights(
+             shadow_normal_bias: light.shadow_normal_bias,
+             shadow_map_near_z: light.shadow_map_near_z,
+             spot_light_tan_angle,
+-            pad_a: 0.0,
+-            pad_b: 0.0,
++            decal_index: decals
++                .as_ref()
++                .and_then(|decals| decals.get(entity))
++                .and_then(|index| index.try_into().ok())
++                .unwrap_or(u32::MAX),
++            pad: 0.0,
+             soft_shadow_size: if light.soft_shadows_enabled {
+                 light.radius
+             } else {
+@@ -1187,7 +1196,7 @@ pub fn prepare_lights(
+         let mut gpu_directional_lights = [GpuDirectionalLight::default(); MAX_DIRECTIONAL_LIGHTS];
+         let mut num_directional_cascades_enabled_for_this_view = 0usize;
+         let mut num_directional_lights_for_this_view = 0usize;
+-        for (index, (_light_entity, _, light)) in directional_lights
++        for (index, (light_entity, _, light)) in directional_lights
+             .iter()
+             .filter(|(_light_entity, _, light)| light.render_layers.intersects(view_layers))
+             .enumerate()
+@@ -1241,6 +1250,11 @@ pub fn prepare_lights(
+                 num_cascades: num_cascades as u32,
+                 cascades_overlap_proportion: light.cascade_shadow_config.overlap_proportion,
+                 depth_texture_base_index: num_directional_cascades_enabled_for_this_view as u32,
++                decal_index: decals
++                    .as_ref()
++                    .and_then(|decals| decals.get(*light_entity))
++                    .and_then(|index| index.try_into().ok())
++                    .unwrap_or(u32::MAX),
+             };
+             num_directional_cascades_enabled_for_this_view += num_cascades;
+         }
+diff --git a/crates/bevy_pbr/src/render/mesh.rs b/crates/bevy_pbr/src/render/mesh.rs
+index 0517c637fa4e765b987359aceb5a000c3beb112b..9ecc11ad8c6dd46eb4fa9b948873ecfe50bd7811 100644
+--- a/crates/bevy_pbr/src/render/mesh.rs
++++ b/crates/bevy_pbr/src/render/mesh.rs
+@@ -2578,6 +2578,9 @@ impl SpecializedMeshPipeline for MeshPipeline {
+ 
+         if self.clustered_decals_are_usable {
+             shader_defs.push("CLUSTERED_DECALS_ARE_USABLE".into());
++            if cfg!(feature = "pbr_light_textures") {
++                shader_defs.push("LIGHT_TEXTURES".into());
++            }
+         }
+ 
+         let format = if key.contains(MeshPipelineKey::HDR) {
+diff --git a/crates/bevy_pbr/src/render/mesh_view_types.wgsl b/crates/bevy_pbr/src/render/mesh_view_types.wgsl
+index 0c14df01ae301db5f85528f030a2ffc8a038a1ea..341252e63289b12f467a6f40d6826a6a9a32d520 100644
+--- a/crates/bevy_pbr/src/render/mesh_view_types.wgsl
++++ b/crates/bevy_pbr/src/render/mesh_view_types.wgsl
+@@ -13,7 +13,7 @@ struct ClusterableObject {
+     spot_light_tan_angle: f32,
+     soft_shadow_size: f32,
+     shadow_map_near_z: f32,
+-    texture_index: u32,
++    decal_index: u32,
+     pad: f32,
+ };
+ 
+@@ -40,6 +40,7 @@ struct DirectionalLight {
+     num_cascades: u32,
+     cascades_overlap_proportion: f32,
+     depth_texture_base_index: u32,
++    decal_index: u32,
+ };
+ 
+ const DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT: u32                  = 1u;
+diff --git a/crates/bevy_pbr/src/render/pbr_functions.wgsl b/crates/bevy_pbr/src/render/pbr_functions.wgsl
+index 11e6d4d8748b600c187da29e0286f30b0a8fd60a..84f7b956616c4f2ccf59b3f8f38f2c584b32fe22 100644
+--- a/crates/bevy_pbr/src/render/pbr_functions.wgsl
++++ b/crates/bevy_pbr/src/render/pbr_functions.wgsl
+@@ -422,7 +422,7 @@ fn apply_pbr_lighting(
+             shadow = shadows::fetch_point_shadow(light_id, in.world_position, in.world_normal);
+         }
+ 
+-        let light_contrib = lighting::point_light(light_id, &lighting_input, enable_diffuse);
++        let light_contrib = lighting::point_light(light_id, &lighting_input, enable_diffuse, true);
+         direct_light += light_contrib * shadow;
+ 
+ #ifdef STANDARD_MATERIAL_DIFFUSE_TRANSMISSION
+@@ -442,7 +442,7 @@ fn apply_pbr_lighting(
+         }
+ 
+         let transmitted_light_contrib =
+-            lighting::point_light(light_id, &transmissive_lighting_input, enable_diffuse);
++            lighting::point_light(light_id, &transmissive_lighting_input, enable_diffuse, true);
+         transmitted_light += transmitted_light_contrib * transmitted_shadow;
+ #endif
+     }
+diff --git a/crates/bevy_pbr/src/render/pbr_lighting.wgsl b/crates/bevy_pbr/src/render/pbr_lighting.wgsl
+index 01e09fe3b470e00005b9a4678f7f210706fbb2c4..17cae13b920f20f5fbbd87985f4053296c87f450 100644
+--- a/crates/bevy_pbr/src/render/pbr_lighting.wgsl
++++ b/crates/bevy_pbr/src/render/pbr_lighting.wgsl
+@@ -456,10 +456,77 @@ fn perceptualRoughnessToRoughness(perceptualRoughness: f32) -> f32 {
+     return clampedPerceptualRoughness * clampedPerceptualRoughness;
+ }
+ 
++// this must align with CubemapLayout in decal/clustered.rs
++const CUBEMAP_TYPE_CROSS_VERTICAL: u32 = 0;
++const CUBEMAP_TYPE_CROSS_HORIZONTAL: u32 = 1;
++const CUBEMAP_TYPE_SEQUENCE_VERTICAL: u32 = 2;
++const CUBEMAP_TYPE_SEQUENCE_HORIZONTAL: u32 = 3;
++
++const X_PLUS: u32 = 0;
++const X_MINUS: u32 = 1;
++const Y_PLUS: u32 = 2;
++const Y_MINUS: u32 = 3;
++const Z_MINUS: u32 = 4;
++const Z_PLUS: u32 = 5;
++
++fn cubemap_uv(direction: vec3<f32>, cubemap_type: u32) -> vec2<f32> {
++    let abs_direction = abs(direction);
++    let max_axis = max(abs_direction.x, max(abs_direction.y, abs_direction.z));
++
++    let face_index = select(
++        select(X_PLUS, X_MINUS, direction.x < 0.0),
++        select(
++            select(Y_PLUS, Y_MINUS, direction.y < 0.0),
++            select(Z_PLUS, Z_MINUS, direction.z < 0.0),
++            max_axis != abs_direction.y
++        ),
++        max_axis != abs_direction.x
++    );
++    
++    var face_uv: vec2<f32>;
++    var divisor: f32;
++    var corner_uv: vec2<u32> = vec2(0, 0);
++    var face_size: vec2<f32>;
++
++    switch face_index {
++        case X_PLUS:  { face_uv = vec2<f32>(direction.z, -direction.y); divisor = direction.x; }
++        case X_MINUS: { face_uv = vec2<f32>(-direction.z, -direction.y); divisor = -direction.x; }
++        case Y_PLUS:  { face_uv = vec2<f32>(direction.x,  -direction.z); divisor = direction.y; }
++        case Y_MINUS: { face_uv = vec2<f32>(direction.x, direction.z); divisor = -direction.y; }
++        case Z_PLUS:  { face_uv = vec2<f32>(direction.x, direction.y); divisor = direction.z; }
++        case Z_MINUS: { face_uv = vec2<f32>(direction.x, -direction.y); divisor = -direction.z; }
++        default: {}
++    }
++    face_uv = (face_uv / divisor) * 0.5 + 0.5;
++
++    switch cubemap_type {
++        case CUBEMAP_TYPE_CROSS_VERTICAL: { 
++            face_size = vec2(1.0/3.0, 1.0/4.0); 
++            corner_uv = vec2<u32>((0x111102u >> (4 * face_index)) & 0xFu, (0x132011u >> (4 * face_index)) & 0xFu);
++        }
++        case CUBEMAP_TYPE_CROSS_HORIZONTAL: { 
++            face_size = vec2(1.0/4.0, 1.0/3.0); 
++            corner_uv = vec2<u32>((0x131102u >> (4 * face_index)) & 0xFu, (0x112011u >> (4 * face_index)) & 0xFu);
++        }
++        case CUBEMAP_TYPE_SEQUENCE_HORIZONTAL: {
++            face_size = vec2(1.0/6.0, 1.0);
++            corner_uv.x = face_index;
++        }
++        case CUBEMAP_TYPE_SEQUENCE_VERTICAL: {
++            face_size = vec2(1.0, 1.0/6.0);
++            corner_uv.y = face_index;
++        }
++        default: {}
++    }
++
++    return (vec2<f32>(corner_uv) + face_uv) * face_size;
++}
++
+ fn point_light(
+     light_id: u32,
+     input: ptr<function, LightingInput>,
+-    enable_diffuse: bool
++    enable_diffuse: bool,
++    enable_texture: bool,
+ ) -> vec3<f32> {
+     // Unpack.
+     let diffuse_color = (*input).diffuse_color;
+@@ -555,8 +622,26 @@ fn point_light(
+     color = diffuse + specular_light;
+ #endif  // STANDARD_MATERIAL_CLEARCOAT
+ 
++    var texture_sample = 1f;
++
++#ifdef LIGHT_TEXTURES
++    if enable_texture && (*light).decal_index != 0xFFFFFFFFu {
++        let relative_position = (view_bindings::clustered_decals.decals[(*light).decal_index].local_from_world * vec4(P, 1.0)).xyz;
++        let cubemap_type = view_bindings::clustered_decals.decals[(*light).decal_index].tag;
++        let decal_uv = cubemap_uv(relative_position, cubemap_type);
++        let image_index = view_bindings::clustered_decals.decals[(*light).decal_index].image_index;
++
++        texture_sample = textureSampleLevel(
++            view_bindings::clustered_decal_textures[image_index],
++            view_bindings::clustered_decal_sampler,
++            decal_uv,
++            0.0
++        ).r;
++    }
++#endif
++
+     return color * (*light).color_inverse_square_range.rgb *
+-        (rangeAttenuation * derived_input.NdotL);
++        (rangeAttenuation * derived_input.NdotL) * texture_sample;
+ }
+ 
+ fn spot_light(
+@@ -565,7 +650,7 @@ fn spot_light(
+     enable_diffuse: bool
+ ) -> vec3<f32> {
+     // reuse the point light calculations
+-    let point_light = point_light(light_id, input, enable_diffuse);
++    let point_light = point_light(light_id, input, enable_diffuse, false);
+ 
+     let light = &view_bindings::clusterable_objects.data[light_id];
+ 
+@@ -584,7 +669,27 @@ fn spot_light(
+     let attenuation = saturate(cd * (*light).light_custom_data.z + (*light).light_custom_data.w);
+     let spot_attenuation = attenuation * attenuation;
+ 
+-    return point_light * spot_attenuation;
++    var texture_sample = 1f;
++
++#ifdef LIGHT_TEXTURES
++    if (*light).decal_index != 0xFFFFFFFFu {
++        let local_position = (view_bindings::clustered_decals.decals[(*light).decal_index].local_from_world *
++            vec4((*input).P, 1.0)).xyz;
++        if local_position.z < 0.0 {
++            let decal_uv = (local_position.xy / (local_position.z * (*light).spot_light_tan_angle)) * vec2(-0.5, 0.5) + 0.5;
++            let image_index = view_bindings::clustered_decals.decals[(*light).decal_index].image_index;
++
++            texture_sample = textureSampleLevel(
++                view_bindings::clustered_decal_textures[image_index],
++                view_bindings::clustered_decal_sampler,
++                decal_uv,
++                0.0
++            ).r;
++        }
++    }
++#endif
++
++    return point_light * spot_attenuation * texture_sample;
+ }
+ 
+ fn directional_light(
+@@ -641,5 +746,31 @@ fn directional_light(
+     color = (diffuse + specular_light) * derived_input.NdotL;
+ #endif  // STANDARD_MATERIAL_CLEARCOAT
+ 
+-    return color * (*light).color.rgb;
++    var texture_sample = 1f;
++
++#ifdef LIGHT_TEXTURES
++    if (*light).decal_index != 0xFFFFFFFFu {
++        let local_position = (view_bindings::clustered_decals.decals[(*light).decal_index].local_from_world *
++            vec4((*input).P, 1.0)).xyz;
++        let decal_uv = local_position.xy * vec2(-0.5, 0.5) + 0.5;
++
++        // if tiled or within tile
++        if (view_bindings::clustered_decals.decals[(*light).decal_index].tag != 0u)
++                || all(clamp(decal_uv, vec2(0.0), vec2(1.0)) == decal_uv)
++        {
++            let image_index = view_bindings::clustered_decals.decals[(*light).decal_index].image_index;
++
++            texture_sample = textureSampleLevel(
++                view_bindings::clustered_decal_textures[image_index],
++                view_bindings::clustered_decal_sampler,
++                decal_uv - floor(decal_uv),
++                0.0
++            ).r;                    
++        } else {
++            texture_sample = 0f;
++        }
++    }
++#endif
++
++    return color * (*light).color.rgb * texture_sample;
+ }
+diff --git a/docs/cargo_features.md b/docs/cargo_features.md
+index 7f335dfd562d214850231b3e5c80e0c8bac59cc2..d861e5b290c0a3fd853ff34c9c09135bd2fe1495 100644
+--- a/docs/cargo_features.md
++++ b/docs/cargo_features.md
+@@ -93,6 +93,8 @@ The default feature set enables most of the expected features of a game engine,
+ |minimp3|MP3 audio format support (through minimp3)|
+ |mp3|MP3 audio format support|
+ |pbr_anisotropy_texture|Enable support for anisotropy texture in the `StandardMaterial`, at the risk of blowing past the global, per-shader texture limit on older/lower-end GPUs|
++|pbr_clustered_decals|Enable support for Clustered Decals|
++|pbr_light_textures|Enable support for Light Textures|
+ |pbr_multi_layer_material_textures|Enable support for multi-layer material textures in the `StandardMaterial`, at the risk of blowing past the global, per-shader texture limit on older/lower-end GPUs|
+ |pbr_specular_textures|Enable support for specular textures in the `StandardMaterial`, at the risk of blowing past the global, per-shader texture limit on older/lower-end GPUs|
+ |pbr_transmission_textures|Enable support for transmission-related textures in the `StandardMaterial`, at the risk of blowing past the global, per-shader texture limit on older/lower-end GPUs|
+diff --git a/examples/3d/clustered_decals.rs b/examples/3d/clustered_decals.rs
+index 108efe586ef1ed31560c0908168ed6acc9432dfc..f8592d28c0a85b5bf288cfd331166f06ced25454 100644
+--- a/examples/3d/clustered_decals.rs
++++ b/examples/3d/clustered_decals.rs
+@@ -163,6 +163,12 @@ fn setup(
+     mut meshes: ResMut<Assets<Mesh>>,
+     mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, CustomDecalExtension>>>,
+ ) {
++    // Error out if the clustered decals feature isn't enabled
++    if !cfg!(feature = "pbr_clustered_decals") {
++        eprintln!("Bevy was compiled without clustered decal support. Run with `--features=pbr_clustered_decals` to enable.");
++        process::exit(1);
++    }
++
+     // Error out if clustered decals aren't supported on the current platform.
+     if !decal::clustered::clustered_decals_are_usable(&render_device, &render_adapter) {
+         eprintln!("Clustered decals aren't usable on this platform.");
+diff --git a/examples/3d/light_textures.rs b/examples/3d/light_textures.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..be221101b6a47cba85696ebfa328d581f7a9930c
+--- /dev/null
++++ b/examples/3d/light_textures.rs
+@@ -0,0 +1,706 @@
++//! Demonstrates light textures, which modulate light sources.
++
++use std::f32::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, PI};
++use std::fmt::{self, Formatter};
++use std::process;
++
++use bevy::{
++    color::palettes::css::{SILVER, YELLOW},
++    input::mouse::AccumulatedMouseMotion,
++    pbr::{
++        decal::{
++            self,
++            clustered::{DirectionalLightTexture, PointLightTexture, SpotLightTexture},
++        },
++        NotShadowCaster,
++    },
++    prelude::*,
++    render::renderer::{RenderAdapter, RenderDevice},
++    window::SystemCursorIcon,
++    winit::cursor::CursorIcon,
++};
++use light_consts::lux::{AMBIENT_DAYLIGHT, CLEAR_SUNRISE};
++use ops::{acos, cos, sin};
++use widgets::{
++    WidgetClickEvent, WidgetClickSender, BUTTON_BORDER, BUTTON_BORDER_COLOR,
++    BUTTON_BORDER_RADIUS_SIZE, BUTTON_PADDING,
++};
++
++#[path = "../helpers/widgets.rs"]
++mod widgets;
++
++/// The speed at which the cube rotates, in radians per frame.
++const CUBE_ROTATION_SPEED: f32 = 0.02;
++
++/// The speed at which the selection can be moved, in spherical coordinate
++/// radians per mouse unit.
++const MOVE_SPEED: f32 = 0.008;
++/// The speed at which the selection can be scaled, in reciprocal mouse units.
++const SCALE_SPEED: f32 = 0.05;
++/// The speed at which the selection can be scaled, in radians per mouse unit.
++const ROLL_SPEED: f32 = 0.01;
++
++/// Various settings for the demo.
++#[derive(Resource, Default)]
++struct AppStatus {
++    /// The object that will be moved, scaled, or rotated when the mouse is
++    /// dragged.
++    selection: Selection,
++    /// What happens when the mouse is dragged: one of a move, rotate, or scale
++    /// operation.
++    drag_mode: DragMode,
++}
++
++/// The object that will be moved, scaled, or rotated when the mouse is dragged.
++#[derive(Clone, Copy, Component, Default, PartialEq)]
++enum Selection {
++    /// The camera.
++    ///
++    /// The camera can only be moved, not scaled or rotated.
++    #[default]
++    Camera,
++    /// The spotlight, which uses a torch-like light texture
++    SpotLight,
++    /// The point light, which uses a light texture cubemap constructed from the faces mesh
++    PointLight,
++    /// The directional light, which uses a caustic-like texture
++    DirectionalLight,
++}
++
++impl fmt::Display for Selection {
++    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
++        match *self {
++            Selection::Camera => f.write_str("camera"),
++            Selection::SpotLight => f.write_str("spotlight"),
++            Selection::PointLight => f.write_str("point light"),
++            Selection::DirectionalLight => f.write_str("directional light"),
++        }
++    }
++}
++
++/// What happens when the mouse is dragged: one of a move, rotate, or scale
++/// operation.
++#[derive(Clone, Copy, Component, Default, PartialEq, Debug)]
++enum DragMode {
++    /// The mouse moves the current selection.
++    #[default]
++    Move,
++    /// The mouse scales the current selection.
++    ///
++    /// This only applies to decals, not cameras.
++    Scale,
++    /// The mouse rotates the current selection around its local Z axis.
++    ///
++    /// This only applies to decals, not cameras.
++    Roll,
++}
++
++impl fmt::Display for DragMode {
++    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
++        match *self {
++            DragMode::Move => f.write_str("move"),
++            DragMode::Scale => f.write_str("scale"),
++            DragMode::Roll => f.write_str("roll"),
++        }
++    }
++}
++
++/// A marker component for the help text in the top left corner of the window.
++#[derive(Clone, Copy, Component)]
++struct HelpText;
++
++/// Entry point.
++fn main() {
++    App::new()
++        .add_plugins(DefaultPlugins.set(WindowPlugin {
++            primary_window: Some(Window {
++                title: "Bevy Light Textures Example".into(),
++                ..default()
++            }),
++            ..default()
++        }))
++        .init_resource::<AppStatus>()
++        .add_event::<WidgetClickEvent<Selection>>()
++        .add_event::<WidgetClickEvent<Visibility>>()
++        .add_systems(Startup, setup)
++        .add_systems(Update, draw_gizmos)
++        .add_systems(Update, rotate_cube)
++        .add_systems(Update, hide_shadows)
++        .add_systems(Update, widgets::handle_ui_interactions::<Selection>)
++        .add_systems(Update, widgets::handle_ui_interactions::<Visibility>)
++        .add_systems(
++            Update,
++            (handle_selection_change, update_radio_buttons)
++                .after(widgets::handle_ui_interactions::<Selection>)
++                .after(widgets::handle_ui_interactions::<Visibility>),
++        )
++        .add_systems(Update, toggle_visibility)
++        .add_systems(Update, update_directional_light)
++        .add_systems(Update, process_move_input)
++        .add_systems(Update, process_scale_input)
++        .add_systems(Update, process_roll_input)
++        .add_systems(Update, switch_drag_mode)
++        .add_systems(Update, update_help_text)
++        .add_systems(Update, update_button_visibility)
++        .run();
++}
++
++/// Creates the scene.
++fn setup(
++    mut commands: Commands,
++    asset_server: Res<AssetServer>,
++    app_status: Res<AppStatus>,
++    render_device: Res<RenderDevice>,
++    render_adapter: Res<RenderAdapter>,
++    mut meshes: ResMut<Assets<Mesh>>,
++    mut materials: ResMut<Assets<StandardMaterial>>,
++) {
++    // Error out if the light textures feature isn't enabled
++    if !cfg!(feature = "pbr_light_textures") {
++        eprintln!("Bevy was compiled without light texture support. Run with `--features=pbr_light_textures` to enable.");
++        process::exit(1);
++    }
++
++    // Error out if clustered decals (and so light textures) aren't supported on the current platform.
++    if !decal::clustered::clustered_decals_are_usable(&render_device, &render_adapter) {
++        eprintln!("Light textures aren't usable on this platform.");
++        process::exit(1);
++    }
++
++    spawn_cubes(&mut commands, &mut meshes, &mut materials);
++    spawn_camera(&mut commands);
++    spawn_light(&mut commands, &asset_server);
++    spawn_buttons(&mut commands);
++    spawn_help_text(&mut commands, &app_status);
++    spawn_light_textures(&mut commands, &asset_server, &mut meshes, &mut materials);
++}
++
++#[derive(Component)]
++struct Rotate;
++
++/// Spawns the cube onto which the decals are projected.
++fn spawn_cubes(
++    commands: &mut Commands,
++    meshes: &mut Assets<Mesh>,
++    materials: &mut Assets<StandardMaterial>,
++) {
++    // Rotate the cube a bit just to make it more interesting.
++    let mut transform = Transform::IDENTITY;
++    transform.rotate_y(FRAC_PI_3);
++
++    commands.spawn((
++        Mesh3d(meshes.add(Cuboid::new(3.0, 3.0, 3.0))),
++        MeshMaterial3d(materials.add(StandardMaterial {
++            base_color: SILVER.into(),
++            ..default()
++        })),
++        transform,
++        Rotate,
++    ));
++
++    commands.spawn((
++        Mesh3d(meshes.add(Cuboid::new(-13.0, -13.0, -13.0))),
++        MeshMaterial3d(materials.add(StandardMaterial {
++            base_color: SILVER.into(),
++            ..default()
++        })),
++        transform,
++    ));
++}
++
++/// Spawns the directional light.
++fn spawn_light(commands: &mut Commands, asset_server: &AssetServer) {
++    commands
++        .spawn((
++            Visibility::Hidden,
++            Transform::from_xyz(8.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
++            Selection::DirectionalLight,
++        ))
++        .with_child((
++            DirectionalLight {
++                illuminance: AMBIENT_DAYLIGHT,
++                ..default()
++            },
++            DirectionalLightTexture {
++                image: asset_server.load("lightmaps/caustic_directional_texture.png"),
++                tiled: true,
++            },
++            Visibility::Visible,
++        ));
++}
++
++/// Spawns the camera.
++fn spawn_camera(commands: &mut Commands) {
++    commands
++        .spawn(Camera3d::default())
++        .insert(Transform::from_xyz(0.0, 2.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y))
++        // Tag the camera with `Selection::Camera`.
++        .insert(Selection::Camera);
++}
++
++fn spawn_light_textures(
++    commands: &mut Commands,
++    asset_server: &AssetServer,
++    meshes: &mut Assets<Mesh>,
++    materials: &mut Assets<StandardMaterial>,
++) {
++    commands.spawn((
++        SpotLight {
++            color: Color::srgb(1.0, 1.0, 0.8),
++            intensity: 10e6,
++            outer_angle: 0.25,
++            inner_angle: 0.25,
++            shadows_enabled: true,
++            ..default()
++        },
++        Transform::from_translation(Vec3::new(6.0, 1.0, 2.0)).looking_at(Vec3::ZERO, Vec3::Y),
++        SpotLightTexture {
++            image: asset_server.load("lightmaps/torch_spotlight_texture.png"),
++        },
++        Visibility::Inherited,
++        Selection::SpotLight,
++    ));
++
++    commands
++        .spawn((
++            Visibility::Hidden,
++            Transform::from_translation(Vec3::new(0.0, 1.8, 0.01)).with_scale(Vec3::splat(0.1)),
++            Selection::PointLight,
++        ))
++        .with_children(|parent| {
++            parent.spawn(SceneRoot(
++                asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/Faces/faces.glb")),
++            ));
++
++            parent.spawn((
++                Mesh3d(meshes.add(Sphere::new(1.0))),
++                MeshMaterial3d(materials.add(StandardMaterial {
++                    emissive: Color::srgb(0.0, 0.0, 300.0).to_linear(),
++                    ..default()
++                })),
++            ));
++
++            parent.spawn((
++                PointLight {
++                    color: Color::srgb(0.0, 0.0, 1.0),
++                    intensity: 1e6,
++                    shadows_enabled: true,
++                    ..default()
++                },
++                PointLightTexture {
++                    image: asset_server.load("lightmaps/faces_pointlight_texture_blurred.png"),
++                    cubemap_layout: decal::clustered::CubemapLayout::CrossVertical,
++                },
++            ));
++        });
++}
++
++/// Spawns the buttons at the bottom of the screen.
++fn spawn_buttons(commands: &mut Commands) {
++    // Spawn the radio buttons that allow the user to select an object to
++    // control.
++    commands
++        .spawn(widgets::main_ui_node())
++        .with_children(|parent| {
++            widgets::spawn_option_buttons(
++                parent,
++                "Drag to Move",
++                &[
++                    (Selection::Camera, "Camera"),
++                    (Selection::SpotLight, "Spotlight"),
++                    (Selection::PointLight, "Point Light"),
++                    (Selection::DirectionalLight, "Directional Light"),
++                ],
++            );
++        });
++
++    // Spawn the drag buttons that allow the user to control the scale and roll
++    // of the selected object.
++    commands
++        .spawn(Node {
++            flex_direction: FlexDirection::Row,
++            position_type: PositionType::Absolute,
++            right: Val::Px(10.0),
++            bottom: Val::Px(10.0),
++            column_gap: Val::Px(6.0),
++            ..default()
++        })
++        .with_children(|parent| {
++            widgets::spawn_option_buttons(
++                parent,
++                "",
++                &[
++                    (Visibility::Inherited, "Show"),
++                    (Visibility::Hidden, "Hide"),
++                ],
++            );
++            spawn_drag_button(parent, "Scale").insert(DragMode::Scale);
++            spawn_drag_button(parent, "Roll").insert(DragMode::Roll);
++        });
++}
++
++/// Spawns a button that the user can drag to change a parameter.
++fn spawn_drag_button<'a>(
++    commands: &'a mut ChildSpawnerCommands,
++    label: &str,
++) -> EntityCommands<'a> {
++    let mut kid = commands.spawn(Node {
++        border: BUTTON_BORDER,
++        justify_content: JustifyContent::Center,
++        align_items: AlignItems::Center,
++        padding: BUTTON_PADDING,
++        ..default()
++    });
++    kid.insert((
++        Button,
++        BackgroundColor(Color::BLACK),
++        BorderRadius::all(BUTTON_BORDER_RADIUS_SIZE),
++        BUTTON_BORDER_COLOR,
++    ))
++    .with_children(|parent| {
++        widgets::spawn_ui_text(parent, label, Color::WHITE);
++    });
++    kid
++}
++
++/// Spawns the help text at the top of the screen.
++fn spawn_help_text(commands: &mut Commands, app_status: &AppStatus) {
++    commands.spawn((
++        Text::new(create_help_string(app_status)),
++        Node {
++            position_type: PositionType::Absolute,
++            top: Val::Px(12.0),
++            left: Val::Px(12.0),
++            ..default()
++        },
++        HelpText,
++    ));
++}
++
++/// Draws the outlines that show the bounds of the spotlight.
++fn draw_gizmos(mut gizmos: Gizmos, spotlight: Query<(&GlobalTransform, &SpotLight, &Visibility)>) {
++    if let Ok((global_transform, spotlight, visibility)) = spotlight.single() {
++        if visibility != Visibility::Hidden {
++            gizmos.primitive_3d(
++                &Cone::new(7.0 * spotlight.outer_angle, 7.0),
++                Isometry3d {
++                    rotation: global_transform.rotation() * Quat::from_rotation_x(FRAC_PI_2),
++                    translation: global_transform.translation_vec3a() * 0.5,
++                },
++                YELLOW,
++            );
++        }
++    }
++}
++
++/// Rotates the cube a bit every frame.
++fn rotate_cube(mut meshes: Query<&mut Transform, With<Rotate>>) {
++    for mut transform in &mut meshes {
++        transform.rotate_y(CUBE_ROTATION_SPEED);
++    }
++}
++
++/// Hide shadows on all meshes except the main cube
++fn hide_shadows(
++    mut commands: Commands,
++    meshes: Query<Entity, (With<Mesh3d>, Without<NotShadowCaster>, Without<Rotate>)>,
++) {
++    for ent in &meshes {
++        commands.entity(ent).insert(NotShadowCaster);
++    }
++}
++
++/// Updates the state of the radio buttons when the user clicks on one.
++fn update_radio_buttons(
++    mut widgets: Query<(
++        Entity,
++        Option<&mut BackgroundColor>,
++        Has<Text>,
++        &WidgetClickSender<Selection>,
++    )>,
++    app_status: Res<AppStatus>,
++    mut writer: TextUiWriter,
++    visible: Query<(&Visibility, &Selection)>,
++    mut visibility_widgets: Query<
++        (
++            Entity,
++            Option<&mut BackgroundColor>,
++            Has<Text>,
++            &WidgetClickSender<Visibility>,
++        ),
++        Without<WidgetClickSender<Selection>>,
++    >,
++) {
++    for (entity, maybe_bg_color, has_text, sender) in &mut widgets {
++        let selected = app_status.selection == **sender;
++        if let Some(mut bg_color) = maybe_bg_color {
++            widgets::update_ui_radio_button(&mut bg_color, selected);
++        }
++        if has_text {
++            widgets::update_ui_radio_button_text(entity, &mut writer, selected);
++        }
++    }
++
++    let visibility = visible
++        .iter()
++        .filter(|(_, selection)| **selection == app_status.selection)
++        .map(|(visibility, _)| *visibility)
++        .next()
++        .unwrap_or_default();
++    for (entity, maybe_bg_color, has_text, sender) in &mut visibility_widgets {
++        if let Some(mut bg_color) = maybe_bg_color {
++            widgets::update_ui_radio_button(&mut bg_color, **sender == visibility);
++        }
++        if has_text {
++            widgets::update_ui_radio_button_text(entity, &mut writer, **sender == visibility);
++        }
++    }
++}
++
++/// Changes the selection when the user clicks a radio button.
++fn handle_selection_change(
++    mut events: EventReader<WidgetClickEvent<Selection>>,
++    mut app_status: ResMut<AppStatus>,
++) {
++    for event in events.read() {
++        app_status.selection = **event;
++    }
++}
++
++fn toggle_visibility(
++    mut events: EventReader<WidgetClickEvent<Visibility>>,
++    app_status: Res<AppStatus>,
++    mut visibility: Query<(&mut Visibility, &Selection)>,
++) {
++    if let Some(vis) = events.read().last() {
++        for (mut visibility, selection) in visibility.iter_mut() {
++            if selection == &app_status.selection {
++                *visibility = **vis;
++            }
++        }
++    }
++}
++
++/// Process a drag event that moves the selected object.
++fn process_move_input(
++    mut selections: Query<(&mut Transform, &Selection)>,
++    mouse_buttons: Res<ButtonInput<MouseButton>>,
++    mouse_motion: Res<AccumulatedMouseMotion>,
++    app_status: Res<AppStatus>,
++) {
++    // Only process drags when movement is selected.
++    if !mouse_buttons.pressed(MouseButton::Left) || app_status.drag_mode != DragMode::Move {
++        return;
++    }
++
++    for (mut transform, selection) in &mut selections {
++        if app_status.selection != *selection {
++            continue;
++        }
++
++        // use simple movement for the point light
++        if *selection == Selection::PointLight {
++            transform.translation +=
++                (mouse_motion.delta * Vec2::new(1.0, -1.0) * MOVE_SPEED).extend(0.0);
++            return;
++        }
++
++        let position = transform.translation;
++
++        // Convert to spherical coordinates.
++        let radius = position.length();
++        let mut theta = acos(position.y / radius);
++        let mut phi = position.z.signum() * acos(position.x * position.xz().length_recip());
++
++        // Camera movement is the inverse of object movement.
++        let (phi_factor, theta_factor) = match *selection {
++            Selection::Camera => (1.0, -1.0),
++            _ => (-1.0, 1.0),
++        };
++
++        // Adjust the spherical coordinates. Clamp the inclination to (0, π).
++        phi += phi_factor * mouse_motion.delta.x * MOVE_SPEED;
++        theta = f32::clamp(
++            theta + theta_factor * mouse_motion.delta.y * MOVE_SPEED,
++            0.001,
++            PI - 0.001,
++        );
++
++        // Convert spherical coordinates back to Cartesian coordinates.
++        transform.translation =
++            radius * vec3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
++
++        // Look at the center, but preserve the previous roll angle.
++        let roll = transform.rotation.to_euler(EulerRot::YXZ).2;
++        transform.look_at(Vec3::ZERO, Vec3::Y);
++        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
++        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
++    }
++}
++
++/// Processes a drag event that scales the selected target.
++fn process_scale_input(
++    mut scale_selections: Query<(&mut Transform, &Selection)>,
++    mut spotlight_selections: Query<(&mut SpotLight, &Selection)>,
++    mouse_buttons: Res<ButtonInput<MouseButton>>,
++    mouse_motion: Res<AccumulatedMouseMotion>,
++    app_status: Res<AppStatus>,
++) {
++    // Only process drags when the scaling operation is selected.
++    if !mouse_buttons.pressed(MouseButton::Left) || app_status.drag_mode != DragMode::Scale {
++        return;
++    }
++
++    for (mut transform, selection) in &mut scale_selections {
++        if app_status.selection == *selection {
++            transform.scale *= 1.0 + mouse_motion.delta.x * SCALE_SPEED;
++        }
++    }
++
++    for (mut spotlight, selection) in &mut spotlight_selections {
++        if app_status.selection == *selection {
++            spotlight.outer_angle =
++                (spotlight.outer_angle * (1.0 + mouse_motion.delta.x * SCALE_SPEED)).min(FRAC_PI_4);
++            spotlight.inner_angle = spotlight.outer_angle;
++        }
++    }
++}
++
++/// Processes a drag event that rotates the selected target along its local Z
++/// axis.
++fn process_roll_input(
++    mut selections: Query<(&mut Transform, &Selection)>,
++    mouse_buttons: Res<ButtonInput<MouseButton>>,
++    mouse_motion: Res<AccumulatedMouseMotion>,
++    app_status: Res<AppStatus>,
++) {
++    // Only process drags when the rolling operation is selected.
++    if !mouse_buttons.pressed(MouseButton::Left) || app_status.drag_mode != DragMode::Roll {
++        return;
++    }
++
++    for (mut transform, selection) in &mut selections {
++        if app_status.selection != *selection {
++            continue;
++        }
++
++        let (yaw, pitch, mut roll) = transform.rotation.to_euler(EulerRot::YXZ);
++        roll += mouse_motion.delta.x * ROLL_SPEED;
++        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
++    }
++}
++
++/// Creates the help string at the top left of the screen.
++fn create_help_string(app_status: &AppStatus) -> String {
++    format!(
++        "Click and drag to {} {}",
++        app_status.drag_mode, app_status.selection
++    )
++}
++
++/// Changes the drag mode when the user hovers over the "Scale" and "Roll"
++/// buttons in the lower right.
++///
++/// If the user is hovering over no such button, this system changes the drag
++/// mode back to its default value of [`DragMode::Move`].
++fn switch_drag_mode(
++    mut commands: Commands,
++    mut interactions: Query<(&Interaction, &DragMode)>,
++    mut windows: Query<Entity, With<Window>>,
++    mouse_buttons: Res<ButtonInput<MouseButton>>,
++    mut app_status: ResMut<AppStatus>,
++) {
++    if mouse_buttons.pressed(MouseButton::Left) {
++        return;
++    }
++
++    for (interaction, drag_mode) in &mut interactions {
++        if *interaction != Interaction::Hovered {
++            continue;
++        }
++
++        app_status.drag_mode = *drag_mode;
++
++        // Set the cursor to provide the user with a nice visual hint.
++        for window in &mut windows {
++            commands
++                .entity(window)
++                .insert(CursorIcon::from(SystemCursorIcon::EwResize));
++        }
++        return;
++    }
++
++    app_status.drag_mode = DragMode::Move;
++
++    for window in &mut windows {
++        commands.entity(window).remove::<CursorIcon>();
++    }
++}
++
++/// Updates the help text in the top left of the screen to reflect the current
++/// selection and drag mode.
++fn update_help_text(mut help_text: Query<&mut Text, With<HelpText>>, app_status: Res<AppStatus>) {
++    for mut text in &mut help_text {
++        text.0 = create_help_string(&app_status);
++    }
++}
++
++/// Updates the visibility of the drag mode buttons so that they aren't visible
++/// if the camera is selected.
++fn update_button_visibility(
++    mut nodes: Query<&mut Visibility, Or<(With<DragMode>, With<WidgetClickSender<Visibility>>)>>,
++    app_status: Res<AppStatus>,
++) {
++    for mut visibility in &mut nodes {
++        *visibility = match app_status.selection {
++            Selection::Camera => Visibility::Hidden,
++            _ => Visibility::Visible,
++        };
++    }
++}
++
++fn update_directional_light(
++    mut commands: Commands,
++    asset_server: Res<AssetServer>,
++    selections: Query<(&Selection, &Visibility)>,
++    mut light: Query<(
++        Entity,
++        &mut DirectionalLight,
++        Option<&DirectionalLightTexture>,
++    )>,
++) {
++    let directional_visible = selections
++        .iter()
++        .filter(|(selection, _)| **selection == Selection::DirectionalLight)
++        .any(|(_, visibility)| visibility != Visibility::Hidden);
++    let any_texture_light_visible = selections
++        .iter()
++        .filter(|(selection, _)| {
++            **selection == Selection::PointLight || **selection == Selection::SpotLight
++        })
++        .any(|(_, visibility)| visibility != Visibility::Hidden);
++
++    let (entity, mut light, maybe_texture) = light
++        .single_mut()
++        .expect("there should be a single directional light");
++
++    if directional_visible {
++        light.illuminance = AMBIENT_DAYLIGHT;
++        if maybe_texture.is_none() {
++            commands.entity(entity).insert(DirectionalLightTexture {
++                image: asset_server.load("lightmaps/caustic_directional_texture.png"),
++                tiled: true,
++            });
++        }
++    } else if any_texture_light_visible {
++        light.illuminance = CLEAR_SUNRISE;
++        if maybe_texture.is_some() {
++            commands.entity(entity).remove::<DirectionalLightTexture>();
++        }
++    } else {
++        light.illuminance = AMBIENT_DAYLIGHT;
++        if maybe_texture.is_some() {
++            commands.entity(entity).remove::<DirectionalLightTexture>();
++        }
++    }
++}
+diff --git a/examples/README.md b/examples/README.md
+index d0e33d957f2d47efd1b05ec05cd59091b56ee29f..429e8707fceeb0d967dc848dd40f0152d0c03827 100644
+--- a/examples/README.md
++++ b/examples/README.md
+@@ -158,6 +158,7 @@ Example | Description
+ [Fog volumes](../examples/3d/fog_volumes.rs) | Demonstrates fog volumes
+ [Generate Custom Mesh](../examples/3d/generate_custom_mesh.rs) | Simple showcase of how to generate a custom mesh with a custom texture
+ [Irradiance Volumes](../examples/3d/irradiance_volumes.rs) | Demonstrates irradiance volumes
++[Light Textures](../examples/3d/light_textures.rs) | Demonstrates light textures
+ [Lighting](../examples/3d/lighting.rs) | Illustrates various lighting options in a simple scene
+ [Lightmaps](../examples/3d/lightmaps.rs) | Rendering a scene with baked lightmaps
+ [Lines](../examples/3d/lines.rs) | Create a custom material to draw 3d lines

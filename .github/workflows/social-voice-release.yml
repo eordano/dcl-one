@@ -36,7 +36,7 @@ permissions:
   contents: read
 jobs:
   social-voice-release:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 100
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -46,7 +46,7 @@ jobs:
       RUST_TEST_THREADS: '2'
     steps:
       - name: Reserve disk space for the Rust test build
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
           # The Nix store and the expanded Rust cache can fill the disk of a hosted runner.
           # The delete takes time, so it runs only when 25 GB or less is free.

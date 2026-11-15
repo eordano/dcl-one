@@ -1,0 +1,54 @@
+From 90b3c03e44279bfc9c48e06d7fd03deeadc2b7f1
+Subject: add immediate upload for meshes
+Origin: https://github.com/robtfm/bevy/commit/90b3c03e44279bfc9c48e06d7fd03deeadc2b7f1
+Date: 2025-08-28T15:35:01+01:00
+
+---
+diff --git a/crates/bevy_mesh/src/mesh.rs b/crates/bevy_mesh/src/mesh.rs
+index e4868dbf6997d335669e0d9e8a28c591470b3287..ce357c61065d400a73c415b342c7e2558f0c9cfa 100644
+--- a/crates/bevy_mesh/src/mesh.rs
++++ b/crates/bevy_mesh/src/mesh.rs
+@@ -119,6 +119,7 @@ pub struct Mesh {
+     morph_targets: Option<Handle<Image>>,
+     morph_target_names: Option<Vec<String>>,
+     pub asset_usage: RenderAssetUsages,
++    pub immediate_upload: bool,
+ }
+ 
+ impl Mesh {
+@@ -203,6 +204,7 @@ impl Mesh {
+             morph_targets: None,
+             morph_target_names: None,
+             asset_usage,
++            immediate_upload: false,
+         }
+     }
+ 
+diff --git a/crates/bevy_render/src/mesh/mod.rs b/crates/bevy_render/src/mesh/mod.rs
+index fbd530c14da4219a5397a336eb7e93227dc90833..621e3e7c600358c7da9cd1ff2b556355f15fb9f3 100644
+--- a/crates/bevy_render/src/mesh/mod.rs
++++ b/crates/bevy_render/src/mesh/mod.rs
+@@ -193,6 +193,10 @@ impl RenderAsset for RenderMesh {
+     }
+ 
+     fn byte_len(mesh: &Self::SourceAsset) -> Option<usize> {
++        if mesh.immediate_upload {
++            return None;
++        }
++
+         let mut vertex_size = 0;
+         for attribute_data in mesh.attributes() {
+             let vertex_format = attribute_data.0.format;
+diff --git a/examples/camera/custom_projection.rs b/examples/camera/custom_projection.rs
+index c3bdb49bcdeecabcbd84fc5b8e62dbb458ba0dc1..ebcbd4bb8369f4142bcdc3e53f7a7c8487043933 100644
+--- a/examples/camera/custom_projection.rs
++++ b/examples/camera/custom_projection.rs
+@@ -11,7 +11,7 @@ fn main() {
+ }
+ 
+ /// Like a perspective projection, but the vanishing point is not centered.
+-#[derive(Debug, Clone)]
++#[derive(Debug, Clone, PartialEq)]
+ struct ObliquePerspectiveProjection {
+     horizontal_obliqueness: f32,
+     vertical_obliqueness: f32,

@@ -1,9 +1,6 @@
 import * as net from 'net'
-import {
-  createServerComponent,
-  Router
-} from '../../../../packages/@dcl/sdk-commands/node_modules/@well-known-components/http-server'
-import { createRecordConfigComponent } from '../../../../packages/@dcl/sdk-commands/node_modules/@well-known-components/env-config-provider'
+import { createServerComponent, Router } from '@well-known-components/http-server'
+import { createRecordConfigComponent } from '@well-known-components/env-config-provider'
 import {
   createDeployment,
   DeployContext,

@@ -1,0 +1,76 @@
+From b4602cd531de4047d1c7f7ceb88acf45b20519a1
+Subject: multiline: enter inserts newline, shift+enter submits
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/b4602cd531de4047d1c7f7ceb88acf45b20519a1
+Date: 2026-04-27T15:35:29+01:00
+
+invert the default Enter/Shift+Enter bindings: in multiline mode plain
+Enter inserts a newline and Shift+Enter (or NumpadEnter, or Alt+Enter on
+macos) submits. single-line mode is unchanged: NewLine falls through to
+the submit arm via Submit | NewLine.
+
+also clear `select` in the submit arm so a held Shift modifier doesn't
+preserve the old multi-line cursor anchor as a selection -- on the next
+frame cosmic-text would try to shape an anchor on a line that no longer
+exists and panic.
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index b623edf5a0645572d2c791a8e7cb498df56b77a4..488411947fa9ff4e8b1003cd92a8ef10e77137c8 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -275,10 +275,10 @@ impl TextInputNavigationBindings {
+             (DeletePrev, TextInputBinding::new(Backspace, [])),
+             (DeletePrev, TextInputBinding::new(NumpadBackspace, [])),
+             (DeleteNext, TextInputBinding::new(Delete, [])),
+-            // newline must be before submit as it is the same but with modifiers
+-            (NewLine, TextInputBinding::new(Enter, [ShiftLeft])),
+-            (NewLine, TextInputBinding::new(Enter, [ShiftRight])),
+-            (Submit, TextInputBinding::new(Enter, [])),
++            // submit must be before newline as it is the same but with modifiers
++            (Submit, TextInputBinding::new(Enter, [ShiftLeft])),
++            (Submit, TextInputBinding::new(Enter, [ShiftRight])),
++            (NewLine, TextInputBinding::new(Enter, [])),
+             (Submit, TextInputBinding::new(NumpadEnter, [])),
+             (SelectAll, TextInputBinding::new(KeyA, [ControlLeft])),
+             (SelectAll, TextInputBinding::new(KeyA, [ControlRight])),
+@@ -362,12 +362,12 @@ impl TextInputNavigationBindings {
+             (DeletePrev, TextInputBinding::new(Backspace, [])),
+             (DeletePrev, TextInputBinding::new(NumpadBackspace, [])),
+             (DeleteNext, TextInputBinding::new(Delete, [])),
+-            // newline must be before submit as it is the same but with modifiers
+-            (NewLine, TextInputBinding::new(Enter, [ShiftLeft])),
+-            (NewLine, TextInputBinding::new(Enter, [ShiftRight])),
+-            (NewLine, TextInputBinding::new(Enter, [AltLeft])),
+-            (NewLine, TextInputBinding::new(Enter, [AltRight])),
+-            (Submit, TextInputBinding::new(Enter, [])),
++            // submit must be before newline as it is the same but with modifiers
++            (Submit, TextInputBinding::new(Enter, [ShiftLeft])),
++            (Submit, TextInputBinding::new(Enter, [ShiftRight])),
++            (Submit, TextInputBinding::new(Enter, [AltLeft])),
++            (Submit, TextInputBinding::new(Enter, [AltRight])),
++            (NewLine, TextInputBinding::new(Enter, [])),
+             (Submit, TextInputBinding::new(NumpadEnter, [])),
+             (SelectAll, TextInputBinding::new(KeyA, [SuperLeft])),
+             (SelectAll, TextInputBinding::new(KeyA, [SuperRight])),
+@@ -721,16 +721,20 @@ fn keyboard(
+                     LineDown => Some(Action::Motion(Motion::Down)),
+                     DeletePrev => Some(Action::Backspace),
+                     DeleteNext => Some(Action::Delete),
+-                    Submit => {
++                    NewLine if settings.multiline => Some(Action::Enter),
++                    // NewLine here only fires in single-line mode (guarded arm above takes priority)
++                    Submit | NewLine => {
+                         if settings.retain_on_submit {
+                             submitted_value = Some(text_input.0.clone());
+                         } else {
+                             submitted_value = Some(std::mem::take(&mut text_input.0));
+                         };
+                         timer_should_reset = false;
++                        // submit may be triggered with shift held; ensure selection is dropped
++                        // so cosmic-text doesn't try to shape a stale anchor next frame
++                        select = false;
+                         Some(Action::Motion(Motion::BufferStart))
+                     }
+-                    NewLine => settings.multiline.then_some(Action::Enter),
+                     SelectAll => {
+                         editor
+                             .editor

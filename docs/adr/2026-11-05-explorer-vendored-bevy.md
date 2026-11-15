@@ -1,6 +1,6 @@
 # ADR: The Explorer's Bevy is vendored in this repository
 
-- Status: Accepted
+- Status: Superseded by [2026-11-14](2026-11-14-explorer-sources-as-patches.md)
 - Date: 2026-11-05
 
 ## Context
@@ -27,7 +27,7 @@ it in place from now on. This repository is the source of truth; the fork branch
   loadable, so its crates' tests can run in it.
 - **Where:** beside `source/`, outside the Explorer's Cargo workspace. It is no workspace member,
   needs no `exclude`, and the Explorer's Clippy, Rustfmt and Taplo gates do not reach it.
-  `rust-cache` keeps its artifacts, since they lie outside the workspace root.
+  The native cache keeps its artifacts: `tooling/bevy-target-cache.py` prunes workspace crates only.
 - **Cargo:** `[patch.crates-io]` maps the 18 Bevy crates that ecosystem crates name by version to
   paths in the tree, and `[patch."https://github.com/robtfm/bevy"]` maps `bevy` for `bevy_dui`,
   `bevy_ecss` and `boimp`, which name the fork by git. `Cargo.lock` changes only by the 47 Bevy
@@ -57,8 +57,7 @@ it in place from now on. This repository is the source of truth; the fork branch
   applied before Cargo can resolve, and a Bevy change becomes an edit to a patch file.
 - **`rendering/bevy-explorer/source/vendor/bevy`:** the `source/` tooling would cover it
   unchanged, but it needs a workspace `exclude` and a Taplo exclusion, `play-artifact.py` rejects
-  its symlink, a Bevy change would count as platform-neutral source, and `rust-cache` would drop
-  its artifacts.
+  its symlink, and a Bevy change would count as platform-neutral source.
 - **The whole tree with `assets/`:** 55 MB no build or test reads, two thirds of the repository's
   size.
 - **The fork kept upstream and re-imported:** two sources of truth, and every change made here

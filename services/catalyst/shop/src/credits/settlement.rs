@@ -43,6 +43,7 @@ use super::store::{Credits, now};
 use crate::evm::chain::ChainComponent;
 use crate::evm::signer::{DirectSigner, ReceiptOutcome};
 use crate::jobs::{JobContext, Jobs, PeriodicCfg};
+use crate::policy_entry::EXECUTOR_EXECUTE_SELECTOR;
 use crate::shared::cache::TtlMap;
 use crate::shared::writes::{PassGate, WRITES_DISABLED_MESSAGE, ops_refusal};
 use crate::types::{ManaUsdRate, ManaWei, UsdCents};
@@ -67,15 +68,15 @@ pub const SHARED_MANAGERS: [&str; 4] = [
     "0x037566bc90f85e76587e1b07f9184585f09c1420",
 ];
 
-/// The pass-through NAME executors (CORAL/Squid and Across) and their
-/// `execute` selector: a manager that allowlists one lets a custom call
+/// The pass-through NAME executors (CORAL/Squid and Across), whose
+/// `execute` selector is [`EXECUTOR_EXECUTE_SELECTOR`]: a manager that
+/// allowlists one lets a custom call
 /// reach a resale (CONTRACTS.md, "Can a custom call reach a resale?").
 pub const PASS_THROUGH_EXECUTORS: [&str; 3] = [
     "0x84c682b1b862859730446bca5b853a5693aefc84",
     "0xc9a9c416fbfd424d09e3f905142799abb10c2fa7",
     "0x5e359ebd4cc379f46020fac720261dc9c1d80404",
 ];
-pub const EXECUTOR_EXECUTE_SELECTOR: [u8; 4] = [0xfd, 0x16, 0x5a, 0x73];
 
 sol! {
     interface ICreditsManager {

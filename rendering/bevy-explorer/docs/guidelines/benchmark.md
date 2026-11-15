@@ -402,10 +402,13 @@ browser stream, a leg's runner and the report, so the page's sender (`perf_strea
 receiver change together. CI's *Test Suite* builds it on each platform it runs and uploads it as
 `bevy-explorer-benchmark-<os>-<arch>-<sha>` (`windows-amd64`, `macos-arm64`, `linux-amd64`; kept
 90 days on main, 7 otherwise). Windows and macOS run on every main push that runs the Test Suite,
-and on a PR only for a [platform input](platforms.md) or `ci:macos`. Other PRs that run the Test
+and on a PR only for a [platform input](platforms.md) or `ci:macos`. A draft PR does not run the
+Test Suite, so it uploads no runner until it is marked ready for review. Other PRs that run the Test
 Suite, including one confined to `perf_stream.js` or `sso.ts` (which the runner's tests read),
 build only the Linux runner; one confined to other web files builds none. The workflow takes the
-missing runners from main.
+missing runners from main. A draft that changes the sender or the runner is then measured with the
+runner of main, which is not the receiver of its sender: read its benchmark only after the PR is
+ready for review.
 
 | Command | Does |
 | --- | --- |

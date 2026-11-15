@@ -1,0 +1,78 @@
+From dbd98d208767a502d56e502dc586cf9963f5056e
+Subject: bevy_gltf: skip texture decode when load_materials is empty
+Origin: https://github.com/robtfm/bevy/commit/dbd98d208767a502d56e502dc586cf9963f5056e
+Date: 2026-08-05T21:53:25+01:00
+
+Empty `load_materials` means the materials these textures feed are retained in
+neither world, so nothing can ever sample them — decoding is pure cost: CPU at
+load (plus a CatmullRom resample per >4MB texture under `reduce_image_sizes`)
+and the pixels stay resident for the life of the asset.
+
+Register a 1x1 placeholder under the normal texture label instead of decoding.
+Keeping the label matters: `texture_handle` hands out labelled handles for
+inline sources, and per-primitive materials are still created even when
+`load_materials` is empty, so dropping the label would leave those handles
+dangling and the asset dependency graph unresolved.
+
+Only the two inline-decoded sources are affected (buffer views and `data:`
+URIs). Textures referencing an external file resolve to a path handle rather
+than the label, so a placeholder would be ignored while the real file loaded
+anyway. Mesh data is untouched, including morph targets, which come from mesh
+accessors rather than textures.
+
+Measured in a headless Decentraland scene server (no render app, geometry kept
+for collision): 7 production worlds, steady-state RSS -60% on the two heaviest
+(825 -> 326 MB and 448 -> 178 MB).
+---
+diff --git a/crates/bevy_gltf/src/loader/mod.rs b/crates/bevy_gltf/src/loader/mod.rs
+index d591c5330023f0c35df356ec9a442f55dad33105..15d9c78dabc562447616ea1837b7533bac74dead 100644
+--- a/crates/bevy_gltf/src/loader/mod.rs
++++ b/crates/bevy_gltf/src/loader/mod.rs
+@@ -993,6 +993,47 @@ fn load_image<'a, 'b>(
+ ) -> Result<ImageOrPath, GltfError> {
+     let is_srgb = !linear_textures.contains(&gltf_texture.index());
+     let sampler_descriptor = texture_sampler(&gltf_texture);
++
++    // `render_asset_usages` is the caller's `load_materials`. Empty means the materials
++    // these textures feed are retained in neither world, so nothing can ever sample them:
++    // decode is pure cost (CPU on load, and the pixels stay resident for the life of the
++    // asset). Register a 1x1 placeholder under the normal texture label instead, so
++    // material texture handles and the asset dependency graph still resolve — skipping
++    // the label entirely would leave `texture_handle`'s labelled handles dangling.
++    //
++    // Applies to the two sources decoded inline here (buffer views and `data:` URIs).
++    // Textures referencing an external file are left alone: `texture_handle` resolves
++    // those to a path handle rather than the label, so a placeholder under the label
++    // would be ignored while the real file loaded anyway.
++    let skip_texture_data = render_asset_usages.is_empty()
++        && match gltf_texture.source().source() {
++            Source::View { .. } => true,
++            Source::Uri { uri, .. } => DataUri::parse(uri).is_ok(),
++        };
++    if skip_texture_data {
++        let mut image = Image::new_fill(
++            bevy_render::render_resource::Extent3d {
++                width: 1,
++                height: 1,
++                depth_or_array_layers: 1,
++            },
++            bevy_render::render_resource::TextureDimension::D2,
++            &[255, 255, 255, 255],
++            if is_srgb {
++                bevy_render::render_resource::TextureFormat::Rgba8UnormSrgb
++            } else {
++                bevy_render::render_resource::TextureFormat::Rgba8Unorm
++            },
++            render_asset_usages,
++        );
++        image.sampler = ImageSampler::Descriptor(sampler_descriptor);
++        image.transfer_priority = transfer_priority;
++        return Ok(ImageOrPath::Image {
++            image,
++            label: GltfAssetLabel::Texture(gltf_texture.index()),
++        });
++    }
++
+     #[cfg(all(debug_assertions, feature = "dds"))]
+     let name = gltf_texture
+         .name()

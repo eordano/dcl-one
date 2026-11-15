@@ -1,0 +1,29 @@
+From a8dbb73af4aa86c30c7c1edece27943eed8c7b9e
+Subject: more macos bindings for line/text start/end
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/a8dbb73af4aa86c30c7c1edece27943eed8c7b9e
+Date: 2025-07-16T10:50:42+01:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 454189e9d7e6909ab17ef78525efe8c7db98dd91..bdd8222ea62867fbcb0b5ce1ed297bfa13dc38fb 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -337,12 +337,18 @@ impl TextInputNavigationBindings {
+         Self(vec![
+             (TextStart, TextInputBinding::new(ArrowUp, [SuperLeft])),
+             (TextStart, TextInputBinding::new(ArrowUp, [SuperRight])),
++            (TextStart, TextInputBinding::new(Home, [SuperLeft])),
++            (TextStart, TextInputBinding::new(Home, [SuperRight])),
+             (TextEnd, TextInputBinding::new(ArrowDown, [SuperLeft])),
+             (TextEnd, TextInputBinding::new(ArrowDown, [SuperRight])),
++            (TextEnd, TextInputBinding::new(End, [SuperLeft])),
++            (TextEnd, TextInputBinding::new(End, [SuperRight])),
+             (LineStart, TextInputBinding::new(ArrowLeft, [SuperLeft])),
+             (LineStart, TextInputBinding::new(ArrowLeft, [SuperRight])),
++            (LineStart, TextInputBinding::new(Home, [])),
+             (LineEnd, TextInputBinding::new(ArrowRight, [SuperLeft])),
+             (LineEnd, TextInputBinding::new(ArrowRight, [SuperRight])),
++            (LineEnd, TextInputBinding::new(End, [])),
+             (WordLeft, TextInputBinding::new(ArrowLeft, [AltLeft])),
+             (WordLeft, TextInputBinding::new(ArrowLeft, [AltRight])),
+             (WordRight, TextInputBinding::new(ArrowRight, [AltLeft])),

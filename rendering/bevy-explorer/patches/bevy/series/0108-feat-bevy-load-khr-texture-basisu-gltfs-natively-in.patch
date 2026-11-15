@@ -1,0 +1,574 @@
+From 7339693263e6cc43a99f912c6fe4047b7e54ce51
+Subject: feat(bevy): load KHR_texture_basisu glTFs natively in the glTF loader (#330)
+Origin: https://github.com/decentraland/dcl-one/commit/7339693263e6cc43a99f912c6fe4047b7e54ce51
+Date: 2026-11-13T09:20:27-03:00
+
+---
+diff --git a/crates/bevy_gltf/Cargo.toml b/crates/bevy_gltf/Cargo.toml
+index 8d1226665c4c32bc0a0926c262f84a1915c66f21..b3f0c9ef476f21b89cdc65f86024f43630a8512d 100644
+--- a/crates/bevy_gltf/Cargo.toml
++++ b/crates/bevy_gltf/Cargo.toml
+@@ -53,6 +53,9 @@ gltf = { version = "1.4.0", default-features = false, features = [
+   "KHR_materials_unlit",
+   "KHR_materials_emissive_strength",
+   "KHR_texture_transform",
++  # accepts a required KHR_texture_basisu and a texture with no `source`; the loader reads the
++  # extension's image itself (`prefer_basisu_sources`) and the host decodes it
++  "allow_empty_texture",
+   "extras",
+   "extensions",
+   "names",
+diff --git a/crates/bevy_gltf/src/loader/gltf_ext/texture.rs b/crates/bevy_gltf/src/loader/gltf_ext/texture.rs
+index 37eb7bdede9f3a232768246f08df72458d9e77b5..f2eee48b2b1ccb76c13dde416dfefc9434f549dc 100644
+--- a/crates/bevy_gltf/src/loader/gltf_ext/texture.rs
++++ b/crates/bevy_gltf/src/loader/gltf_ext/texture.rs
+@@ -24,7 +24,11 @@ pub(crate) fn texture_handle(
+     load_context: &mut LoadContext,
+     uri_resolver: Option<&GltfUriResolver>,
+ ) -> Handle<Image> {
+-    match texture.source().source() {
++    // no image (`allow_empty_texture`): `load_image` registers a placeholder under the label
++    let Some(image) = texture.source() else {
++        return load_context.get_label_handle(texture_label(texture).to_string());
++    };
++    match image.source() {
+         Source::View { .. } => load_context.get_label_handle(texture_label(texture).to_string()),
+         Source::Uri { uri, .. } => {
+             let uri = percent_encoding::percent_decode_str(uri)
+diff --git a/crates/bevy_gltf/src/loader/mod.rs b/crates/bevy_gltf/src/loader/mod.rs
+index 15747d6929d614271a8ca68741f9aa26c03dd0b4..0619b115d17247de53ccf3a5aaaee4fb9d89a2e1 100644
+--- a/crates/bevy_gltf/src/loader/mod.rs
++++ b/crates/bevy_gltf/src/loader/mod.rs
+@@ -10,7 +10,7 @@ use std::{
+ #[cfg(feature = "bevy_animation")]
+ use bevy_animation::{prelude::*, AnimationTarget, AnimationTargetId};
+ use bevy_asset::{
+-    AssetLoadError, AssetLoader, Handle, LoadContext, ReadAssetBytesError, RenderAssetTransferPriority, RenderAssetUsages, io::Reader
++    AssetLoadError, AssetLoader, AssetPath, Handle, LoadContext, ReadAssetBytesError, RenderAssetTransferPriority, RenderAssetUsages, io::Reader
+ };
+ use bevy_color::{Color, LinearRgba};
+ use bevy_core_pipeline::prelude::Camera3d;
+@@ -277,6 +277,7 @@ async fn load_gltf<'a, 'b, 'c>(
+         }
+         Err(e) => return Err(e.into()),
+     };
++    let gltf = prefer_extension_sources(gltf);
+ 
+     let file_name = load_context
+         .asset_path()
+@@ -573,6 +574,7 @@ async fn load_gltf<'a, 'b, 'c>(
+             texture,
+             &buffer_data,
+             &linear_textures,
++            load_context.asset_path(),
+             parent_path,
+             loader.uri_resolver.as_ref(),
+             loader.supported_compressed_formats,
+@@ -1014,11 +1016,69 @@ async fn load_gltf<'a, 'b, 'c>(
+     })
+ }
+ 
+-/// Loads a glTF texture as a bevy [`Image`] and returns it together with its label.
++/// The texture extensions whose `source` names an image this loader decodes, in the order one is
++/// picked when a texture carries several: `KHR_texture_basisu` (KTX2, through the host's
++/// transcoder), `EXT_texture_webp` and `MSFT_texture_dds`. They are the extensions `gltf`'s
++/// `allow_empty_texture` lets a file require with no `source` on its textures.
++const SOURCE_EXTENSIONS: [&str; 3] = ["KHR_texture_basisu", "EXT_texture_webp", "MSFT_texture_dds"];
++
++/// The image index a texture's [`SOURCE_EXTENSIONS`] entry names, when the texture has no
++/// `source` of its own and the index is in range. A texture with a PNG/JPEG fallback keeps it:
++/// the fallback always decodes, while its KTX2 may be a codec the host can't transcode (ETC1S).
++fn extension_source(texture: &gltf::json::Texture, image_count: usize) -> Option<u32> {
++    // `allow_empty_texture` stores a missing `source` as u32::MAX
++    if texture.source.value() != u32::MAX as usize {
++        return None;
++    }
++    let extensions = &texture.extensions.as_ref()?.others;
++    let source = SOURCE_EXTENSIONS
++        .iter()
++        .find_map(|name| extensions.get(*name)?.get("source")?.as_u64())?;
++    (source < image_count as u64).then_some(source as u32)
++}
++
++/// Points every texture whose only image is an extension's ([`SOURCE_EXTENSIONS`]) at that
++/// image, so the rest of the loader reads it as the texture's ordinary `source`: by path through
++/// the asset server, or embedded through `Image::from_buffer_at` at its labelled path. A KTX2
++/// ends in `bevy_image`'s KTX2 decode, where the host's transcoder
++/// (`bevy_image::set_ktx2_transcoder`) takes UASTC; a WebP or DDS in bevy's own decoders.
++/// `gltf`'s `allow_empty_texture` feature is what lets a file that requires one of these, and
++/// whose textures have no `source`, through validation.
++fn prefer_extension_sources(gltf: gltf::Gltf) -> gltf::Gltf {
++    let image_count = gltf.document.images().len();
++    if !gltf
++        .document
++        .as_json()
++        .textures
++        .iter()
++        .any(|texture| extension_source(texture, image_count).is_some())
++    {
++        return gltf;
++    }
++    let gltf::Gltf { document, blob } = gltf;
++    let mut root = document.into_json();
++    for texture in &mut root.textures {
++        if let Some(source) = extension_source(texture, image_count) {
++            texture.source = gltf::json::Index::new(source);
++        }
++    }
++    gltf::Gltf {
++        // only in-range image indices were written, over a document that already validated
++        document: Document::from_json_without_validation(root),
++        blob,
++    }
++}
++
++/// Loads a glTF texture as a bevy [`Image`] and returns it together with its label. An image
++/// embedded in the file (buffer view or `data:` URI) is decoded at its labelled path
++/// (`model.glb#Texture0`), so a KTX2 among them reaches the host's transcoder as glTF content:
++/// one it can't transcode fails to load rather than fall to bevy's own KTX2 decode.
++#[expect(clippy::too_many_arguments, reason = "the glTF's path joins the texture's context")]
+ fn load_image<'a, 'b>(
+     gltf_texture: gltf::Texture<'a>,
+     buffer_data: &[Vec<u8>],
+     linear_textures: &HashSet<usize>,
++    gltf_path: &AssetPath<'_>,
+     parent_path: &'b Path,
+     uri_resolver: Option<&GltfUriResolver>,
+     supported_compressed_formats: CompressedImageFormats,
+@@ -1039,12 +1099,18 @@ fn load_image<'a, 'b>(
+     // Textures referencing an external file are left alone: `texture_handle` resolves
+     // those to a path handle rather than the label, so a placeholder under the label
+     // would be ignored while the real file loaded anyway.
+-    let skip_texture_data = render_asset_usages.is_empty()
+-        && match gltf_texture.source().source() {
+-            Source::View { .. } => true,
+-            Source::Uri { uri, .. } => DataUri::parse(uri).is_ok(),
+-        };
+-    if skip_texture_data {
++    //
++    // A texture with no image at all (`allow_empty_texture`: its only image is in an extension
++    // `prefer_extension_sources` doesn't read) gets the same placeholder, which `texture_handle`
++    // points it at.
++    let source = gltf_texture.source().filter(|image| {
++        !(render_asset_usages.is_empty()
++            && match image.source() {
++                Source::View { .. } => true,
++                Source::Uri { uri, .. } => DataUri::parse(uri).is_ok(),
++            })
++    });
++    let Some(source) = source else {
+         let mut image = Image::new_fill(
+             bevy_render::render_resource::Extent3d {
+                 width: 1,
+@@ -1066,18 +1132,21 @@ fn load_image<'a, 'b>(
+             image,
+             label: GltfAssetLabel::Texture(gltf_texture.index()),
+         });
+-    }
++    };
+ 
+     #[cfg(all(debug_assertions, feature = "dds"))]
+     let name = gltf_texture
+         .name()
+         .map_or("Unknown GLTF Texture".to_string(), ToString::to_string);
+-    match gltf_texture.source().source() {
++    let texture_path = gltf_path
++        .clone_owned()
++        .with_label(GltfAssetLabel::Texture(gltf_texture.index()).to_string());
++    match source.source() {
+         Source::View { view, mime_type } => {
+             let start = view.offset();
+             let end = view.offset() + view.length();
+             let buffer = &buffer_data[view.buffer().index()][start..end];
+-            let image = Image::from_buffer(
++            let image = Image::from_buffer_at(
+                 #[cfg(all(debug_assertions, feature = "dds"))]
+                 name,
+                 buffer,
+@@ -1086,6 +1155,7 @@ fn load_image<'a, 'b>(
+                 is_srgb,
+                 ImageSampler::Descriptor(sampler_descriptor),
+                 render_asset_usages,
++                Some(&texture_path),
+             )?;
+ 
+             // wasm can't sample Rgba16Unorm; native keeps 16-bit except for sRGB
+@@ -1192,7 +1262,7 @@ fn load_image<'a, 'b>(
+                 let bytes = data_uri.decode()?;
+                 let image_type = ImageType::MimeType(data_uri.mime_type);
+ 
+-                let image = Image::from_buffer(
++                let image = Image::from_buffer_at(
+                     #[cfg(all(debug_assertions, feature = "dds"))]
+                     name,
+                     &bytes,
+@@ -1201,6 +1271,7 @@ fn load_image<'a, 'b>(
+                     is_srgb,
+                     ImageSampler::Descriptor(sampler_descriptor),
+                     render_asset_usages,
++                    Some(&texture_path),
+                 )?;
+ 
+                 // wasm can't sample Rgba16Unorm; native keeps 16-bit except for
+@@ -2484,4 +2555,90 @@ mod test {
+         assert_eq!(skinned_node.children.len(), 2);
+         assert_eq!(skinned_node.skin.as_ref(), Some(&gltf_root.skins[0]));
+     }
++
++    /// `json` parsed with validation, then through `prefer_extension_sources`.
++    fn parse_basisu(json: &str) -> gltf::Gltf {
++        super::prefer_extension_sources(gltf::Gltf::from_slice(json.as_bytes()).unwrap())
++    }
++
++    /// The image index texture `texture` samples.
++    fn sampled_image(gltf: &gltf::Gltf, texture: usize) -> Option<usize> {
++        let texture = gltf.document.textures().nth(texture).unwrap();
++        texture.source().map(|image| image.index())
++    }
++
++    #[test]
++    fn required_basisu_texture_without_source_samples_its_ktx2() {
++        let gltf = parse_basisu(
++            r#"{"asset":{"version":"2.0"},
++                "extensionsUsed":["KHR_texture_basisu"],
++                "extensionsRequired":["KHR_texture_basisu"],
++                "images":[{"uri":"albedo.ktx2","mimeType":"image/ktx2"}],
++                "textures":[{"extensions":{"KHR_texture_basisu":{"source":0}}}]}"#,
++        );
++        assert_eq!(sampled_image(&gltf, 0), Some(0));
++    }
++
++    #[test]
++    fn basisu_texture_with_a_fallback_keeps_it() {
++        // the ktx2 may be ETC1S, which the host can't transcode; the png always decodes
++        let gltf = parse_basisu(
++            r#"{"asset":{"version":"2.0"},
++                "extensionsUsed":["KHR_texture_basisu"],
++                "images":[{"uri":"albedo.png"},{"uri":"albedo.ktx2","mimeType":"image/ktx2"}],
++                "textures":[{"source":0,"extensions":{"KHR_texture_basisu":{"source":1}}}]}"#,
++        );
++        assert_eq!(sampled_image(&gltf, 0), Some(0));
++    }
++
++    #[test]
++    fn out_of_range_basisu_source_leaves_no_image() {
++        let gltf = parse_basisu(
++            r#"{"asset":{"version":"2.0"},
++                "extensionsUsed":["KHR_texture_basisu"],
++                "extensionsRequired":["KHR_texture_basisu"],
++                "images":[{"uri":"albedo.ktx2","mimeType":"image/ktx2"}],
++                "textures":[{"extensions":{"KHR_texture_basisu":{"source":5}}}]}"#,
++        );
++        // no image: `load_image` registers the placeholder under the texture label
++        assert_eq!(sampled_image(&gltf, 0), None);
++    }
++
++    #[test]
++    fn required_webp_and_dds_textures_without_source_sample_their_image() {
++        let gltf = parse_basisu(
++            r#"{"asset":{"version":"2.0"},
++                "extensionsUsed":["EXT_texture_webp","MSFT_texture_dds"],
++                "extensionsRequired":["EXT_texture_webp","MSFT_texture_dds"],
++                "images":[{"uri":"albedo.webp","mimeType":"image/webp"},{"uri":"normal.dds"}],
++                "textures":[{"extensions":{"EXT_texture_webp":{"source":0}}},
++                            {"extensions":{"MSFT_texture_dds":{"source":1}}}]}"#,
++        );
++        assert_eq!(sampled_image(&gltf, 0), Some(0));
++        assert_eq!(sampled_image(&gltf, 1), Some(1));
++    }
++
++    #[test]
++    fn basisu_is_picked_over_webp_on_one_texture() {
++        let gltf = parse_basisu(
++            r#"{"asset":{"version":"2.0"},
++                "extensionsUsed":["KHR_texture_basisu","EXT_texture_webp"],
++                "extensionsRequired":["KHR_texture_basisu","EXT_texture_webp"],
++                "images":[{"uri":"albedo.webp","mimeType":"image/webp"},
++                          {"uri":"albedo.ktx2","mimeType":"image/ktx2"}],
++                "textures":[{"extensions":{"EXT_texture_webp":{"source":0},
++                                           "KHR_texture_basisu":{"source":1}}}]}"#,
++        );
++        assert_eq!(sampled_image(&gltf, 0), Some(1));
++    }
++
++    #[test]
++    fn texture_without_basisu_is_untouched() {
++        let gltf = parse_basisu(
++            r#"{"asset":{"version":"2.0"},
++                "images":[{"uri":"a.png"},{"uri":"b.png"}],
++                "textures":[{"source":1}]}"#,
++        );
++        assert_eq!(sampled_image(&gltf, 0), Some(1));
++    }
+ }
+diff --git a/crates/bevy_image/src/image.rs b/crates/bevy_image/src/image.rs
+index fec78e735286dd61236542afb3b01dc64cc6a3a3..fd17064a7073c336290d61e317e3ff7003725cf0 100644
+--- a/crates/bevy_image/src/image.rs
++++ b/crates/bevy_image/src/image.rs
+@@ -9,7 +9,7 @@ use bevy_reflect::TypePath;
+ #[cfg(feature = "bevy_reflect")]
+ use bevy_reflect::{std_traits::ReflectDefault, Reflect};
+ 
+-use bevy_asset::{Asset, RenderAssetTransferPriority, RenderAssetUsages};
++use bevy_asset::{Asset, AssetPath, RenderAssetTransferPriority, RenderAssetUsages};
+ use bevy_color::{Color, ColorToComponents, Gray, LinearRgba, Srgba, Xyza};
+ use bevy_math::{AspectRatio, UVec2, UVec3, Vec2};
+ use core::hash::Hash;
+@@ -932,10 +932,82 @@ impl Image {
+ 
+     /// Load a bytes buffer in a [`Image`], according to type `image_type`, using the `image`
+     /// crate
++    ///
++    /// KTX2 bytes decode as KTX2 whatever `image_type` says, through the host's transcoder when
++    /// one is set (`set_ktx2_transcoder`).
+     pub fn from_buffer(
+         #[cfg(all(debug_assertions, feature = "dds"))] name: String,
+         buffer: &[u8],
+         image_type: ImageType,
++        supported_compressed_formats: CompressedImageFormats,
++        is_srgb: bool,
++        image_sampler: ImageSampler,
++        asset_usage: RenderAssetUsages,
++    ) -> Result<Image, TextureError> {
++        Self::from_buffer_at(
++            #[cfg(all(debug_assertions, feature = "dds"))]
++            name,
++            buffer,
++            image_type,
++            supported_compressed_formats,
++            is_srgb,
++            image_sampler,
++            asset_usage,
++            None,
++        )
++    }
++
++    /// [`Image::from_buffer`] for an asset read from `asset_path`, which the host's KTX2
++    /// transcoder is given (see [`Ktx2Transcoder`](crate::Ktx2Transcoder)). An image embedded
++    /// in another asset (a glTF texture) passes its labelled path, so the host can tell it from
++    /// bevy's own KTX2 LUTs, which come through [`Image::from_buffer`] with no path.
++    ///
++    /// The bytes win over `image_type`: KTX2 bytes decode as KTX2 and DDS bytes as DDS, whatever
++    /// was declared. A host that caches its transcode over the KTX2 bytes reads the DDS back from
++    /// the same path, whatever its extension.
++    #[expect(clippy::too_many_arguments, reason = "from_buffer's arguments and the path")]
++    pub fn from_buffer_at(
++        #[cfg(all(debug_assertions, feature = "dds"))] name: String,
++        buffer: &[u8],
++        image_type: ImageType,
++        supported_compressed_formats: CompressedImageFormats,
++        is_srgb: bool,
++        image_sampler: ImageSampler,
++        asset_usage: RenderAssetUsages,
++        asset_path: Option<&AssetPath<'_>>,
++    ) -> Result<Image, TextureError> {
++        // sniffed before `image_type` is resolved, which fails on an unknown mime type
++        #[cfg(feature = "ktx2")]
++        let sniffed = has_ktx2_magic(buffer).then_some(ImageFormat::Ktx2);
++        #[cfg(not(feature = "ktx2"))]
++        let sniffed: Option<ImageFormat> = None;
++        #[cfg(all(feature = "ktx2", feature = "dds"))]
++        let sniffed = sniffed.or(buffer.starts_with(b"DDS ").then_some(ImageFormat::Dds));
++        let format = match sniffed {
++            Some(format) => format,
++            None => image_type.to_image_format()?,
++        };
++        Self::decode_buffer(
++            #[cfg(all(debug_assertions, feature = "dds"))]
++            name,
++            buffer,
++            format,
++            supported_compressed_formats,
++            is_srgb,
++            image_sampler,
++            asset_usage,
++            asset_path,
++            true,
++        )
++    }
++
++    /// Decodes `buffer` as `format`. A KTX2 goes to the host's transcoder first when
++    /// `host_transcoder` is set; what the transcoder returns is decoded without it.
++    #[expect(clippy::too_many_arguments, reason = "from_buffer's arguments and the path")]
++    fn decode_buffer(
++        #[cfg(all(debug_assertions, feature = "dds"))] name: String,
++        buffer: &[u8],
++        format: ImageFormat,
+         #[cfg_attr(
+             not(any(feature = "basis-universal", feature = "dds", feature = "ktx2")),
+             expect(unused_variables, reason = "only used with certain features")
+@@ -944,9 +1016,17 @@ impl Image {
+         is_srgb: bool,
+         image_sampler: ImageSampler,
+         asset_usage: RenderAssetUsages,
++        #[cfg_attr(
++            not(feature = "ktx2"),
++            expect(unused_variables, reason = "only used with ktx2")
++        )]
++        asset_path: Option<&AssetPath<'_>>,
++        #[cfg_attr(
++            not(feature = "ktx2"),
++            expect(unused_variables, reason = "only used with ktx2")
++        )]
++        host_transcoder: bool,
+     ) -> Result<Image, TextureError> {
+-        let format = image_type.to_image_format()?;
+-
+         // Load the image in the expected format.
+         // Some formats like PNG allow for R or RG textures too, so the texture
+         // format needs to be determined. For RGB textures an alpha channel
+@@ -968,7 +1048,29 @@ impl Image {
+             )?,
+             #[cfg(feature = "ktx2")]
+             ImageFormat::Ktx2 => {
+-                ktx2_buffer_to_image(buffer, supported_compressed_formats, is_srgb)?
++                let transcoded = if host_transcoder {
++                    host_ktx2_transcode(buffer, asset_path)
++                } else {
++                    None
++                };
++                match transcoded {
++                    Some(transcoded) => {
++                        let (bytes, format) = transcoded?;
++                        Self::decode_buffer(
++                            #[cfg(all(debug_assertions, feature = "dds"))]
++                            name,
++                            &bytes,
++                            format,
++                            supported_compressed_formats,
++                            is_srgb,
++                            image_sampler.clone(),
++                            asset_usage,
++                            None,
++                            false,
++                        )?
++                    }
++                    None => ktx2_buffer_to_image(buffer, supported_compressed_formats, is_srgb)?,
++                }
+             }
+             #[expect(
+                 clippy::allow_attributes,
+@@ -990,6 +1092,9 @@ impl Image {
+             }
+         };
+         image.sampler = image_sampler;
++        // the compressed decodes (basis, dds, ktx2) leave the default usage: a cached dds must
++        // load with the caller's usage as its first (ktx2) load did
++        image.asset_usage = asset_usage;
+         Ok(image)
+     }
+ 
+diff --git a/crates/bevy_image/src/image_loader.rs b/crates/bevy_image/src/image_loader.rs
+index 513f435e16eae761221780f6f13686a2b14d83af..d32f9dc2075341fccb09b230fac7a6aefb6d5fe0 100644
+--- a/crates/bevy_image/src/image_loader.rs
++++ b/crates/bevy_image/src/image_loader.rs
+@@ -140,6 +140,11 @@ impl AssetLoader for ImageLoader {
+                 ImageType::Extension(ext)
+             }
+             ImageFormatSetting::Format(format) => ImageType::Format(format),
++            // the `image` crate doesn't know KTX2; take it by its magic, at any path
++            #[cfg(feature = "ktx2")]
++            ImageFormatSetting::Guess if crate::ktx2::has_ktx2_magic(&bytes) => {
++                ImageType::Format(ImageFormat::Ktx2)
++            }
+             ImageFormatSetting::Guess => {
+                 let format = image::guess_format(&bytes).map_err(|err| FileTextureError {
+                     error: err.into(),
+@@ -154,7 +159,8 @@ impl AssetLoader for ImageLoader {
+             }
+         };
+ 
+-        let image = Image::from_buffer(
++        // with the asset path, for the host's KTX2 transcoder (see `Ktx2Transcoder`)
++        let image = Image::from_buffer_at(
+             #[cfg(all(debug_assertions, feature = "dds"))]
+             load_context.path().display().to_string(),
+             &bytes,
+@@ -163,6 +169,7 @@ impl AssetLoader for ImageLoader {
+             settings.is_srgb,
+             settings.sampler.clone(),
+             settings.asset_usage,
++            Some(load_context.asset_path()),
+         )
+         .map_err(|err| FileTextureError {
+             error: err,
+diff --git a/crates/bevy_image/src/ktx2.rs b/crates/bevy_image/src/ktx2.rs
+index bffea83d1056941a53857cc9ee4a74eb90bad42b..a30da693e0632a603268c7353203003293da41dc 100644
+--- a/crates/bevy_image/src/ktx2.rs
++++ b/crates/bevy_image/src/ktx2.rs
+@@ -18,7 +18,58 @@ use wgpu_types::{
+     TextureViewDimension,
+ };
+ 
+-use super::{CompressedImageFormats, DataFormat, Image, TextureError, TranscodeFormat};
++use super::{
++    CompressedImageFormats, DataFormat, Image, ImageFormat, TextureError, TranscodeFormat,
++};
++use bevy_asset::AssetPath;
++use std::sync::{Arc, OnceLock};
++
++/// The first 12 bytes of every KTX2 file.
++pub const KTX2_MAGIC: &[u8; 12] = b"\xABKTX 20\xBB\r\n\x1A\n";
++
++/// What a [`Ktx2Transcoder`] turned a KTX2 into: bytes and the format to decode them as.
++pub type Ktx2Transcoded = Result<(Vec<u8>, ImageFormat), TextureError>;
++
++/// A host's transcoder for KTX2 images, given the KTX2 bytes and the image's asset path: the
++/// path [`ImageLoader`](crate::ImageLoader) loaded it from, or the labelled path an embedded
++/// image is decoded at through [`Image::from_buffer_at`] (a glTF texture, `model.glb#Texture0`).
++/// `None` for [`Image::from_buffer`] callers, such as bevy's own LUTs.
++///
++/// - `None`: not the host's; bevy's own KTX2 decode takes the bytes as it would without a hook.
++/// - `Some(Ok((bytes, format)))`: decode `bytes` as `format` (not KTX2) instead, with the same
++///   `is_srgb`, sampler and asset usage the KTX2 was loaded with.
++/// - `Some(Err(_))`: the image fails to load.
++///
++/// Set once per process with [`set_ktx2_transcoder`]: [`Image::from_buffer`] has no plugin or
++/// loader to carry it.
++pub type Ktx2Transcoder =
++    Arc<dyn Fn(&[u8], Option<&AssetPath<'_>>) -> Option<Ktx2Transcoded> + Send + Sync>;
++
++static KTX2_TRANSCODER: OnceLock<Ktx2Transcoder> = OnceLock::new();
++
++/// Sets the process's [`Ktx2Transcoder`]. Every KTX2 decoded after this goes through it, by path
++/// or embedded. Returns `false`, keeping the first, when one is already set.
++pub fn set_ktx2_transcoder(transcoder: Ktx2Transcoder) -> bool {
++    KTX2_TRANSCODER.set(transcoder).is_ok()
++}
++
++/// Whether `buffer` starts with [`KTX2_MAGIC`]. KTX2 is taken by its bytes, whatever path or
++/// type it came with: the `image` crate's `guess_format` doesn't know KTX2, and content often
++/// arrives without a file extension (NFT images, URL textures) or under the wrong one.
++#[cfg(feature = "ktx2")]
++pub(crate) fn has_ktx2_magic(buffer: &[u8]) -> bool {
++    buffer.starts_with(KTX2_MAGIC)
++}
++
++/// The host transcoder's answer for a KTX2, or `None` when no transcoder is set.
++pub(crate) fn host_ktx2_transcode(
++    buffer: &[u8],
++    asset_path: Option<&AssetPath<'_>>,
++) -> Option<Ktx2Transcoded> {
++    KTX2_TRANSCODER
++        .get()
++        .and_then(|transcode| transcode(buffer, asset_path))
++}
+ 
+ #[cfg(feature = "ktx2")]
+ pub fn ktx2_buffer_to_image(
+@@ -1525,4 +1576,15 @@ mod tests {
+         let result = ktx2_buffer_to_image(&buffer, supported_compressed_formats, true);
+         assert!(result.is_ok());
+     }
++
++    #[test]
++    fn ktx2_is_taken_by_its_magic_only() {
++        use super::{has_ktx2_magic, KTX2_MAGIC};
++
++        assert!(has_ktx2_magic(&[&KTX2_MAGIC[..], &[0; 4]].concat()));
++        // other bytes never are, a cached dds included
++        assert!(!has_ktx2_magic(b"\x89PNG\r\n\x1a\n"));
++        assert!(!has_ktx2_magic(b"DDS \x7c\x00\x00\x00"));
++        assert!(!has_ktx2_magic(&KTX2_MAGIC[..8]));
++    }
+ }

@@ -1,0 +1,16 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:24+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index e2ac07a78fb8d23dc13de4f8a3f66e470a7ac7f5..8a7f6545aebad01f29333c82e4f916b03d539c77 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -115,3 +115,6 @@ optional = true
+ [dependencies.ffmpeg-sys-next]
+ version = "6.1.0"
+ default-features = false
++
++[lints.rust]
++warnings = "allow"

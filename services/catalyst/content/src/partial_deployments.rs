@@ -76,7 +76,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use sqlx::pool::PoolConnection;
 
-use super::entity::{Entity, EntityType};
+use super::entity::{Entity, EntityType, is_ipfs_v2};
 use super::write_deployer::{
     DeployFailure, REQUEST_TTL_FORWARDS_MS, RejectionKind, UPLOAD_HASH_JOBS, WriteDeployer,
     bounded_upload_hash,
@@ -478,14 +478,6 @@ fn check_pointer_quotas(
         ));
     }
     None
-}
-
-/// Upstream `IPFSv2.validate` (`@dcl/schemas`): a CIDv1 in base32, as the
-/// entity files the SDK hashes (`bafk...`/`bafy...`, 59 characters).
-fn is_ipfs_v2(id: &str) -> bool {
-    id.len() == 59
-        && (id.starts_with("bafy") || id.starts_with("bafk"))
-        && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// The upload row as a batch reads it.

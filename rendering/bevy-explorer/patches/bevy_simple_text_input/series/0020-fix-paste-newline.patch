@@ -1,0 +1,21 @@
+From 5268e2834e4e26d67431685f819e92850db45376
+Subject: fix paste newline
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/5268e2834e4e26d67431685f819e92850db45376
+Date: 2025-07-22T10:54:09+01:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index c6cc096d50d2206b62e8fc1abae6085c1be8a711..a7a6de8a629b7c41b029df475fc1631a1046001d 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -689,7 +689,9 @@ fn keyboard(
+             match copy_result {
+                 Ok(text) => {
+                     editor.editor.delete_selection();
+-                    editor.editor.insert_string(&text, None);
++                    editor
++                        .editor
++                        .insert_string(&text.replace("\r\n", "\n"), None);
+                 }
+                 Err(err) => warn!("failed to read clipboard: {err}"),
+             }

@@ -2104,6 +2104,10 @@ mod data_plane_shared_types {
         assert!(
             AssetKey::parse("matic", "0xabc0000000000000000000000000000000000001-x1").is_none()
         );
+        let max_id = alloy_primitives::U256::MAX.to_string();
+        let wire = format!("0xabc0000000000000000000000000000000000001-{max_id}");
+        assert_eq!(AssetKey::parse("matic", &wire).unwrap().id, max_id);
+        assert!(AssetKey::parse("matic", &format!("{wire}0")).is_none());
     }
 
     #[tokio::test]

@@ -1,0 +1,22 @@
+From 89308104b37c7cd1cd20b02ec2a00b86e110fd38
+Subject: don't keep Interaction::Pressed when mouse exits
+Origin: https://github.com/robtfm/bevy/commit/89308104b37c7cd1cd20b02ec2a00b86e110fd38
+Date: 2025-06-17T10:10:22+01:00
+
+---
+diff --git a/crates/bevy_ui/src/focus.rs b/crates/bevy_ui/src/focus.rs
+index 9242bf1380a38699d01fbc983badee9958b69b85..a9a67e293f307549040b759c8ffbc8cadc2f7250 100644
+--- a/crates/bevy_ui/src/focus.rs
++++ b/crates/bevy_ui/src/focus.rs
+@@ -284,10 +284,7 @@ pub fn ui_focus_system(
+                 Some(*entity)
+             } else {
+                 if let Some(mut interaction) = node.interaction {
+-                    if *interaction == Interaction::Hovered || (relative_cursor_position.is_none())
+-                    {
+-                        interaction.set_if_neq(Interaction::None);
+-                    }
++                    interaction.set_if_neq(Interaction::None);
+                 }
+                 None
+             }

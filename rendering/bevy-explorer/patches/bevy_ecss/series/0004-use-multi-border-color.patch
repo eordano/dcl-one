@@ -1,0 +1,50 @@
+From faf4366c09209a85e8a2b5d578f6ce1c6a22f093
+Subject: use multi border color
+Origin: https://github.com/robtfm/bevy_ecss/commit/faf4366c09209a85e8a2b5d578f6ce1c6a22f093
+Date: 2025-04-02T17:47:32+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 1f5756857252a7317586cc9cbdf33860970003d0..d8d0fc057eb96c5f6c9d3abbbe1fdbbbb4e917c0 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,7 +12,7 @@ repository = "https://github.com/afonsolage/bevy_ecss"
+ 
+ [dependencies]
+ 
+-bevy = { version = "0.14", default-features = false, features = [
++bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.14-dcl-cosmic-noimage", default-features = false, features = [
+     "bevy_ui",
+     "bevy_asset",
+     "bevy_text",
+@@ -24,7 +24,7 @@ smallvec = { version = "1.11", features = ["serde", "union", "const_generics"] }
+ thiserror = "1.0.50"
+ 
+ [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+-bevy = { version = "0.14", features = [
++bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.14-dcl-cosmic-noimage", features = [
+     "bevy_ui",
+     "bevy_asset",
+     "bevy_text",
+@@ -33,7 +33,7 @@ bevy = { version = "0.14", features = [
+ ] }
+ 
+ [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+-bevy = "0.14"
++bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.14-dcl-cosmic-noimage" }
+ 
+ [[example]]
+ name = "simple_ui"
+diff --git a/src/property/impls.rs b/src/property/impls.rs
+index ea3748a4e5baaa47f3e94a80802bc06ca208d0c5..fb906a8b52eff81344fa9be8a0041030e905a03e 100644
+--- a/src/property/impls.rs
++++ b/src/property/impls.rs
+@@ -486,7 +486,7 @@ impl Property for BorderColorProperty {
+         _asset_server: &AssetServer,
+         commands: &mut Commands,
+     ) {
+-        commands.entity(components).insert(BorderColor(*cache));
++        commands.entity(components).insert(BorderColor::all(*cache));
+     }
+ }
+ 

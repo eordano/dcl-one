@@ -4,6 +4,7 @@
 //! atomically with the event. Dispatch pages commit their recipient cursor
 //! with notification/email-outbox inserts, so crashes and retries are safe.
 
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use chrono::{Duration as Span, NaiveDateTime, Utc};
@@ -11,7 +12,7 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::store::{NewNotification, insert_event_notifications};
+use super::store::{NewNotification, community_opt_out, insert_event_notifications};
 use crate::identity::Address;
 
 const PAGE: i64 = 100;
@@ -79,7 +80,9 @@ fn occurrence_id(event_id: &str, starts_at: NaiveDateTime, kind: &str) -> Uuid {
 // stale until the next catalogue refresh. Bound live candidates before expanding
 // recurrence, then keyset-order the unqueued occurrences. The unique queue key
 // makes concurrent scans safe and avoids losing late approvals behind a cursor.
-const SCAN_SQL: &str = "
+static SCAN_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "
     SELECT DISTINCT e.id AS event_id,e.raw - 'recurrent_dates' AS event,e.origin='local' AS local_event,
            d.starts_at,d.starts_at - $2::int4 * interval '1 second' AS due_at
     FROM explore.event e CROSS JOIN LATERAL (
@@ -100,15 +103,17 @@ const SCAN_SQL: &str = "
                SELECT 1 FROM social.communities c JOIN social.community_members m ON m.community_id=c.id
                WHERE c.id=CASE WHEN pg_input_is_valid(e.community_id,'uuid') THEN e.community_id::uuid END
                  AND c.origin='local' AND c.active AND NOT c.suspended
-                 AND NOT EXISTS (SELECT 1 FROM social.subscription_opt_outs o
-                     WHERE o.address=m.member_address AND o.scope='community' AND CASE WHEN pg_input_is_valid(o.scope_id,'uuid') THEN o.scope_id::uuid END=c.id))))
+                 AND NOT EXISTS ({opt_out}))))
       AND d.starts_at - $2::int4 * interval '1 second' >= $4
       AND d.starts_at - $2::int4 * interval '1 second' <= $3
       AND CASE WHEN $1='events_starts_soon' THEN d.starts_at > $3
                ELSE d.starts_at + e.duration_ms * interval '1 millisecond' > $3 END
       AND NOT EXISTS (SELECT 1 FROM social.event_notification_intents q
                       WHERE q.event_id=e.id AND q.occurrence_start=d.starts_at AND q.kind=$1)
-    ORDER BY due_at,event_id LIMIT $5";
+    ORDER BY due_at,event_id LIMIT $5",
+        opt_out = community_opt_out("m.member_address", "c.id")
+    )
+});
 
 async fn scan_kind(
     pool: &PgPool,
@@ -120,7 +125,7 @@ async fn scan_kind(
     sqlx::query("SET LOCAL statement_timeout = '2s'")
         .execute(&mut *tx)
         .await?;
-    let rows: Vec<Occurrence> = sqlx::query_as(SCAN_SQL)
+    let rows: Vec<Occurrence> = sqlx::query_as(sqlx::AssertSqlSafe(SCAN_SQL.as_str()))
         .bind(kind)
         .bind(ahead)
         .bind(now)
@@ -153,14 +158,12 @@ fn text<'a>(event: &'a Value, field: &str) -> &'a str {
     event.get(field).and_then(Value::as_str).unwrap_or_default()
 }
 
-async fn recipients(
-    tx: &mut Transaction<'_, Postgres>,
-    intent: &Intent,
-) -> anyhow::Result<Vec<Recipient>> {
-    let community_id = Uuid::parse_str(text(&intent.event, "community_id")).ok();
-    // Upstream scoped events_started to the community for every recipient: a
-    // member who opted out of the community gets no notice, even with an RSVP.
-    let rows = sqlx::query_as(
+/// The page of an intent's recipients after `$6`: the event's author for a
+/// moderation notice, its RSVPs for a reminder (on a started community event,
+/// not those who opted out of the community) and the community's members for
+/// a community event, unless opted out.
+static RECIPIENTS_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
         "WITH candidates AS ( \
             SELECT $3::text AS address,false AS community,NULL::text AS community_name,false AS community_thumbnail \
             WHERE $2 IN ('event_approved','event_rejected','event_deleted') AND $3 > $6 \
@@ -174,8 +177,7 @@ async fn recipients(
                   WHERE m.community_id=$5::uuid AND m.member_address=a.signer \
                     AND c.origin='local' AND c.active AND NOT c.suspended \
                     AND CASE WHEN pg_input_is_valid(e.community_id,'uuid') THEN e.community_id::uuid END=$5::uuid \
-                    AND EXISTS (SELECT 1 FROM social.subscription_opt_outs o \
-                        WHERE o.address=m.member_address AND o.scope='community' AND CASE WHEN pg_input_is_valid(o.scope_id,'uuid') THEN o.scope_id::uuid END=$5::uuid))) \
+                    AND EXISTS ({opt_out}))) \
             ORDER BY a.signer LIMIT $7) \
             UNION ALL \
             (SELECT m.member_address,true,c.name,EXISTS (SELECT 1 FROM social.community_thumbnails t WHERE t.community_id=c.id) \
@@ -186,15 +188,32 @@ async fn recipients(
               AND c.origin='local' AND c.active AND NOT c.suspended AND e.approved \
               AND COALESCE(e.raw->>'rejected','false') <> 'true' \
               AND COALESCE(e.raw->>'deleted_by_user','false') <> 'true' AND COALESCE(e.raw->>'deleted_by_admin','false') <> 'true' \
-              AND NOT EXISTS (SELECT 1 FROM social.subscription_opt_outs o \
-                  WHERE o.address=m.member_address AND o.scope='community' AND CASE WHEN pg_input_is_valid(o.scope_id,'uuid') THEN o.scope_id::uuid END=$5::uuid) \
+              AND NOT EXISTS ({opt_out}) \
             ORDER BY m.member_address LIMIT $7) \
         ) SELECT address,bool_or(community) AS community,max(community_name) AS community_name, \
                  bool_or(community_thumbnail) AS community_thumbnail \
           FROM candidates WHERE address > $6 GROUP BY address ORDER BY address LIMIT $7",
-    ).bind(&intent.event_id).bind(&intent.kind).bind(text(&intent.event,"user"))
-        .bind(intent.local_event).bind(community_id).bind(&intent.recipient_after)
-        .bind(PAGE).fetch_all(&mut **tx).await?;
+        opt_out = community_opt_out("m.member_address", "$5::uuid")
+    )
+});
+
+async fn recipients(
+    tx: &mut Transaction<'_, Postgres>,
+    intent: &Intent,
+) -> anyhow::Result<Vec<Recipient>> {
+    let community_id = Uuid::parse_str(text(&intent.event, "community_id")).ok();
+    // Upstream scoped events_started to the community for every recipient: a
+    // member who opted out of the community gets no notice, even with an RSVP.
+    let rows = sqlx::query_as(sqlx::AssertSqlSafe(RECIPIENTS_SQL.as_str()))
+        .bind(&intent.event_id)
+        .bind(&intent.kind)
+        .bind(text(&intent.event, "user"))
+        .bind(intent.local_event)
+        .bind(community_id)
+        .bind(&intent.recipient_after)
+        .bind(PAGE)
+        .fetch_all(&mut **tx)
+        .await?;
     Ok(rows)
 }
 
@@ -1107,7 +1126,8 @@ mod tests {
             .await
             .unwrap();
         let plan: Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {SCAN_SQL}"
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {}",
+            SCAN_SQL.as_str()
         )))
         .bind("events_started")
         .bind(0_i32)

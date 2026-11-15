@@ -1,0 +1,16 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:23+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index a6911c8a09167db793ccf0624e35ffa2e4039b98..1859d2be04ee10c4977e2a0ca5d3da8fe3af2e7d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -47,3 +47,6 @@ async-trait = "0.1.88"
+ 
+ [dev-dependencies]
+ tokio = { version = "1.45.1", features=["macros", "rt"] }
++
++[lints.rust]
++warnings = "allow"

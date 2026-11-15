@@ -1,0 +1,23 @@
+From 4667786e86c3b857d2896c3b756f55534775c666
+Subject: pub RenderMaterialInstance fields
+Origin: https://github.com/robtfm/bevy/commit/4667786e86c3b857d2896c3b756f55534775c666
+Date: 2025-06-16T18:12:42+01:00
+
+---
+diff --git a/crates/bevy_pbr/src/material.rs b/crates/bevy_pbr/src/material.rs
+index 181499618418e7830b296f5d01d448f6439731e9..2a98e7a232d5a3869a863240aaa3f7beef4b89e4 100644
+--- a/crates/bevy_pbr/src/material.rs
++++ b/crates/bevy_pbr/src/material.rs
+@@ -629,10 +629,10 @@ impl RenderMaterialInstances {
+ /// material type, for simplicity.
+ pub struct RenderMaterialInstance {
+     /// The material asset.
+-    pub(crate) asset_id: UntypedAssetId,
++    pub asset_id: UntypedAssetId,
+     /// The [`RenderMaterialInstances::current_change_tick`] at which this
+     /// material instance was last modified.
+-    last_change_tick: Tick,
++    pub last_change_tick: Tick,
+ }
+ 
+ /// A [`SystemSet`] that contains all `extract_mesh_materials` systems.

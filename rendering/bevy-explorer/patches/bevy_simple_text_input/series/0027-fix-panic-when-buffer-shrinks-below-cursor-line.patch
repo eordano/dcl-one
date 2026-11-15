@@ -1,0 +1,28 @@
+From 89dc6be8d0aa3cb9f9c0259eb36148843b426e1d
+Subject: fix panic when buffer shrinks below cursor.line
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/89dc6be8d0aa3cb9f9c0259eb36148843b426e1d
+Date: 2026-04-27T14:58:05+01:00
+
+clamp upper bound was b.lines.len() (inclusive), allowing cursor.line ==
+lines.len() through. cosmic-text's shape_until_cursor then panics with
+'invalid cursor'. Reproducible with multi-line content shrinking past
+the cursor's line.
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 60edd8bb7f7f3663526cdf06ffda09f24f225dcb..b623edf5a0645572d2c791a8e7cb498df56b77a4 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -654,9 +654,10 @@ fn keyboard(
+             editor.editor.with_buffer_mut(|b| {
+                 b.clone_from(&inner_text.computed_text(input_entity).unwrap().buffer().0);
+ 
+-                fixed_cursor.line = fixed_cursor.line.clamp(0, b.lines.len());
+-                fixed_cursor.index = fixed_cursor.index.clamp(
+-                    0,
++                // valid line indices are 0..b.lines.len(); using ..=len causes
++                // cosmic-text's shape_until_cursor to panic when the buffer just shrank
++                fixed_cursor.line = fixed_cursor.line.min(b.lines.len().saturating_sub(1));
++                fixed_cursor.index = fixed_cursor.index.min(
+                     b.lines
+                         .get(fixed_cursor.line)
+                         .map(|l| l.text().len())

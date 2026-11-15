@@ -1,0 +1,19 @@
+From 064f5231b62b54dabe9e917122553e8eff041e65
+Subject: fix bad vertices for a frame on second mesh load
+Origin: https://github.com/robtfm/bevy/commit/064f5231b62b54dabe9e917122553e8eff041e65
+Date: 2025-09-23T12:34:50+01:00
+
+---
+diff --git a/crates/bevy_render/src/mesh/mod.rs b/crates/bevy_render/src/mesh/mod.rs
+index 621e3e7c600358c7da9cd1ff2b556355f15fb9f3..1fccaa73aa1f13f7887e19c76cf158d8b4fe526c 100644
+--- a/crates/bevy_render/src/mesh/mod.rs
++++ b/crates/bevy_render/src/mesh/mod.rs
+@@ -73,7 +73,7 @@ impl Plugin for MeshPlugin {
+                 PostUpdate,
+                 mark_3d_meshes_as_changed_if_their_assets_changed
+                     .ambiguous_with(VisibilitySystems::CalculateBounds)
+-                    .before(AssetEvents),
++                    .after(AssetEvents),
+             );
+ 
+         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

@@ -1,0 +1,35 @@
+From 9fd6a63be6ddd3da71d567e6b18d7450aca9d4dd
+Subject: fix set_loop
+Origin: https://github.com/robtfm/bevy_kira_audio/commit/9fd6a63be6ddd3da71d567e6b18d7450aca9d4dd
+Date: 2025-06-17T12:59:51+01:00
+
+---
+diff --git a/src/audio_output.rs b/src/audio_output.rs
+index c7a3159ed8d414937450666148f66022fbf1a40b..c4ac51412c1c9bdf0709e9869bc4b35c6cd2b5a9 100644
+--- a/src/audio_output.rs
++++ b/src/audio_output.rs
+@@ -26,6 +26,7 @@ use std::collections::HashMap;
+ /// This struct holds the [`AudioManager`] to play audio through. It also
+ /// keeps track of all audio instance handles and which sounds are playing in which channel.
+ pub struct AudioOutput<B: Backend = DefaultBackend> {
++    /// field
+     pub manager: Option<AudioManager<B>>,
+     instances: HashMap<Channel, Vec<Handle<AudioInstance>>>,
+     channels: HashMap<Channel, ChannelState>,
+diff --git a/src/instance.rs b/src/instance.rs
+index 2072456d2960c79bf234370a1bf63ec206704588..0c47896eb7b98a90029025861b2163f5329f0a06 100644
+--- a/src/instance.rs
++++ b/src/instance.rs
+@@ -66,11 +66,9 @@ impl AudioInstance {
+     }
+ 
+     /// set loop
+-    pub fn set_loop(&mut self, looped: bool) -> Option<AudioCommandError> {
++    pub fn set_loop(&mut self, looped: bool) {
+         self.handle
+             .set_loop_region(looped.then_some(Region::default()))
+-            .err()
+-            .map(|kira_error| kira_error.into())
+     }
+ }
+ 

@@ -1,0 +1,201 @@
+From b096ebb4fdc6db60444580e2cf158ccac7686da9
+Subject: bevy_winit: synthesize key events for modifier transitions reported via ModifiersChanged
+Origin: https://github.com/robtfm/bevy/commit/b096ebb4fdc6db60444580e2cf158ccac7686da9
+Date: 2026-07-02T11:37:24+01:00
+
+OS-consumed shortcut chords (e.g. macOS Cmd+Shift+5) deliver the modifier
+keydowns but swallow the keyups without any focus transition, so the modifier
+stays stuck in ButtonInput<KeyCode> forever — on the web there is no signal at
+all to recover from. Winit re-derives modifier state from every keyboard/
+pointer/wheel event and reports it via WindowEvent::ModifiersChanged, which
+was previously dropped on the floor.
+
+Buffer the latest Modifiers per window and reconcile against
+WinitWindowPressedKeys at end-of-batch, before forwarding events — after the
+batch's real key events have landed in the map, so normal modifier presses
+synthesize nothing. Transitions that never arrived as key events (missed
+keyups during OS chords, missed keydowns when focus returns with a modifier
+already held) are synthesized as KeyboardInput press/release, flowing through
+the same path as the existing KeyboardFocusLost machinery. Sides are resolved
+via ModifiersKeyState where the platform reports them, defaulting to the left
+variant (the web backend can't distinguish).
+---
+diff --git a/crates/bevy_winit/src/state.rs b/crates/bevy_winit/src/state.rs
+index 857e6bdf43055880b48f94edcdca9c826a6cbe7c..8e8ace30597097f1f2ec36c1846eba87d70be404 100644
+--- a/crates/bevy_winit/src/state.rs
++++ b/crates/bevy_winit/src/state.rs
+@@ -14,6 +14,7 @@ use bevy_ecs::{
+ use bevy_image::{Image, TextureAtlasLayout};
+ use bevy_input::{
+     gestures::*,
++    keyboard::{Key, KeyCode, KeyboardInput},
+     mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
+ };
+ #[cfg(any(not(target_arch = "wasm32"), feature = "custom_cursor"))]
+@@ -34,8 +35,9 @@ use winit::{
+     application::ApplicationHandler,
+     dpi::PhysicalSize,
+     event,
+-    event::{DeviceEvent, DeviceId, StartCause, WindowEvent},
++    event::{DeviceEvent, DeviceId, Modifiers, StartCause, WindowEvent},
+     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
++    keyboard::ModifiersKeyState,
+     window::WindowId,
+ };
+ 
+@@ -88,6 +90,10 @@ struct WinitAppRunnerState<T: Event> {
+     bevy_window_events: Vec<bevy_window::WindowEvent>,
+     /// Raw Winit window events to send
+     raw_winit_events: Vec<RawWinitWindowEvent>,
++    /// Latest winit modifier state per window, buffered for reconciliation
++    /// against `WinitWindowPressedKeys` once all of this batch's key events
++    /// have been seen (see `reconcile_pending_modifiers`).
++    pending_modifiers: Vec<(Entity, Modifiers)>,
+     _marker: PhantomData<T>,
+ 
+     event_writer_system_state: SystemState<(
+@@ -140,6 +146,7 @@ impl<T: Event> WinitAppRunnerState<T> {
+             startup_forced_updates: 5,
+             bevy_window_events: Vec::new(),
+             raw_winit_events: Vec::new(),
++            pending_modifiers: Vec::new(),
+             _marker: PhantomData,
+             event_writer_system_state,
+             scheduled_tick_start: None,
+@@ -326,6 +333,21 @@ impl<T: Event> ApplicationHandler<T> for WinitAppRunnerState<T> {
+                 }
+                 self.bevy_window_events.send(keyboard_input);
+             }
++            WindowEvent::ModifiersChanged(mods) => {
++                // Buffer the latest state; reconciled at end-of-batch (see
++                // `reconcile_pending_modifiers`) so real key events in the
++                // same batch land in `WinitWindowPressedKeys` first and are
++                // not double-reported.
++                if let Some(entry) = self
++                    .pending_modifiers
++                    .iter_mut()
++                    .find(|(entity, _)| *entity == window)
++                {
++                    entry.1 = mods;
++                } else {
++                    self.pending_modifiers.push((window, mods));
++                }
++            }
+             WindowEvent::CursorMoved { position, .. } => {
+                 let physical_position = DVec2::new(position.x, position.y);
+ 
+@@ -777,7 +799,114 @@ impl<T: Event> WinitAppRunnerState<T> {
+         }
+     }
+ 
++    /// Apply the final per-window modifier state of this event batch to
++    /// `WinitWindowPressedKeys`, synthesizing `KeyboardInput` events for any
++    /// modifier key whose transition winit never delivered as a key event.
++    /// That happens when the OS consumes a shortcut chord (the keyup lands
++    /// elsewhere) or when focus returns with a modifier already held (the
++    /// keydown predates focus). Winit re-derives modifier state from every
++    /// keyboard/pointer event, so a stale modifier heals on the next input
++    /// event even when no focus transition was ever reported.
++    fn reconcile_pending_modifiers(&mut self) {
++        if self.pending_modifiers.is_empty() {
++            return;
++        }
++
++        let pending = core::mem::take(&mut self.pending_modifiers);
++        let mut synthesized = Vec::new();
++
++        for (window, mods) in pending {
++            let Some(mut pressed_keys) =
++                self.world_mut().get_mut::<WinitWindowPressedKeys>(window)
++            else {
++                continue;
++            };
++
++            let state = mods.state();
++            for (reported, logical_key, sides) in [
++                (
++                    state.super_key(),
++                    Key::Super,
++                    [
++                        (KeyCode::SuperLeft, mods.lsuper_state()),
++                        (KeyCode::SuperRight, mods.rsuper_state()),
++                    ],
++                ),
++                (
++                    state.control_key(),
++                    Key::Control,
++                    [
++                        (KeyCode::ControlLeft, mods.lcontrol_state()),
++                        (KeyCode::ControlRight, mods.rcontrol_state()),
++                    ],
++                ),
++                (
++                    state.alt_key(),
++                    Key::Alt,
++                    [
++                        (KeyCode::AltLeft, mods.lalt_state()),
++                        (KeyCode::AltRight, mods.ralt_state()),
++                    ],
++                ),
++                (
++                    state.shift_key(),
++                    Key::Shift,
++                    [
++                        (KeyCode::ShiftLeft, mods.lshift_state()),
++                        (KeyCode::ShiftRight, mods.rshift_state()),
++                    ],
++                ),
++            ] {
++                let held: Vec<KeyCode> = sides
++                    .iter()
++                    .map(|(key_code, _)| *key_code)
++                    .filter(|key_code| pressed_keys.0.contains_key(key_code))
++                    .collect();
++
++                if reported && held.is_empty() {
++                    // pick the side winit reports as pressed where the
++                    // platform knows it, defaulting to left (the web backend
++                    // can't distinguish sides)
++                    let key_code = sides
++                        .iter()
++                        .find(|(_, side)| *side == ModifiersKeyState::Pressed)
++                        .map(|(key_code, _)| *key_code)
++                        .unwrap_or(sides[0].0);
++                    pressed_keys.0.insert(key_code, logical_key.clone());
++                    synthesized.push(KeyboardInput {
++                        key_code,
++                        logical_key,
++                        state: bevy_input::ButtonState::Pressed,
++                        repeat: false,
++                        window,
++                        text: None,
++                    });
++                } else if !reported {
++                    for key_code in held {
++                        let Some(logical_key) = pressed_keys.0.remove(&key_code) else {
++                            continue;
++                        };
++                        synthesized.push(KeyboardInput {
++                            key_code,
++                            logical_key,
++                            state: bevy_input::ButtonState::Released,
++                            repeat: false,
++                            window,
++                            text: None,
++                        });
++                    }
++                }
++            }
++        }
++
++        for event in synthesized {
++            self.bevy_window_events.send(event);
++        }
++    }
++
+     fn forward_bevy_events(&mut self) {
++        self.reconcile_pending_modifiers();
++
+         let raw_winit_events = self.raw_winit_events.drain(..).collect::<Vec<_>>();
+         let buffered_events = self.bevy_window_events.drain(..).collect::<Vec<_>>();
+         let world = self.world_mut();

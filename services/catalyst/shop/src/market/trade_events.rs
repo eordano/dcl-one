@@ -774,10 +774,10 @@ pub(super) async fn bid_asset(
     let net = network.to_ascii_lowercase();
     let contract = asset.contract_address.to_ascii_lowercase();
     Ok(match (asset.asset_type, &asset.token_id, &asset.item_id) {
-        (listings::ASSET_TYPE_ERC721, Some(token), _) => {
+        (crate::types::ASSET_TYPE_ERC721, Some(token), _) => {
             nft_meta(pool, land_image_base, &net, &contract, token).await?
         }
-        (listings::ASSET_TYPE_COLLECTION_ITEM, _, Some(item)) => {
+        (crate::types::ASSET_TYPE_COLLECTION_ITEM, _, Some(item)) => {
             item_meta(pool, &net, &contract, item).await?
         }
         _ => None,
@@ -1070,7 +1070,7 @@ async fn accepted_event(
     let mut metas = Vec::new();
     for (asset_type, contract, token_id, item_id) in &trade.assets {
         let meta = match (*asset_type, token_id, item_id) {
-            (listings::ASSET_TYPE_ERC721, Some(token), _) => {
+            (crate::types::ASSET_TYPE_ERC721, Some(token), _) => {
                 nft_meta(
                     &state.pool,
                     &state.settings.land_image_base_url,
@@ -1080,7 +1080,7 @@ async fn accepted_event(
                 )
                 .await
             }
-            (listings::ASSET_TYPE_COLLECTION_ITEM, _, Some(item)) => {
+            (crate::types::ASSET_TYPE_COLLECTION_ITEM, _, Some(item)) => {
                 item_meta(&state.pool, &network, contract, item).await
             }
             _ => Ok(None),

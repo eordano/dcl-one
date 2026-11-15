@@ -336,7 +336,12 @@ pub async fn resolve_and_pin(url: &reqwest::Url) -> Option<SocketAddr> {
     Some(addrs[0])
 }
 
-fn is_blocked_ip(ip: IpAddr) -> bool {
+/// Whether `ip` is outside the public internet: loopback, RFC 1918, link-local,
+/// unspecified, broadcast, multicast, documentation, shared (`100.64.0.0/10`),
+/// `0.0.0.0/8`, benchmarking and reserved IPv4; loopback, unspecified,
+/// multicast, unique-local, link-local, site-local and local-use NAT64 IPv6.
+/// An IPv6 address that embeds an IPv4 one is judged by the embedded address.
+pub fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_loopback()

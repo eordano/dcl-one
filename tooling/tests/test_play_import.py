@@ -281,16 +281,18 @@ class PlayImportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'inputs differ'):
             play.install(self.build)
 
-    def test_vendored_bevy_edits_invalidate_the_artifact(self):
-        # The engine compiles rendering/bevy-explorer/bevy; this fixture has no .git, so this is
-        # the walk Nix's filtered contract takes.
-        self.write('rendering/bevy-explorer/bevy/crates/bevy_scene/src/scene_spawner.rs', 'fn changed() {}\n')
+    def test_bevy_patch_edits_invalidate_the_artifact(self):
+        # The patch series decides the Bevy tree the engine compiles; this fixture has no .git, so
+        # this is the walk Nix's filtered contract takes.
+        self.write('rendering/bevy-explorer/patches/bevy/series/0001-scene-spawner.patch', 'fn changed() {}\n')
         with self.assertRaisesRegex(ValueError, 'inputs differ'):
             play.install(self.build)
 
-    def test_vendored_bevy_is_an_engine_input_in_git_and_in_the_nix_contract(self):
-        bevy = 'rendering/bevy-explorer/bevy/crates/bevy_scene/src/scene_spawner.rs'
+    def test_the_bevy_patch_series_is_an_engine_input_in_git_and_in_the_nix_contract(self):
+        bevy = 'rendering/bevy-explorer/patches/bevy/series/0001-scene-spawner.patch'
         self.write(bevy, 'fn spawn() {}\n')
+        crate = 'rendering/bevy-explorer/vendor/boimp/src/lib.rs'
+        self.write(crate, 'pub fn import() {}\n')
         def git(*args):
             return subprocess.check_output(['git', '-c', 'user.name=CI', '-c', 'user.email=ci@example.invalid',
                                             *args], cwd=self.root, text=True).strip()
@@ -299,7 +301,7 @@ class PlayImportTests(unittest.TestCase):
         git('config', 'gc.auto', '0')
         git('add', '.')
         git('commit', '-qm', 'fixture')
-        self.assertIn(bevy, contract.input_files(self.root, engine_only=True))
+        self.assertLessEqual({bevy, crate, 'tooling/patched-sources.py'}, set(contract.input_files(self.root, engine_only=True)))
         key = contract.engine_inputs(self.root)
         self.assertEqual(key, contract.engine_inputs(self.root, git('rev-parse', 'HEAD')))
         filtered = self.root / 'nix-contract'
@@ -310,6 +312,17 @@ class PlayImportTests(unittest.TestCase):
         self.assertEqual(key, contract.engine_inputs(filtered))
         self.write(bevy, 'fn spawn_sliced() {}\n')
         self.assertNotEqual(key, contract.engine_inputs(self.root))
+
+    def test_in_tree_crate_and_rebuild_tool_edits_invalidate_the_artifact(self):
+        # bevy_dui, boimp and rpc-rust are compiled from tracked bytes; tooling/patched-sources.py writes the
+        # Bevy and fork trees. No .git here: the walk Nix's filtered contract takes.
+        for name in ('rendering/bevy-explorer/vendor/boimp/src/lib.rs', 'tooling/patched-sources.py'):
+            with self.subTest(name=name):
+                key = contract.engine_inputs(self.root)
+                self.write(name, name + ' changed\n')
+                self.assertNotEqual(key, contract.engine_inputs(self.root))
+                with self.assertRaisesRegex(ValueError, 'inputs differ'):
+                    play.install(self.build)
 
     def test_shared_hud_sources_rebuild_the_artifact_but_not_the_engine(self):
         # react-web compiles these through its aliases (react-web/vite.shared.ts).
@@ -853,15 +866,18 @@ class PlayImportTests(unittest.TestCase):
         job = workflow[workflow.index('\n  build-deploy-web:\n') + 1:]
         job = re.split(r'\n  [a-z][\w-]*:\n', job)[0]
         self.assertIn(f'\n    name: {play.PRODUCER}\n', job)
+        def step_end(start):
+            following = job.find('      - name:', start + 1)
+            return following if following != -1 else job.index('\n    defaults:\n', start)
         tested = job.index('      - name: Build and test the local web app\n')
         upload = job.index(f'      - name: {play.UPLOAD_STEP}\n')
-        end = job.index('      - name:', upload + 1)
+        end = step_end(upload)
         self.assertLess(tested, upload)
         self.assertIn('          path: apps/bevy-explorer/dist/web/\n', job[upload:end])
         # Upload success must imply every earlier step passed.
         self.assertNotIn('continue-on-error', job[:end])
         for step in (tested, upload):
-            self.assertIsNone(re.search(r'\n {8}if:', job[step:job.index('      - name:', step + 1)]))
+            self.assertIsNone(re.search(r'\n {8}if:', job[step:step_end(step)]))
 
     def test_github_digest_and_producer_sha_are_verified_before_install(self):
         archive = self.root / 'good.zip'

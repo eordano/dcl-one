@@ -1,0 +1,147 @@
+From 839f8203034775d4d6d004048ab47e19f0986e62
+Subject: web-worker: pace the app from the render worker's animation frames
+Origin: https://github.com/robtfm/bevy/commit/839f8203034775d4d6d004048ab47e19f0986e62
+Date: 2026-09-18T23:45:15+01:00
+
+The render task now waits for the worker's requestAnimationFrame before
+collecting the render app, and signals the app world once it has taken it.
+`RenderAppChannels::send_blocking` waits for that signal on the web, so the
+app world cannot run past the end of a frame until the render worker has
+picked the frame up inside its rAF callback, and the canvas commits on the
+display's cadence. bevy_winit switches the app worker to the Immediate
+redraw strategy under the feature, since the render side now paces it.
+---
+diff --git a/crates/bevy_render/Cargo.toml b/crates/bevy_render/Cargo.toml
+index e96d898781503e6879f4a7a381a1c8234c9fad64..d8e22b355fa9bdfda19dc5623099b4fce847c697 100644
+--- a/crates/bevy_render/Cargo.toml
++++ b/crates/bevy_render/Cargo.toml
+@@ -136,6 +136,7 @@ js-sys = "0.3"
+ wasm-bindgen-futures = "0.4"
+ web-sys = { version = "0.3.67", features = [
+   'Blob',
++  'DedicatedWorkerGlobalScope',
+   'Document',
+   'Element',
+   'HtmlElement',
+diff --git a/crates/bevy_render/src/pipelined_rendering.rs b/crates/bevy_render/src/pipelined_rendering.rs
+index f4342b293d1fdaeeef7036c00757328132d91899..4798062bdc26e5557876e249430a11bf2919f229 100644
+--- a/crates/bevy_render/src/pipelined_rendering.rs
++++ b/crates/bevy_render/src/pipelined_rendering.rs
+@@ -23,6 +23,9 @@ pub struct RenderExtractApp;
+ pub struct RenderAppChannels {
+     app_to_render_sender: Sender<SubApp>,
+     render_to_app_receiver: Receiver<SubApp>,
++    /// Signalled once the render worker's animation-frame task has taken the render app.
++    #[cfg(target_arch = "wasm32")]
++    handoff_taken_receiver: Receiver<()>,
+     render_app_in_render_thread: bool,
+ }
+ 
+@@ -31,18 +34,26 @@ impl RenderAppChannels {
+     pub fn new(
+         app_to_render_sender: Sender<SubApp>,
+         render_to_app_receiver: Receiver<SubApp>,
++        #[cfg(target_arch = "wasm32")] handoff_taken_receiver: Receiver<()>,
+     ) -> Self {
+         Self {
+             app_to_render_sender,
+             render_to_app_receiver,
++            #[cfg(target_arch = "wasm32")]
++            handoff_taken_receiver,
+             render_app_in_render_thread: false,
+         }
+     }
+ 
+     /// Send the `render_app` to the rendering thread.
++    ///
++    /// On the web this also waits until the render worker has picked the app up from inside
++    /// its animation-frame callback, so the app world is paced by the render worker's frames.
+     pub fn send_blocking(&mut self, render_app: SubApp) {
+         self.app_to_render_sender.send_blocking(render_app).unwrap();
+         self.render_app_in_render_thread = true;
++        #[cfg(target_arch = "wasm32")]
++        self.handoff_taken_receiver.recv_blocking().ok();
+     }
+ 
+     /// Receive the `render_app` from the rendering thread.
+@@ -131,6 +142,8 @@ impl Plugin for PipelinedRenderingPlugin {
+ 
+         let (app_to_render_sender, app_to_render_receiver) = async_channel::bounded::<SubApp>(1);
+         let (render_to_app_sender, render_to_app_receiver) = async_channel::bounded::<SubApp>(1);
++        #[cfg(target_arch = "wasm32")]
++        let (handoff_taken_sender, handoff_taken_receiver) = async_channel::bounded::<()>(1);
+ 
+         let mut render_app = app
+             .remove_sub_app(RenderApp)
+@@ -145,17 +158,28 @@ impl Plugin for PipelinedRenderingPlugin {
+         app.insert_resource(RenderAppChannels::new(
+             app_to_render_sender,
+             render_to_app_receiver,
++            #[cfg(target_arch = "wasm32")]
++            handoff_taken_receiver,
+         ));
+ 
+         // On the web the render loop stays on the worker that calls `cleanup` (the one that
+         // owns the wgpu device and the OffscreenCanvas). It has to return to the JS event loop
+         // after every frame for the browser to present, so it is an async task, not a thread.
++        // Each frame is collected and rendered from inside an animation-frame callback, so the
++        // canvas commits on the display's cadence and the app world (blocked in `send_blocking`
++        // until the handoff is taken) runs one frame ahead of it.
+         #[cfg(target_arch = "wasm32")]
+         wasm_bindgen_futures::spawn_local(async move {
+             loop {
++                if web::animation_frame().await.is_err() {
++                    break;
++                }
+                 let Ok(mut render_app) = app_to_render_receiver.recv().await else {
+                     break;
+                 };
++                if handoff_taken_sender.send(()).await.is_err() {
++                    break;
++                }
+                 render_app.update();
+                 if render_to_app_sender.send(render_app).await.is_err() {
+                     break;
+@@ -223,6 +247,24 @@ impl<T> RecvBlocking<T> for Receiver<T> {
+     }
+ }
+ 
++#[cfg(target_arch = "wasm32")]
++mod web {
++    use wasm_bindgen::{JsCast, JsValue};
++
++    /// Resolves inside the worker's next animation-frame callback.
++    pub async fn animation_frame() -> Result<(), JsValue> {
++        let promise = js_sys::Promise::new(&mut |resolve, reject| {
++            let scope: web_sys::DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
++            if let Err(err) = scope.request_animation_frame(&resolve) {
++                reject.call1(&JsValue::UNDEFINED, &err).ok();
++            }
++        });
++        wasm_bindgen_futures::JsFuture::from(promise)
++            .await
++            .map(|_| ())
++    }
++}
++
+ // This function waits for the rendering world to be received,
+ // runs extract, and then sends the rendering world back to the render thread.
+ fn renderer_extract(app_world: &mut World, _world: &mut World) {
+diff --git a/crates/bevy_winit/src/lib.rs b/crates/bevy_winit/src/lib.rs
+index fb6d13c2dff19b478069f1009f6b0ea69f63f6bc..a9564796d7427de7697f858579ea0ccf10c5b215 100644
+--- a/crates/bevy_winit/src/lib.rs
++++ b/crates/bevy_winit/src/lib.rs
+@@ -127,6 +127,13 @@ impl<T: Event> Plugin for WinitPlugin<T> {
+             .build()
+             .expect("Failed to build event loop");
+ 
++        // The render worker collects each frame from its own animation-frame callback and the
++        // app is held at the handoff until it does, so the app worker itself runs unpaced.
++        #[cfg(all(target_arch = "wasm32", feature = "web-worker"))]
++        winit::platform::web::set_worker_redraw_strategy(
++            winit::platform::web::WorkerRedrawStrategy::Immediate,
++        );
++
+         app.init_non_send_resource::<WinitWindows>()
+             .init_resource::<WinitMonitors>()
+             .init_resource::<WinitSettings>()

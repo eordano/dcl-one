@@ -1,0 +1,107 @@
+From 378885f653f7f1aa41f58f65c24b8dfe71a7536f
+Subject: Minor fix to `specular_multiscatter` (#23514)
+Origin: https://github.com/robtfm/bevy/commit/378885f653f7f1aa41f58f65c24b8dfe71a7536f
+Date: 2026-03-25T21:19:45+01:00
+
+# Objective
+
+The code implemented in `specular_multiscatter` doesn't match the
+Filament reference it links.
+This hardly affects the output in practice, but it would be nice to be
+using the reference formula.
+
+## Solution
+
+The formula implemented in `specular_multiscatter` is given in [listing
+10](https://google.github.io/filament/Filament.md.html#listing_energycompensationimpl)
+from filament:
+
+```c++
+vec3 energyCompensation = 1.0 + f0 * (1.0 / dfg.y - 1.0);
+// Scale the specular lobe to account for multiscattering
+Fr *= pixel.energyCompensation;
+```
+
+Bevy's current code considers that `dfg.y` is `F_AB.x`, but that is
+wrong.
+
+The filament spec explains how `dfg` is computed in [section
+5.3.4.7](https://google.github.io/filament/Filament.md.html#toc5.3.4.7).
+To do so, they start from the formula that implements the LUT for IBL.
+This is the exact same function bevy's current `F_AB` approximates, and
+is computed as follows ([section
+9.5](https://google.github.io/filament/Filament.md.html#toc9.5)):
+
+```c++
+float GDFG(float NoV, float NoL, float a) {
+    float a2 = a * a;
+    float GGXL = NoV * sqrt((-NoL * a2 + NoL) * NoL + a2);
+    float GGXV = NoL * sqrt((-NoV * a2 + NoV) * NoV + a2);
+    return (2 * NoL) / (GGXV + GGXL);
+}
+
+float2 DFG(float NoV, float a) {
+    float3 V;
+    V.x = sqrt(1.0f - NoV*NoV);
+    V.y = 0.0f;
+    V.z = NoV;
+
+    float2 r = 0.0f;
+    for (uint i = 0; i < sampleCount; i++) {
+        float2 Xi = hammersley(i, sampleCount);
+        float3 H = importanceSampleGGX(Xi, a, N);
+        float3 L = 2.0f * dot(V, H) * H - V;
+
+        float VoH = saturate(dot(V, H));
+        float NoL = saturate(L.z);
+        float NoH = saturate(H.z);
+
+        if (NoL > 0.0f) {
+            float G = GDFG(NoV, NoL, a);
+            float Gv = G * VoH / NoH;
+            float Fc = pow(1 - VoH, 5.0f);
+            r.x += Gv * (1 - Fc);
+            r.y += Gv * Fc;
+        }
+    }
+    return r * (1.0f / sampleCount);
+}
+```
+To get to `dfg` from the above code, [listing
+29](https://google.github.io/filament/Filament.md.html#listing_multiscatteriblpreintegration)
+explains that you need to modify the following terms:
+```
+r.x += Gv * Fc;
+r.y += Gv;
+```
+
+That means that the `dfg.y` term used for energy conservation is `Gv` in
+the above snippet, while we've been using `Gv * (1 - Fc)` instead.
+We can still easily recover the correct value while reusing our current
+`F_AB`, as `dfg.y = Gv = Gv * (1 - Fc) + Gv * Fc = F_AB.x + F_AB.y`.
+
+---
+In practice, it really hardly matters: `Fc` is only large where `VoH` is
+small, and in those contexts `Gv` is close to 0. You basically need a
+diff tool to be able to tell anything has changed on the cases I tested.
+
+## Testing
+Ran the 3d testbed, nothing looks too weird.
+
+(cherry picked from commit 5a2f9bd3142c421375224f64984bb1bfae5e0a99)
+---
+diff --git a/crates/bevy_pbr/src/render/pbr_lighting.wgsl b/crates/bevy_pbr/src/render/pbr_lighting.wgsl
+index c284ee9697297a58d55598db4a1be9d416288439..186eae961c8a96b7d7cf177233faf1cbd88d8418 100644
+--- a/crates/bevy_pbr/src/render/pbr_lighting.wgsl
++++ b/crates/bevy_pbr/src/render/pbr_lighting.wgsl
+@@ -246,7 +246,9 @@ fn specular_multiscatter(
+     let F_ab = (*input).F_ab;
+ 
+     var Fr = (specular_intensity * D * V) * F;
+-    Fr *= 1.0 + F0 * (1.0 / F_ab.x - 1.0);
++    // F_ab.x + F_ab.y is dfg.y in Filament
++    // See section 9.5 and listing 29 in the Filament spec
++    Fr *= 1.0 + F0 * (1.0 / (F_ab.x + F_ab.y) - 1.0);
+     return Fr;
+ }
+ 

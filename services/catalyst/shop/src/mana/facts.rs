@@ -19,10 +19,11 @@ use crate::checkout::trade::TradeIn;
 use crate::market::chain_walk::{self, ChainNet, INDEXER_NFT};
 use crate::market::trades;
 use crate::policy::Facts;
+use crate::policy_entry::{mirror_contract_role, mirror_facts};
 use crate::rentals::calls::{RentTerms, rent_terms};
 use crate::rentals::types::RentalListing;
 use crate::types::{
-    AssetId, ChainId, ContractRef, ContractRole, EvmAddress, ItemKind, ItemRecord, Lookup, ManaWei,
+    AssetId, ChainId, ContractRef, ContractRole, EvmAddress, ItemRecord, Lookup, ManaWei,
     NameLabel, Offer, Session, SignedTrade, TokenRecord, TokenRef, TradeAsset, TradeAssetType,
 };
 
@@ -181,14 +182,6 @@ fn evm(a: Address) -> EvmAddress {
     EvmAddress::new(a)
 }
 
-fn item_kind(item_type: &str) -> ItemKind {
-    if item_type.starts_with("emote") {
-        ItemKind::Emote
-    } else {
-        ItemKind::Wearable
-    }
-}
-
 /// The contract's role: the static registry first, then the collections
 /// mirror (only after a complete pass, else `Unknown`).
 pub async fn contract_role(
@@ -208,21 +201,7 @@ pub async fn contract_role(
     let Some(net) = chain.net else {
         return Ok(Lookup::Absent);
     };
-    let row = sqlx::query(
-        "SELECT (SELECT last_complete_pass_at IS NOT NULL FROM shop.mirror_state WHERE mirror = 'collections' AND network = $1) AS ready, \
-                EXISTS (SELECT 1 FROM shop.collections WHERE network = $1 AND contract_address = $2) AS is_collection",
-    )
-    .bind(net.db_name())
-    .bind(format!("{contract:#x}"))
-    .fetch_one(pool)
-    .await?;
-    let ready: Option<bool> = row.get("ready");
-    let is_collection: bool = row.get("is_collection");
-    Ok(match ready {
-        Some(true) if is_collection => Lookup::Found(ContractRole::Collection),
-        Some(true) => Lookup::Absent,
-        _ => Lookup::Unknown,
-    })
+    mirror_contract_role(pool, chain.chain_id, net.db_name(), evm(contract)).await
 }
 
 /// The items mirror's record of `(collection, item_id)` and its remaining
@@ -236,40 +215,15 @@ pub async fn item_record(
     let Some(net) = chain.net else {
         return Ok((Lookup::Absent, None));
     };
-    let row = sqlx::query(
-        "SELECT (SELECT last_complete_pass_at IS NOT NULL FROM shop.mirror_state WHERE mirror = 'items' AND network = $1) AS ready, \
-                i.item_type, i.creator, i.available::text AS available \
-         FROM (SELECT 1) AS one LEFT JOIN shop.items i ON i.network = $1 AND i.contract_address = $2 AND i.item_id = $3::numeric",
+    let facts = mirror_facts(
+        pool,
+        chain.chain_id,
+        net.db_name(),
+        evm(collection),
+        item_id,
     )
-    .bind(net.db_name())
-    .bind(format!("{collection:#x}"))
-    .bind(item_id.to_string())
-    .fetch_one(pool)
     .await?;
-    let ready: Option<bool> = row.get("ready");
-    let item_type: Option<String> = row.get("item_type");
-    let creator: Option<String> = row.get("creator");
-    let available: Option<String> = row.get("available");
-    Ok(match (ready, item_type) {
-        (Some(true), Some(item_type)) => match creator
-            .as_deref()
-            .and_then(|c| EvmAddress::parse(&c.to_ascii_lowercase()).ok())
-        {
-            Some(creator) => (
-                Lookup::Found(ItemRecord {
-                    chain_id: chain.chain_id,
-                    collection: evm(collection),
-                    item_id,
-                    kind: item_kind(&item_type),
-                    creator,
-                }),
-                available.and_then(|a| a.parse::<i64>().ok()),
-            ),
-            None => (Lookup::Unknown, None),
-        },
-        (Some(true), None) => (Lookup::Absent, None),
-        _ => (Lookup::Unknown, None),
-    })
+    Ok((facts.item, facts.available))
 }
 
 /// The indexed token (its owner and item): `shop.nft` for collections and
@@ -602,6 +556,164 @@ mod store_tests {
             .await
             .unwrap();
         sqlx::query("DELETE FROM shop.mirror_state WHERE mirror IN ('items','collections') AND network='matic'").execute(&pool).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod payment_path_facts_tests {
+    //! The credits guards (`policy_entry`) and the MANA resolver read the
+    //! same contract role and item record; these cases pin that both payment
+    //! paths answer alike for every mirror state.
+    use super::*;
+    use crate::policy_entry;
+    use crate::types::ItemKind;
+
+    const COLLECTION: &str = "0x000000000000000000000000000000000000fac7";
+    const CREATOR: &str = "0x000000000000000000000000000000000000c4ea";
+
+    async fn set_ready(pool: &PgPool, mirror: &str, ready: bool) {
+        sqlx::query("INSERT INTO shop.mirror_state (mirror, network, source_url, last_complete_pass_at) VALUES ($1, 'matic', 'fixture', CASE WHEN $2 THEN now() END) ON CONFLICT (mirror, network) DO UPDATE SET last_complete_pass_at = EXCLUDED.last_complete_pass_at")
+            .bind(mirror)
+            .bind(ready)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn insert_item(pool: &PgPool, item_id: u64, item_type: &str, creator: &str) {
+        sqlx::query("INSERT INTO shop.items (network,contract_address,item_id,chain_id,item_type,urn,creator,rarity,total_supply,max_supply,available,price,name,category,created_at,updated_at,reviewed_at,mirrored_at) VALUES ('matic',$1,$2::numeric,137,$3,'urn:facts:' || $2,$4,'common',0,10,4,1,'Hat','hat',0,0,0,now())")
+            .bind(COLLECTION)
+            .bind(item_id.to_string())
+            .bind(item_type)
+            .bind(creator)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// Both paths' answers for `(COLLECTION, item_id)` on Polygon, asserting
+    /// they agree and returning the shared answer.
+    async fn both(
+        pool: &PgPool,
+        book: &Book,
+        item_id: u64,
+    ) -> (Lookup<ContractRole>, Lookup<ItemRecord>, Option<i64>) {
+        let chain = book.chain(ChainId::POLYGON).unwrap();
+        let collection = EvmAddress::parse(COLLECTION).unwrap();
+        let item_id = U256::from(item_id);
+        let credits = policy_entry::item_facts(pool, ChainId::POLYGON, collection, item_id)
+            .await
+            .unwrap();
+        let credits_role = policy_entry::contract_role(pool, ChainId::POLYGON, collection)
+            .await
+            .unwrap();
+        let mana_role = contract_role(pool, chain, collection.address())
+            .await
+            .unwrap();
+        let (mana_item, available) = item_record(pool, chain, collection.address(), item_id)
+            .await
+            .unwrap();
+        assert_eq!(credits.contract, credits_role);
+        assert_eq!(credits.contract, mana_role);
+        assert_eq!(credits.item, mana_item);
+        (mana_role, mana_item, available)
+    }
+
+    #[tokio::test]
+    async fn credits_and_mana_read_the_same_contract_role_and_item_record() {
+        // Its own database, so the mirror_state, collection and item rows it
+        // writes never reach another test, even when an assertion fails.
+        let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+            eprintln!("skipping: CATALYST_TEST_DATABASE_URL not set");
+            return;
+        };
+        let book = Book::production(|_| None);
+        let record = |item_id: u64, kind: ItemKind| {
+            Lookup::Found(ItemRecord {
+                chain_id: ChainId::POLYGON,
+                collection: EvmAddress::parse(COLLECTION).unwrap(),
+                item_id: U256::from(item_id),
+                kind,
+                creator: EvmAddress::parse(CREATOR).unwrap(),
+            })
+        };
+
+        // No mirror has a complete pass: neither source can say.
+        assert_eq!(
+            both(&pool, &book, 1).await,
+            (Lookup::Unknown, Lookup::Unknown, None)
+        );
+        set_ready(&pool, "collections", false).await;
+        set_ready(&pool, "items", false).await;
+        insert_item(&pool, 1, "wearable_v2", CREATOR).await;
+        assert_eq!(
+            both(&pool, &book, 1).await,
+            (Lookup::Unknown, Lookup::Unknown, None)
+        );
+
+        // Both passed, the contract is no collection: absent, not unknown.
+        set_ready(&pool, "collections", true).await;
+        set_ready(&pool, "items", true).await;
+        assert_eq!(
+            both(&pool, &book, 2).await,
+            (Lookup::Absent, Lookup::Absent, None)
+        );
+
+        sqlx::query("INSERT INTO shop.collections (network,contract_address,chain_id,name,creator,owner,urn,is_completed,is_approved,is_editable,created_at,updated_at,reviewed_at,mirrored_at) VALUES ('matic',$1,137,'Facts fixture',$2,$2,'urn:facts',true,true,false,0,0,0,now())")
+            .bind(COLLECTION)
+            .bind(CREATOR)
+            .execute(&pool)
+            .await
+            .unwrap();
+        insert_item(&pool, 3, "emote_v1", CREATOR).await;
+        insert_item(&pool, 4, "wearable_v2", "not-an-address").await;
+        let found = Lookup::Found(ContractRole::Collection);
+        assert_eq!(
+            both(&pool, &book, 1).await,
+            (found.clone(), record(1, ItemKind::Wearable), Some(4))
+        );
+        assert_eq!(
+            both(&pool, &book, 3).await,
+            (found.clone(), record(3, ItemKind::Emote), Some(4))
+        );
+        // An unparseable creator is a record the rule cannot judge.
+        assert_eq!(
+            both(&pool, &book, 4).await,
+            (found.clone(), Lookup::Unknown, None)
+        );
+        assert_eq!(
+            both(&pool, &book, 9).await,
+            (found.clone(), Lookup::Absent, None)
+        );
+
+        // Collections passed, items still catching up.
+        set_ready(&pool, "items", false).await;
+        assert_eq!(both(&pool, &book, 1).await, (found, Lookup::Unknown, None));
+    }
+
+    #[tokio::test]
+    async fn credits_and_mana_give_the_static_registries_the_same_role() {
+        let Some(pool) = crate::db::scratch::pool(1).await else {
+            eprintln!("skipping: CATALYST_TEST_DATABASE_URL not set");
+            return;
+        };
+        let book = Book::production(|_| None);
+        let ethereum = book.chain(ChainId::ETHEREUM).unwrap();
+        for (contract, role) in [
+            (ethereum.land.unwrap(), ContractRole::Land),
+            (ethereum.estate.unwrap(), ContractRole::Estate),
+            (
+                ethereum.name_registrar.unwrap(),
+                ContractRole::NameRegistrar,
+            ),
+        ] {
+            let credits = policy_entry::contract_role(&pool, ChainId::ETHEREUM, evm(contract))
+                .await
+                .unwrap();
+            let mana = contract_role(&pool, ethereum, contract).await.unwrap();
+            assert_eq!(credits, Lookup::Found(role));
+            assert_eq!(mana, Lookup::Found(role));
+        }
     }
 }
 

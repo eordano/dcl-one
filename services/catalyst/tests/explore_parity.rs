@@ -2467,6 +2467,7 @@ async fn explore_route_timings() {
     }
     let db = match std::env::var("EXPLORE_PARITY_TIMING_DB") {
         Ok(name) => db::existing_database(&name).await,
+        Err(_) if flag("EXPLORE_PARITY_KEEP_DB") => db::kept_database().await,
         Err(_) => db::scratch_database().await,
     };
     let Some(db) = db else {

@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     permissions:
       contents: read
       pull-requests: read
@@ -196,7 +196,7 @@ jobs:
     name: Creator Hub CI
     if: always()
     needs: [ changes, build, lint, typechecking, tests, e2e, drop_pre_release, asset-packs, inspector, creator-hub, prune_pre_releases ]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     permissions: {}
     steps:
       - name: Check every Creator Hub job

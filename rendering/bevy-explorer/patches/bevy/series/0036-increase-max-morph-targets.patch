@@ -1,0 +1,32 @@
+From 271d42da4544506bb3fd2b3a617cdcef999adb67
+Subject: increase max morph targets
+Origin: https://github.com/robtfm/bevy/commit/271d42da4544506bb3fd2b3a617cdcef999adb67
+Date: 2025-10-06T12:48:55+01:00
+
+---
+diff --git a/crates/bevy_mesh/src/morph.rs b/crates/bevy_mesh/src/morph.rs
+index a8ff3be037d5aa2dc909b22c8aefaaf650b5b9d4..5578e35a1e259ef68380887113e0dd06b82dde0d 100644
+--- a/crates/bevy_mesh/src/morph.rs
++++ b/crates/bevy_mesh/src/morph.rs
+@@ -14,7 +14,7 @@ const MAX_TEXTURE_WIDTH: u32 = 2048;
+ const MAX_COMPONENTS: u32 = MAX_TEXTURE_WIDTH * MAX_TEXTURE_WIDTH;
+ 
+ /// Max target count available for [morph targets](MorphWeights).
+-pub const MAX_MORPH_WEIGHTS: usize = 64;
++pub const MAX_MORPH_WEIGHTS: usize = 256;
+ 
+ #[derive(Error, Clone, Debug)]
+ pub enum MorphBuildError {
+diff --git a/crates/bevy_pbr/src/render/mesh_types.wgsl b/crates/bevy_pbr/src/render/mesh_types.wgsl
+index 502b91b427d7f0e7c47f708330b4dc35626d0fe6..0418e8426177bba902d4fe088ac2670673f18f96 100644
+--- a/crates/bevy_pbr/src/render/mesh_types.wgsl
++++ b/crates/bevy_pbr/src/render/mesh_types.wgsl
+@@ -34,7 +34,7 @@ struct SkinnedMesh {
+ 
+ #ifdef MORPH_TARGETS
+ struct MorphWeights {
+-    weights: array<vec4<f32>, 16u>, // 16 = 64 / 4 (64 = MAX_MORPH_WEIGHTS)
++    weights: array<vec4<f32>, 64u>, // 64 = 256 / 4 (256 = MAX_MORPH_WEIGHTS)
+ };
+ #endif
+ 

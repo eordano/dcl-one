@@ -14,19 +14,30 @@
     let
       systems = [ "aarch64-darwin" "aarch64-linux" "x86_64-linux" ];
       eachSystem = nixpkgs.lib.genAttrs systems;
-    in {
-      packages = nixpkgs.lib.genAttrs [ "aarch64-linux" "x86_64-linux" ] (system:
+      rustPackages = system:
         let
           pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
           rust = pkgs.rust-bin.fromRustupToolchainFile ./services/catalyst/rust-toolchain.toml;
-        in import ./infra/packages {
-          inherit pkgs;
-          craneLib = (crane.mkLib pkgs).overrideToolchain rust;
+        in { inherit pkgs; craneLib = (crane.mkLib pkgs).overrideToolchain rust; };
+      # Three chained layers: third-party crates, Bevy and the crates that use it, the Explorer.
+      bevy-explorer = import ./infra/packages/bevy-explorer.nix (rustPackages "x86_64-linux");
+    in {
+      packages = nixpkgs.lib.genAttrs [ "aarch64-linux" "x86_64-linux" ] (system:
+        import ./infra/packages (rustPackages system // {
           revision = self.rev or self.dirtyRev or "unversioned";
-        }) // {
+        })) // {
           # The tool environments alone: the macOS CI legs take ffmpeg from here.
           aarch64-darwin = import ./infra/packages/tools.nix { pkgs = import nixpkgs { system = "aarch64-darwin"; }; };
         };
+
+      # `nix build .#bevy-explorer` and `.#bevy-explorer.tests`. An evaluation of the Explorer
+      # builds its patched sources, and `nix flake check` evaluates every attribute of
+      # `packages` and `checks`, so the Explorer is in neither.
+      legacyPackages.x86_64-linux = {
+        inherit bevy-explorer;
+        bevy-explorer-deps = bevy-explorer.deps;
+        bevy-explorer-bevy = bevy-explorer.bevy;
+      };
 
       checks.x86_64-linux.dev-service = import ./infra/dev/service-test {
         pkgs = import nixpkgs { system = "x86_64-linux"; };
@@ -73,6 +84,8 @@
           # The web explorer's loop, `just wasm` in rendering/bevy-explorer/source: the nightly its
           # justfile pins, and wasm-bindgen at that workspace's Cargo.lock version, so wasm-pack
           # downloads neither it nor wasm-opt. No services: the shell hook is the default shell's.
+          # Node 26 has no corepack, so the shell carries pnpm and the justfile reads PNPM. This
+          # pnpm must not fetch the version a package.json pins: that binary cannot start on NixOS.
           wasm = pkgs.mkShell {
             packages = with pkgs; [
               (rust-bin.nightly."2026-04-15".default.override {
@@ -80,9 +93,12 @@
                 extensions = [ "rust-src" ];
               })
               just wasm-pack wasm-bindgen-cli_0_2_114 binaryen nodejs_26 python3 gitMinimal
+              (pnpm.override { nodejs-slim = nodejs-slim_26; })
               pkg-config cmake clang protobuf
             ] ++ lib.optionals stdenv.hostPlatform.isLinux [ udev ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+            PNPM = "pnpm";
+            pnpm_config_manage_package_manager_versions = "false";
           };
         in {
           inherit default ci wasm;

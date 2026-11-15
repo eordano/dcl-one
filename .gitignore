@@ -30,6 +30,9 @@ result-*
 
 # The dependency drift map (research, review, rendered site): built locally or as a CI artifact, never committed.
 /rendering/bevy-explorer/drift/
+/rendering/bevy-explorer/bevy/
+/rendering/bevy-explorer/forks/
+/rendering/bevy-explorer/.*.patched-lock
 /rendering/bevy-explorer/source/ffmpeg*/
 /rendering/bevy-explorer/source/*.7z
 /rendering/bevy-explorer/source/package/

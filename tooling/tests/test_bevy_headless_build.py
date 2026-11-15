@@ -1,6 +1,7 @@
 """Headless packaging keeps its compiler flags and complete per-target payload."""
 import importlib.util
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -41,6 +42,16 @@ class HeadlessBuildTests(unittest.TestCase):
                 for name in ('headless', 'dcl_deno_ipc'):
                     self.assertEqual((output / (name + suffix)).read_bytes(), name.encode())
                 self.assertEqual((output / 'LICENSE').read_text(), 'license')
+
+    def test_the_trees_cargo_reads_are_written_before_the_build(self):
+        order = []
+        with patch.object(build.subprocess, 'run', side_effect=lambda *args, **options: order.append((args, options))), \
+                patch.object(build, 'headless', side_effect=lambda target: order.append(target)), \
+                patch.object(sys, 'argv', ['build-headless.py', '--target', 'x86_64-unknown-linux-gnu']):
+            build.main()
+        rebuild = (sys.executable, str(build.ROOT / 'tooling/patched-sources.py'), 'materialise', '--quiet')
+        self.assertEqual(order, [((rebuild,), {'check': True}),
+                                 'x86_64-unknown-linux-gnu'])
 
 
 if __name__ == '__main__':

@@ -75,6 +75,7 @@ use crate::auth::{
 };
 use crate::comms::world_identity::WorldName;
 use crate::content::read_through::{DownloadSlot, Downloads};
+use crate::core::settings::MAX_THUMBNAIL_BYTES;
 use crate::core::settings_policy::{
     MAX_CATEGORIES, VALID_RATINGS, detect_image_format, storable_skybox_time,
     storable_thumbnail_hash,
@@ -123,8 +124,6 @@ const MAX_PERMISSIONS_BYTES: usize = 256 * 1024;
 const NO_SECRET_MATCHES: &str = "mirrored: the source keeps the secret";
 /// One `/world/{name}/settings` answer: a handful of short columns.
 const MAX_SETTINGS_BYTES: usize = 256 * 1024;
-/// A world thumbnail upstream accepts at most 1 MiB (`world-settings-handler.ts`).
-const MAX_THUMBNAIL_BYTES: usize = 1024 * 1024;
 const SWEEP_FUSE_MIN_CANDIDATES: i64 = 50;
 
 #[derive(Debug, Default, Clone, Serialize)]

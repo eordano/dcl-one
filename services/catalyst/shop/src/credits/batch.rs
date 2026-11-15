@@ -70,10 +70,6 @@ pub struct ValidatedLine {
     pub registered_name: Option<String>,
 }
 
-fn is_eth_address(s: &str) -> bool {
-    s.len() == 42 && s.starts_with("0x") && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 /// Upstream `validateCreditLine`, message for message.
 pub fn validate_line(raw: &Value) -> Result<ValidatedLine, String> {
     let quoted = match raw.get("usdPriceCents").and_then(Value::as_i64) {
@@ -85,7 +81,7 @@ pub fn validate_line(raw: &Value) -> Result<ValidatedLine, String> {
     if contract_address.is_some() || item_id.is_some() {
         let Some(address) = contract_address
             .and_then(Value::as_str)
-            .filter(|s| is_eth_address(s))
+            .filter(|s| crate::types::is_hex_address(s))
         else {
             return Err(
                 "\"contractAddress\" must be a valid address when an item is given".to_string(),

@@ -2,6 +2,9 @@
   "name": "dcl-react-ui",
   "version": "0.20.0",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "description": "React (react-dom only) re-implementation of the Decentraland client UI, aiming for near-pixel-perfect parity. Vite SPA.",
   "license": "Apache-2.0",
   "repository": {

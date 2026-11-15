@@ -1,0 +1,19 @@
+From 5a2afb2818f929b1b49e7c7127b48924355efc73
+Subject: fix 12-31 nightly error
+Origin: https://github.com/robtfm/bevy/commit/5a2afb2818f929b1b49e7c7127b48924355efc73
+Date: 2026-01-07T23:27:07Z
+
+---
+diff --git a/crates/bevy_mikktspace/src/generated.rs b/crates/bevy_mikktspace/src/generated.rs
+index a726eb5bc89d694169d4021cb75331c4e8d823e0..b246b9668d00bce205aed1f455369c8531b2631e 100644
+--- a/crates/bevy_mikktspace/src/generated.rs
++++ b/crates/bevy_mikktspace/src/generated.rs
+@@ -756,7 +756,7 @@ unsafe fn CompareSubGroups(mut pg1: *const SSubGroup, mut pg2: *const SSubGroup)
+         return false;
+     }
+     while i < (*pg1).iNrFaces as usize && bStillSame {
+-        bStillSame = if (*pg1).pTriMembers[i] == (*pg2).pTriMembers[i] {
++        bStillSame = if (&(*pg1).pTriMembers)[i] == (&(*pg2).pTriMembers)[i] {
+             true
+         } else {
+             false

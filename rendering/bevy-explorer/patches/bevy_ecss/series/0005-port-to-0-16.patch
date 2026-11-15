@@ -1,0 +1,1772 @@
+From 112c40381abc76e0e5fc8f57f2f577612d16b2a2
+Subject: port to 0.16
+Origin: https://github.com/robtfm/bevy_ecss/commit/112c40381abc76e0e5fc8f57f2f577612d16b2a2
+Date: 2025-06-09T14:09:42+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index d8d0fc057eb96c5f6c9d3abbbe1fdbbbb4e917c0..557674ab7735bc0aefaee712510f301cfc8b4f22 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,7 +12,9 @@ repository = "https://github.com/afonsolage/bevy_ecss"
+ 
+ [dependencies]
+ 
+-bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.14-dcl-cosmic-noimage", default-features = false, features = [
++bevy = { path = "../bevy", default-features = false, features = [
++    "std",
++    "bevy_log",
+     "bevy_ui",
+     "bevy_asset",
+     "bevy_text",
+@@ -22,19 +24,23 @@ cssparser = "0.33"
+ cssparser-color = "0.1"
+ smallvec = { version = "1.11", features = ["serde", "union", "const_generics"] }
+ thiserror = "1.0.50"
++ahash = "*"
+ 
+ [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+-bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.14-dcl-cosmic-noimage", features = [
++bevy = { path = "../bevy", default-features = false, features = [
++    "std",
++    "bevy_log",
+     "bevy_ui",
+     "bevy_asset",
+     "bevy_text",
+     "bevy_render",
++    "bevy_window",
++    "bevy_winit",
++    "multi_threaded",
+     "file_watcher",
++    "png",
+ ] }
+ 
+-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+-bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.14-dcl-cosmic-noimage" }
+-
+ [[example]]
+ name = "simple_ui"
+ path = "examples/simple_ui.rs"
+diff --git a/book/src/guide_component_selectors.md b/book/src/guide_component_selectors.md
+index 53abbbde9c6b74900444ca9133e08e097299073e..86adf37a6f6a3983678e6f69b3db416538d71adf 100644
+--- a/book/src/guide_component_selectors.md
++++ b/book/src/guide_component_selectors.md
+@@ -9,7 +9,7 @@ Bevy ECSS provites the following components selector:
+ |      `button`      |          [`Button`](https://docs.rs/bevy/latest/bevy/prelude/struct.Button.html)          |
+ |       `node`       |            [`Node`](https://docs.rs/bevy/latest/bevy/prelude/struct.Node.html)            |
+ |      `style`       |           [`Style`](https://docs.rs/bevy/latest/bevy/prelude/struct.Style.html)           |
+-|     `ui-image`     |         [`UiImage`](https://docs.rs/bevy/latest/bevy/prelude/struct.UiImage.html)         |
++|     `ui-image`     |         [`ImageNode`](https://docs.rs/bevy/latest/bevy/prelude/struct.ImageNode.html)         |
+ |   `interaction`    |      [`Interaction`](https://docs.rs/bevy/latest/bevy/prelude/enum.Interaction.html)      |
+ 
+ This list will be expanded to match `bevy_ui` and other `bevy` core components.
+diff --git a/book/src/guide_properties.md b/book/src/guide_properties.md
+index 85589a374adb372e75226d5b76068b7b4d3ad60b..9777eb6ffd501e26d2de88e2693dee3901e08584 100644
+--- a/book/src/guide_properties.md
++++ b/book/src/guide_properties.md
+@@ -73,4 +73,4 @@ _Before reading properties description, we'll use this notation to describe acce
+ 
+ |   Property   |       Values       | Description                                                                                                                                                                                                                          |
+ |:------------:|:------------------:|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+-| `image-path` | "path/to/image.png" | Applies the property on [`image.texture`](https://docs.rs/bevy/latest/bevy/prelude/struct.UiImage.html#structfield.texture) for all [`images`](https://docs.rs/bevy/latest/bevy/ui/struct.UiImage.html) of matched components. |
++| `image-path` | "path/to/image.png" | Applies the property on [`image.texture`](https://docs.rs/bevy/latest/bevy/prelude/struct.ImageNode.html#structfield.texture) for all [`images`](https://docs.rs/bevy/latest/bevy/ui/struct.ImageNode.html) of matched components. |
+diff --git a/examples/alpha.rs b/examples/alpha.rs
+index 9e18a58aaf03fe00f776ec8c9ae6df2637efb7d9..71d6ca0008225727efcd44fb593f2747907cd0d0 100644
+--- a/examples/alpha.rs
++++ b/examples/alpha.rs
+@@ -19,23 +19,22 @@ fn main() {
+ }
+ 
+ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+-    commands.spawn(Camera2dBundle::default());
++    commands.spawn(Camera2d::default());
+ 
+     commands
+-        .spawn(NodeBundle {
+-            style: Style {
++        .spawn((
++            Node {
+                 width: Val::Percent(100.0),
+                 height: Val::Percent(100.0),
+                 justify_content: JustifyContent::SpaceBetween,
+                 ..default()
+             },
+-            background_color: Color::NONE.into(),
+-            ..default()
+-        })
++            BackgroundColor::from(Color::NONE),
++        ))
+         .insert(StyleSheet::new(asset_server.load("sheets/alpha.css")))
+         .with_children(|parent| {
+             // bevy logo (image)
+-            parent.spawn(ImageBundle::default());
++            parent.spawn(ImageNode::default());
+         });
+ }
+ 
+@@ -70,6 +69,7 @@ impl Property for AlphaProperty {
+         cache: &Self::Cache,
+         mut components: QueryItem<Self::Components>,
+         _asset_server: &AssetServer,
++        _: &mut TextUiWriter,
+         _commands: &mut Commands,
+     ) {
+         components.0.set_alpha(*cache);
+diff --git a/examples/hot_reload.rs b/examples/hot_reload.rs
+index e47740140af8860cc5fc3254991589310186dba6..8e5187f0c919d35cfd044c78cbe67248de9e32b1 100644
+--- a/examples/hot_reload.rs
++++ b/examples/hot_reload.rs
+@@ -1,3 +1,4 @@
++/*
+ use bevy::{color::palettes::basic, prelude::*};
+ use bevy_ecss::prelude::{Class, EcssPlugin, StyleSheet};
+ 
+@@ -24,7 +25,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+     // root node
+     commands
+         .spawn(NodeBundle {
+-            style: Style {
++            style: Node {
+                 width: Val::Percent(100.0),
+                 height: Val::Percent(100.0),
+                 justify_content: JustifyContent::SpaceBetween,
+@@ -39,7 +40,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+             // left vertical fill (border)
+             parent
+                 .spawn(NodeBundle {
+-                    style: Style {
++                    style: Node {
+                         width: Val::Px(200.0),
+                         height: Val::Percent(100.0),
+                         border: UiRect::all(Val::Px(2.0)),
+@@ -53,7 +54,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                     // left vertical fill (content)
+                     parent
+                         .spawn(NodeBundle {
+-                            style: Style {
++                            style: Node {
+                                 width: Val::Percent(100.0),
+                                 height: Val::Percent(100.0),
+                                 align_items: AlignItems::FlexEnd,
+@@ -75,7 +76,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                             color: Color::WHITE,
+                                         },
+                                     )
+-                                    .with_style(Style {
++                                    .with_style(Node {
+                                         margin: UiRect::all(Val::Px(5.0)),
+                                         ..default()
+                                     }),
+@@ -86,7 +87,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+             // right vertical fill
+             parent
+                 .spawn(NodeBundle {
+-                    style: Style {
++                    style: Node {
+                         flex_direction: FlexDirection::ColumnReverse,
+                         justify_content: JustifyContent::Center,
+                         width: Val::Px(200.0),
+@@ -109,7 +110,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                     color: Color::WHITE,
+                                 },
+                             )
+-                            .with_style(Style {
++                            .with_style(Node {
+                                 height: Val::Px(25.0),
+                                 margin: UiRect {
+                                     left: Val::Auto,
+@@ -123,7 +124,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                     // List with hidden overflow
+                     parent
+                         .spawn(NodeBundle {
+-                            style: Style {
++                            style: Node {
+                                 flex_direction: FlexDirection::ColumnReverse,
+                                 align_self: AlignSelf::Center,
+                                 width: Val::Percent(100.0),
+@@ -139,7 +140,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                             // Moving panel
+                             parent
+                                 .spawn(NodeBundle {
+-                                    style: Style {
++                                    style: Node {
+                                         flex_direction: FlexDirection::ColumnReverse,
+                                         flex_grow: 1.0,
+                                         ..default()
+@@ -162,7 +163,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                                         color: Color::WHITE,
+                                                     },
+                                                 )
+-                                                .with_style(Style {
++                                                .with_style(Node {
+                                                     flex_shrink: 0.,
+                                                     height: Val::Px(20.0),
+                                                     margin: UiRect {
+@@ -182,7 +183,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+             // absolute positioning
+             parent
+                 .spawn(NodeBundle {
+-                    style: Style {
++                    style: Node {
+                         width: Val::Px(200.0),
+                         height: Val::Px(200.0),
+                         position_type: PositionType::Absolute,
+@@ -198,7 +199,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                 .with_children(|parent| {
+                     parent
+                         .spawn(NodeBundle {
+-                            style: Style {
++                            style: Node {
+                                 width: Val::Percent(100.0),
+                                 height: Val::Percent(100.0),
+                                 ..default()
+@@ -211,7 +212,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+             // render order test: reddest in the back, whitest in the front (flex center)
+             parent
+                 .spawn(NodeBundle {
+-                    style: Style {
++                    style: Node {
+                         width: Val::Percent(100.0),
+                         height: Val::Percent(100.0),
+                         position_type: PositionType::Absolute,
+@@ -227,7 +228,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                 .with_children(|parent| {
+                     parent
+                         .spawn(NodeBundle {
+-                            style: Style {
++                            style: Node {
+                                 width: Val::Px(100.0),
+                                 height: Val::Px(100.0),
+                                 ..default()
+@@ -239,7 +240,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         .with_children(|parent| {
+                             parent
+                                 .spawn(NodeBundle {
+-                                    style: Style {
++                                    style: Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -253,7 +254,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 .insert(Name::new("mid-red-center"));
+                             parent
+                                 .spawn(NodeBundle {
+-                                    style: Style {
++                                    style: Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -268,7 +269,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 .insert(Name::new("mid-red-top-but-one"));
+                             parent
+                                 .spawn(NodeBundle {
+-                                    style: Style {
++                                    style: Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -283,7 +284,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                             // alpha test
+                             parent
+                                 .spawn(NodeBundle {
+-                                    style: Style {
++                                    style: Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -301,7 +302,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+             // bevy logo (flex center)
+             parent
+                 .spawn(NodeBundle {
+-                    style: Style {
++                    style: Node {
+                         width: Val::Percent(100.0),
+                         height: Val::Percent(100.0),
+                         position_type: PositionType::Absolute,
+@@ -317,7 +318,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                     // bevy logo (image)
+                     parent
+                         .spawn(ImageBundle {
+-                            style: Style {
++                            style: Node {
+                                 width: Val::Px(500.0),
+                                 ..default()
+                             },
+@@ -328,3 +329,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                 });
+         });
+ }
++*/
++
++fn main() {}
+diff --git a/examples/interactive.rs b/examples/interactive.rs
+index 442c10b5d3158de59ee11a6c4309edaf4e666f83..9f22b368412e787017aeab00c6f20c6e43cef852 100644
+--- a/examples/interactive.rs
++++ b/examples/interactive.rs
+@@ -19,39 +19,27 @@ fn main() {
+ 
+ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+     // Camera
+-    commands.spawn(Camera2dBundle::default());
++    commands.spawn(Camera2d::default());
+ 
+     // root node
+     commands
+-        .spawn(NodeBundle {
+-            focus_policy: FocusPolicy::Pass,
+-            ..default()
+-        })
++        .spawn((Node::default(), FocusPolicy::Pass))
+         .insert(Name::new("ui-root"))
+         .insert(StyleSheet::new(asset_server.load("sheets/interactive.css")))
+         .with_children(|parent| {
+             parent
+-                .spawn(NodeBundle {
+-                    focus_policy: FocusPolicy::Pass,
+-                    ..default()
+-                })
++                .spawn((Node::default(), FocusPolicy::Pass))
+                 .insert(Name::new("list"))
+                 .with_children(|parent| {
+                     // Moving panel
+                     parent
+-                        .spawn(NodeBundle {
+-                            focus_policy: FocusPolicy::Pass,
+-                            ..default()
+-                        })
++                        .spawn((Node::default(), FocusPolicy::Pass))
+                         .insert(Name::new("panel"))
+                         .with_children(|parent| {
+                             // List items
+                             for i in 0..30 {
+                                 parent
+-                                    .spawn(TextBundle::from_section(
+-                                        format!("Item {i}"),
+-                                        TextStyle::default(),
+-                                    ))
++                                    .spawn(Text::new(format!("Item {i}")))
+                                     .insert(Interaction::default());
+                             }
+                         });
+diff --git a/examples/simple_ui.rs b/examples/simple_ui.rs
+index 7eeeaa9edc860fefc14ae149a08f4b418e09bb50..b80fc775ca23015033d3a81dce141bd05c616bad 100644
+--- a/examples/simple_ui.rs
++++ b/examples/simple_ui.rs
+@@ -3,13 +3,7 @@ use bevy_ecss::prelude::{Class, EcssPlugin, StyleSheet};
+ 
+ fn main() {
+     App::new()
+-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+-            primary_window: Some(Window {
+-                canvas: Some("#bevy".to_string()),
+-                ..default()
+-            }),
+-            ..default()
+-        }))
++        .add_plugins(DefaultPlugins)
+         .add_plugins(EcssPlugin::default())
+         .add_systems(Startup, setup)
+         .run();
+@@ -17,97 +11,91 @@ fn main() {
+ 
+ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+     // Camera
+-    commands.spawn(Camera2dBundle::default());
++    commands.spawn(Camera2d::default());
+ 
+     // root node
+     commands
+-        .spawn(NodeBundle {
+-            style: Style {
++        .spawn((
++            Node {
+                 width: Val::Percent(100.0),
+                 height: Val::Percent(100.0),
+                 justify_content: JustifyContent::SpaceBetween,
+                 ..default()
+             },
+-            background_color: Color::NONE.into(),
+-            ..default()
+-        })
++            BackgroundColor::from(Color::NONE),
++        ))
+         .insert(StyleSheet::new(asset_server.load("sheets/simple_ui.css")))
+         .insert(Name::new("ui-root"))
+         .with_children(|parent| {
+             // left vertical fill (border)
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Px(200.0),
+                         height: Val::Percent(100.0),
+                         border: UiRect::all(Val::Px(2.0)),
+                         ..default()
+                     },
+-                    background_color: Color::srgb(0.65, 0.65, 0.65).into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::srgb(0.65, 0.65, 0.65)),
++                ))
+                 .insert(Name::new("left-border"))
+                 .with_children(|parent| {
+                     // left vertical fill (content)
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 width: Val::Percent(100.0),
+                                 height: Val::Percent(100.0),
+                                 align_items: AlignItems::FlexEnd,
+                                 ..default()
+                             },
+-                            background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+-                            ..default()
+-                        })
++                            BackgroundColor::from(Color::srgb(0.15, 0.15, 0.15)),
++                        ))
+                         .insert(Name::new("left-bg"))
+                         .with_children(|parent| {
+                             // text
+                             parent
+-                                .spawn(
+-                                    TextBundle::from_section(
+-                                        "Text Example",
+-                                        TextStyle {
+-                                            font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+-                                            font_size: 30.0,
+-                                            color: Color::WHITE,
+-                                        },
+-                                    )
+-                                    .with_style(Style {
++                                .spawn((
++                                    Text::new("Text Example"),
++                                    TextFont {
++                                        font: asset_server.load("fonts/FiraSans-Bold.ttf"),
++                                        font_size: 30.0,
++                                        ..Default::default()
++                                    },
++                                    TextColor(Color::WHITE),
++                                    Node {
+                                         margin: UiRect::all(Val::Px(5.0)),
+                                         ..default()
+-                                    }),
+-                                )
++                                    },
++                                ))
+                                 .insert(Name::new("left-text"));
+                         });
+                 });
+             // right vertical fill
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         flex_direction: FlexDirection::ColumnReverse,
+                         justify_content: JustifyContent::Center,
+                         width: Val::Px(200.0),
+                         height: Val::Percent(100.0),
+                         ..default()
+                     },
+-                    background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::srgb(0.15, 0.15, 0.15)),
++                ))
+                 .insert(Name::new("right-border"))
+                 .with_children(|parent| {
+                     // Title
+                     parent
+-                        .spawn(
+-                            TextBundle::from_section(
+-                                "Scrolling list",
+-                                TextStyle {
+-                                    font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+-                                    font_size: 25.,
+-                                    color: Color::WHITE,
+-                                },
+-                            )
+-                            .with_style(Style {
++                        .spawn((
++                            Text::new("Scrolling list"),
++                            TextFont {
++                                font: asset_server.load("fonts/FiraSans-Bold.ttf"),
++                                font_size: 25.,
++                                ..Default::default()
++                            },
++                            TextColor(Color::WHITE),
++                            Node {
+                                 height: Val::Px(25.0),
+                                 margin: UiRect {
+                                     left: Val::Auto,
+@@ -115,13 +103,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                     ..default()
+                                 },
+                                 ..default()
+-                            }),
+-                        )
++                            },
++                        ))
+                         .insert(Name::new("right-bg"));
+                     // List with hidden overflow
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 flex_direction: FlexDirection::ColumnReverse,
+                                 align_self: AlignSelf::Center,
+                                 width: Val::Percent(100.0),
+@@ -129,38 +117,35 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 overflow: Overflow::clip(),
+                                 ..default()
+                             },
+-                            background_color: Color::srgb(0.10, 0.10, 0.10).into(),
+-                            ..default()
+-                        })
++                            BackgroundColor::from(Color::srgb(0.10, 0.10, 0.10)),
++                        ))
+                         .insert(Name::new("right-list"))
+                         .with_children(|parent| {
+                             // Moving panel
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         flex_direction: FlexDirection::ColumnReverse,
+                                         flex_grow: 1.0,
+                                         ..default()
+                                     },
+-                                    background_color: Color::NONE.into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::NONE),
++                                ))
+                                 .insert(Name::new("right-moving-panel"))
+                                 .with_children(|parent| {
+                                     // List items
+                                     for i in 0..30 {
+                                         parent
+-                                            .spawn(
+-                                                TextBundle::from_section(
+-                                                    format!("Item {i}"),
+-                                                    TextStyle {
+-                                                        font: asset_server
+-                                                            .load("fonts/FiraSans-Bold.ttf"),
+-                                                        font_size: 20.,
+-                                                        color: Color::WHITE,
+-                                                    },
+-                                                )
+-                                                .with_style(Style {
++                                            .spawn((
++                                                Text::new(format!("Item {i}")),
++                                                TextFont {
++                                                    font: asset_server
++                                                        .load("fonts/FiraSans-Bold.ttf"),
++                                                    font_size: 20.,
++                                                    ..Default::default()
++                                                },
++                                                TextColor(Color::WHITE),
++                                                Node {
+                                                     flex_shrink: 0.,
+                                                     height: Val::Px(20.),
+                                                     margin: UiRect {
+@@ -169,8 +154,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                                         ..default()
+                                                     },
+                                                     ..default()
+-                                                }),
+-                                            )
++                                                },
++                                            ))
+                                             .insert(Class::new("big-text"))
+                                             .insert(Name::new(format!("right-item-{}", i)));
+                                     }
+@@ -179,8 +164,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                 });
+             // absolute positioning
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Px(200.0),
+                         height: Val::Px(200.0),
+                         position_type: PositionType::Absolute,
+@@ -189,27 +174,25 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(20.0)),
+                         ..default()
+                     },
+-                    background_color: Color::srgb(0.4, 0.4, 1.0).into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::srgb(0.4, 0.4, 1.0)),
++                ))
+                 .insert(Name::new("mid-blue-border"))
+                 .with_children(|parent| {
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 width: Val::Percent(100.0),
+                                 height: Val::Percent(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::srgb(0.8, 0.8, 1.0).into(),
+-                            ..default()
+-                        })
++                            BackgroundColor::from(Color::srgb(0.8, 0.8, 1.0)),
++                        ))
+                         .insert(Name::new("mid-navy-blue-content"));
+                 });
+             // render order test: reddest in the back, whitest in the front (flex center)
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Percent(100.0),
+                         height: Val::Percent(100.0),
+                         position_type: PositionType::Absolute,
+@@ -217,27 +200,25 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         justify_content: JustifyContent::Center,
+                         ..default()
+                     },
+-                    background_color: Color::NONE.into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::NONE),
++                ))
+                 .insert(Name::new("mid-red-last"))
+                 .insert(Class::new("blue-bg container"))
+                 .with_children(|parent| {
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 width: Val::Px(100.0),
+                                 height: Val::Px(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::srgb(1.0, 0.0, 0.0).into(),
+-                            ..default()
+-                        })
++                            BackgroundColor::from(Color::srgb(1.0, 0.0, 0.0)),
++                        ))
+                         .insert(Name::new("mid-red-last-but-one"))
+                         .with_children(|parent| {
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -245,13 +226,12 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(20.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgb(1.0, 0.3, 0.3).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgb(1.0, 0.3, 0.3)),
++                                ))
+                                 .insert(Name::new("mid-red-center"));
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -259,14 +239,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(40.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgb(1.0, 0.5, 0.5).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgb(1.0, 0.5, 0.5)),
++                                ))
+                                 .insert(Class::new("blue-bg"))
+                                 .insert(Name::new("mid-red-top-but-one"));
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -274,14 +253,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(60.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgb(1.0, 0.7, 0.7).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgb(1.0, 0.7, 0.7)),
++                                ))
+                                 .insert(Name::new("mid-red-top"));
+                             // alpha test
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -289,17 +267,16 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(80.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgba(1.0, 0.9, 0.9, 0.4).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgba(1.0, 0.9, 0.9, 0.4)),
++                                ))
+                                 .insert(Class::new("blue-bg"))
+                                 .insert(Name::new("mid-red-alpha"));
+                         });
+                 });
+             // bevy logo (flex center)
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Percent(100.0),
+                         height: Val::Percent(100.0),
+                         position_type: PositionType::Absolute,
+@@ -307,22 +284,19 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         align_items: AlignItems::FlexEnd,
+                         ..default()
+                     },
+-                    background_color: Color::NONE.into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::NONE),
++                ))
+                 .insert(Name::new("mid-bevy-logo-bg"))
+                 .with_children(|parent| {
+                     // bevy logo (image)
+-                    parent
+-                        .spawn(ImageBundle {
+-                            style: Style {
+-                                width: Val::Px(500.0),
+-                                ..default()
+-                            },
+-                            image: asset_server.load("branding/bevy_logo_dark_big.png").into(),
++                    parent.spawn((
++                        ImageNode::new(asset_server.load("branding/bevy_logo_dark_big.png")),
++                        Node {
++                            width: Val::Px(500.0),
+                             ..default()
+-                        })
+-                        .insert(Name::new("mid-bevy-logo-image"));
++                        },
++                        Name::new("mid-bevy-logo-image"),
++                    ));
+                 });
+         });
+ }
+diff --git a/examples/stress_test.rs b/examples/stress_test.rs
+index 038b54bb3134d500b40de39c13fd244fe12246ef..953f1f4cddb1404aee8071ac086c27c405393426 100644
+--- a/examples/stress_test.rs
++++ b/examples/stress_test.rs
+@@ -16,47 +16,31 @@ fn main() {
+ }
+ 
+ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+-    commands.spawn(Camera2dBundle::default());
++    commands.spawn(Camera2d::default());
+ 
+     commands
+-        .spawn(NodeBundle {
+-            ..Default::default()
+-        })
++        .spawn(Node::default())
+         .insert(Name::new("root"))
+         .insert(StyleSheet::new(asset_server.load("sheets/stress.css")))
+         .with_children(|builder| {
+             for _ in 0..10 {
+                 builder
+-                    .spawn(NodeBundle {
+-                        style: Style {
+-                            ..Default::default()
+-                        },
+-                        ..Default::default()
+-                    })
++                    .spawn(Node::default())
+                     .insert(Class::new("red"))
+                     .with_children(|builder| {
+                         for _ in 0..10 {
+                             builder
+-                                .spawn(NodeBundle {
+-                                    ..Default::default()
+-                                })
++                                .spawn(Node::default())
+                                 .insert(Class::new("green"))
+                                 .with_children(|builder| {
+                                     for _ in 0..10 {
+                                         builder
+-                                            .spawn(NodeBundle {
+-                                                style: Style {
+-                                                    ..Default::default()
+-                                                },
+-                                                ..Default::default()
+-                                            })
++                                            .spawn(Node::default())
+                                             .insert(Class::new("blue"))
+                                             .with_children(|builder| {
+                                                 for _ in 0..10 {
+                                                     builder
+-                                                        .spawn(NodeBundle {
+-                                                            ..Default::default()
+-                                                        })
++                                                        .spawn(Node::default())
+                                                         .insert(Class::new("purple"));
+                                                 }
+                                             });
+diff --git a/examples/theme.rs b/examples/theme.rs
+index d26879bff9652e459304b51429957579d4f6e80c..e071687c7ce265e5c3929ebd5264fe84c4dda2f9 100644
+--- a/examples/theme.rs
++++ b/examples/theme.rs
+@@ -55,98 +55,92 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+     let light = asset_server.load("sheets/light_theme.css");
+ 
+     // Camera
+-    commands.spawn(Camera2dBundle::default());
++    commands.spawn(Camera2d::default());
+ 
+     // root node
+     let root = commands
+-        .spawn(NodeBundle {
+-            style: Style {
++        .spawn((
++            Node {
+                 width: Val::Percent(100.0),
+                 height: Val::Percent(100.0),
+                 justify_content: JustifyContent::SpaceBetween,
+                 ..default()
+             },
+-            focus_policy: FocusPolicy::Pass,
+-            background_color: Color::NONE.into(),
+-            ..default()
+-        })
++            FocusPolicy::Pass,
++            BackgroundColor::from(Color::NONE),
++        ))
+         .insert(Name::new("ui-root"))
+         .insert(StyleSheet::new(dark.clone()))
+         .with_children(|parent| {
+             // left vertical fill (border)
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Px(200.0),
+                         height: Val::Percent(100.0),
+                         border: UiRect::all(Val::Px(2.0)),
+                         ..default()
+                     },
+-                    background_color: Color::srgb(0.65, 0.65, 0.65).into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::srgb(0.65, 0.65, 0.65)),
++                ))
+                 .insert(Name::new("left-border"))
+                 .with_children(|parent| {
+                     // left vertical fill (content)
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 width: Val::Percent(100.0),
+                                 height: Val::Percent(100.0),
+                                 align_items: AlignItems::FlexEnd,
+                                 ..default()
+                             },
+-                            background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+-                            ..default()
+-                        })
++                            BackgroundColor::from(Color::srgb(0.15, 0.15, 0.15)),
++                        ))
+                         .insert(Name::new("left-bg"))
+                         .with_children(|parent| {
+                             // text
+                             parent
+-                                .spawn(
+-                                    TextBundle::from_section(
+-                                        "Text Example",
+-                                        TextStyle {
+-                                            font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+-                                            font_size: 30.0,
+-                                            color: Color::WHITE,
+-                                        },
+-                                    )
+-                                    .with_style(Style {
++                                .spawn((
++                                    Text::new("Text Example"),
++                                    TextFont {
++                                        font: asset_server.load("fonts/FiraSans-Bold.ttf"),
++                                        font_size: 30.0,
++                                        ..Default::default()
++                                    },
++                                    TextColor(Color::WHITE),
++                                    Node {
+                                         margin: UiRect::all(Val::Px(5.0)),
+                                         ..default()
+-                                    }),
+-                                )
++                                    },
++                                ))
+                                 .insert(Name::new("left-text"));
+                         });
+                 });
+             // right vertical fill
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         flex_direction: FlexDirection::ColumnReverse,
+                         justify_content: JustifyContent::Center,
+                         width: Val::Px(200.0),
+                         height: Val::Percent(100.0),
+                         ..default()
+                     },
+-                    background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::srgb(0.15, 0.15, 0.15)),
++                ))
+                 .insert(Name::new("right-border"))
+                 .with_children(|parent| {
+                     // Title
+                     parent
+-                        .spawn(
+-                            TextBundle::from_section(
+-                                "Scrolling list",
+-                                TextStyle {
+-                                    font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+-                                    font_size: 25.,
+-                                    color: Color::WHITE,
+-                                },
+-                            )
+-                            .with_style(Style {
++                        .spawn((
++                            Text::new("Scrolling list"),
++                            TextFont {
++                                font: asset_server.load("fonts/FiraSans-Bold.ttf"),
++                                font_size: 25.,
++                                ..Default::default()
++                            },
++                            TextColor(Color::WHITE),
++                            Node {
+                                 width: Val::Auto,
+                                 height: Val::Px(25.),
+                                 margin: UiRect {
+@@ -155,14 +149,14 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                     ..default()
+                                 },
+                                 ..default()
+-                            }),
+-                        )
++                            },
++                        ))
+                         .insert(Title)
+                         .insert(Name::new("right-bg"));
+                     // List with hidden overflow
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 flex_direction: FlexDirection::ColumnReverse,
+                                 align_self: AlignSelf::Center,
+                                 width: Val::Percent(100.0),
+@@ -170,38 +164,35 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 overflow: Overflow::clip(),
+                                 ..default()
+                             },
+-                            background_color: Color::srgb(0.10, 0.10, 0.10).into(),
+-                            ..default()
+-                        })
++                            BackgroundColor::from(Color::srgb(0.10, 0.10, 0.10)),
++                        ))
+                         .insert(Name::new("right-list"))
+                         .with_children(|parent| {
+                             // Moving panel
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         flex_direction: FlexDirection::ColumnReverse,
+                                         flex_grow: 1.0,
+                                         ..default()
+                                     },
+-                                    background_color: Color::NONE.into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::NONE),
++                                ))
+                                 .insert(Name::new("right-moving-panel"))
+                                 .with_children(|parent| {
+                                     // List items
+                                     for i in 0..30 {
+                                         parent
+-                                            .spawn(
+-                                                TextBundle::from_section(
+-                                                    format!("Item {i}"),
+-                                                    TextStyle {
+-                                                        font: asset_server
+-                                                            .load("fonts/FiraSans-Bold.ttf"),
+-                                                        font_size: 20.,
+-                                                        color: Color::WHITE,
+-                                                    },
+-                                                )
+-                                                .with_style(Style {
++                                            .spawn((
++                                                Text::new(format!("Item {i}")),
++                                                TextFont {
++                                                    font: asset_server
++                                                        .load("fonts/FiraSans-Bold.ttf"),
++                                                    font_size: 20.,
++                                                    ..Default::default()
++                                                },
++                                                TextColor(Color::WHITE),
++                                                Node {
+                                                     flex_shrink: 0.,
+                                                     height: Val::Px(20.0),
+                                                     margin: UiRect {
+@@ -210,8 +201,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                                         ..default()
+                                                     },
+                                                     ..default()
+-                                                }),
+-                                            )
++                                                },
++                                            ))
+                                             .insert(Class::new("big-text"))
+                                             .insert(Name::new(format!("right-item-{}", i)));
+                                     }
+@@ -221,8 +212,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+ 
+             // render order test: reddest in the back, whitest in the front (flex center)
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Percent(100.0),
+                         height: Val::Percent(100.0),
+                         position_type: PositionType::Absolute,
+@@ -230,27 +221,25 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         justify_content: JustifyContent::Center,
+                         ..default()
+                     },
+-                    background_color: Color::NONE.into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::NONE),
++                ))
+                 .insert(Name::new("mid-red-last"))
+                 .insert(Class::new("blue-bg container"))
+                 .with_children(|parent| {
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 width: Val::Px(100.0),
+                                 height: Val::Px(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::srgb(1.0, 0.0, 0.0).into(),
+-                            ..default()
+-                        })
++                            BackgroundColor::from(Color::srgb(1.0, 0.0, 0.0)),
++                        ))
+                         .insert(Name::new("mid-red-last-but-one"))
+                         .with_children(|parent| {
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -258,13 +247,12 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(20.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgb(1.0, 0.3, 0.3).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgb(1.0, 0.3, 0.3)),
++                                ))
+                                 .insert(Name::new("mid-red-center"));
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -272,14 +260,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(40.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgb(1.0, 0.5, 0.5).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgb(1.0, 0.5, 0.5)),
++                                ))
+                                 .insert(Class::new("blue-bg"))
+                                 .insert(Name::new("mid-red-top-but-one"));
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -287,14 +274,13 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(60.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgb(1.0, 0.7, 0.7).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgb(1.0, 0.7, 0.7)),
++                                ))
+                                 .insert(Name::new("mid-red-top"));
+                             // alpha test
+                             parent
+-                                .spawn(NodeBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         position_type: PositionType::Absolute,
+@@ -302,17 +288,16 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(80.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::srgba(1.0, 0.9, 0.9, 0.4).into(),
+-                                    ..default()
+-                                })
++                                    BackgroundColor::from(Color::srgba(1.0, 0.9, 0.9, 0.4)),
++                                ))
+                                 .insert(Class::new("blue-bg"))
+                                 .insert(Name::new("mid-red-alpha"));
+                         });
+                 });
+             // bevy logo (flex center)
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Percent(100.0),
+                         height: Val::Percent(100.0),
+                         position_type: PositionType::Absolute,
+@@ -320,28 +305,26 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         align_items: AlignItems::FlexEnd,
+                         ..default()
+                     },
+-                    focus_policy: FocusPolicy::Pass,
+-                    background_color: Color::NONE.into(),
+-                    ..default()
+-                })
++                    FocusPolicy::Pass,
++                    BackgroundColor::from(Color::NONE),
++                ))
+                 .insert(Name::new("mid-bevy-logo-bg"))
+                 .with_children(|parent| {
+                     // bevy logo (image)
+                     parent
+-                        .spawn(ImageBundle {
+-                            style: Style {
++                        .spawn((
++                            ImageNode::new(asset_server.load("branding/bevy_logo_dark_big.png")),
++                            Node {
+                                 width: Val::Px(500.0),
+                                 ..default()
+                             },
+-                            image: asset_server.load("branding/bevy_logo_dark_big.png").into(),
+-                            ..default()
+-                        })
++                        ))
+                         .insert(Name::new("mid-bevy-logo-image"));
+                 });
+             // absolute positioning
+             parent
+-                .spawn(NodeBundle {
+-                    style: Style {
++                .spawn((
++                    Node {
+                         width: Val::Px(200.0),
+                         height: Val::Px(200.0),
+                         position_type: PositionType::Absolute,
+@@ -350,41 +333,40 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(20.0)),
+                         ..default()
+                     },
+-                    background_color: Color::srgb(0.4, 0.4, 1.0).into(),
+-                    ..default()
+-                })
++                    BackgroundColor::from(Color::srgb(0.4, 0.4, 1.0)),
++                ))
+                 .insert(Name::new("mid-blue-border"))
+                 .with_children(|parent| {
+                     parent
+-                        .spawn(NodeBundle {
+-                            style: Style {
++                        .spawn((
++                            Node {
+                                 width: Val::Px(100.0),
+                                 height: Val::Px(100.0),
+                                 ..default()
+                             },
+-                            focus_policy: FocusPolicy::Pass,
+-                            background_color: Color::srgb(0.8, 0.8, 1.0).into(),
+-                            ..default()
+-                        })
++                            FocusPolicy::Pass,
++                            BackgroundColor::from(Color::srgb(0.8, 0.8, 1.0)),
++                        ))
+                         .insert(Name::new("mid-navy-blue-content"))
+                         .with_children(|parent| {
+                             parent
+-                                .spawn(ButtonBundle {
+-                                    style: Style {
++                                .spawn((
++                                    Button,
++                                    Node {
+                                         width: Val::Px(100.0),
+                                         height: Val::Px(100.0),
+                                         ..default()
+                                     },
+-                                    ..default()
+-                                })
++                                ))
+                                 .with_children(|parent| {
+-                                    parent.spawn(TextBundle::from_section(
+-                                        "Change Theme",
+-                                        TextStyle {
++                                    parent.spawn((
++                                        Text::new("Change Theme"),
++                                        TextFont {
+                                             font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+                                             font_size: 40.0,
+-                                            color: Color::srgb(0.9, 0.9, 0.9),
++                                            ..Default::default()
+                                         },
++                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                     ));
+                                 });
+                         });
+diff --git a/src/lib.rs b/src/lib.rs
+index df93ff8e7ae0af7fbf5fc9c7891d447614350b0b..4ff425f99381cbadfe0ec9d69741686493e52c3a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -12,13 +12,14 @@ use std::{error::Error, fmt::Display};
+ use bevy::{
+     app::First,
+     asset::AssetEvents,
+-    ecs::system::SystemState,
++    ecs::{schedule::IntoScheduleConfigs, system::SystemState},
+     prelude::{
+-        AssetApp, Button, Component, Entity, IntoSystemConfigs, IntoSystemSetConfigs, Plugin,
+-        PostUpdate, PreUpdate, Query, SystemSet, With,
++        AssetApp, Button, Component, Entity, Plugin, PostUpdate, PreUpdate, Query, SystemSet, With,
++    },
++    ui::{
++        widget::{ImageNode, Text},
++        BackgroundColor, ComputedNode, Interaction, Node,
+     },
+-    text::Text,
+-    ui::{BackgroundColor, Interaction, Node, Style, UiImage},
+ };
+ 
+ use property::StyleSheetState;
+@@ -141,9 +142,9 @@ fn register_component_selector(app: &mut bevy::prelude::App) {
+     app.register_component_selector::<BackgroundColor>("background-color");
+     app.register_component_selector::<Text>("text");
+     app.register_component_selector::<Button>("button");
+-    app.register_component_selector::<Node>("node");
+-    app.register_component_selector::<Style>("style");
+-    app.register_component_selector::<UiImage>("ui-image");
++    app.register_component_selector::<ComputedNode>("node");
++    app.register_component_selector::<Node>("style");
++    app.register_component_selector::<ImageNode>("ui-image");
+     app.register_component_selector::<Interaction>("interaction");
+ }
+ 
+@@ -152,7 +153,6 @@ fn register_properties(app: &mut bevy::prelude::App) {
+ 
+     app.register_property::<DisplayProperty>();
+     app.register_property::<PositionTypeProperty>();
+-    app.register_property::<DirectionProperty>();
+     app.register_property::<FlexDirectionProperty>();
+     app.register_property::<FlexWrapProperty>();
+     app.register_property::<AlignItemsProperty>();
+diff --git a/src/property/impls.rs b/src/property/impls.rs
+index fb906a8b52eff81344fa9be8a0041030e905a03e..e8b90037cf1f442415fa8aca251c8887a748af9e 100644
+--- a/src/property/impls.rs
++++ b/src/property/impls.rs
+@@ -24,8 +24,8 @@ mod style {
+ 
+             impl Property for $struct {
+                 type Cache = UiRect;
+-                type Components = &'static mut Style;
+-                type Filters = With<Node>;
++                type Components = &'static mut Node;
++                type Filters = With<ComputedNode>;
+ 
+                 fn name() -> &'static str {
+                     $name
+@@ -43,6 +43,7 @@ mod style {
+                     cache: &Self::Cache,
+                     mut components: QueryItem<Self::Components>,
+                     _asset_server: &AssetServer,
++                    _writer: &mut TextUiWriter,
+                     _commands: &mut Commands,
+                 ) {
+                     components.$style_prop$(.$style_field)? = *cache;
+@@ -69,8 +70,8 @@ mod style {
+ 
+             impl Property for $struct {
+                 type Cache = $cache;
+-                type Components = &'static mut Style;
+-                type Filters = With<Node>;
++                type Components = &'static mut Node;
++                type Filters = With<ComputedNode>;
+ 
+                 fn name() -> &'static str {
+                     $name
+@@ -88,6 +89,7 @@ mod style {
+                     cache: &Self::Cache,
+                     mut components: QueryItem<Self::Components>,
+                     _asset_server: &AssetServer,
++                    _writer: &mut TextUiWriter,
+                     _commands: &mut Commands,
+                 ) {
+                     components.$style_prop$(.$style_field)? = *cache;
+@@ -142,8 +144,8 @@ mod style {
+ 
+             impl Property for $struct {
+                 type Cache = $cache;
+-                type Components = &'static mut Style;
+-                type Filters = With<Node>;
++                type Components = &'static mut Node;
++                type Filters = With<ComputedNode>;
+ 
+                 fn name() -> &'static str {
+                     $name
+@@ -167,6 +169,7 @@ mod style {
+                     cache: &Self::Cache,
+                     mut components: QueryItem<Self::Components>,
+                     _asset_server: &AssetServer,
++                    _writer: &mut TextUiWriter,
+                     _commands: &mut Commands,
+                 ) {
+                     components.$style_prop$(.$style_field)? = *cache;
+@@ -185,12 +188,6 @@ mod style {
+         "relative" => Relative,
+     );
+ 
+-    impl_style_enum!(Direction, "direction", DirectionProperty, direction,
+-        "inherit" => Inherit,
+-        "left-to-right" => LeftToRight,
+-        "right-to-left" => RightToLeft,
+-    );
+-
+     impl_style_enum!(FlexDirection, "flex-direction", FlexDirectionProperty, flex_direction,
+         "row" => Row,
+         "column" => Column,
+@@ -260,8 +257,8 @@ mod text {
+ 
+     impl Property for FontColorProperty {
+         type Cache = Color;
+-        type Components = &'static mut Text;
+-        type Filters = With<Node>;
++        type Components = Entity;
++        type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+             "color"
+@@ -277,14 +274,12 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            mut components: QueryItem<Self::Components>,
++            components: QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
++            writer: &mut TextUiWriter,
+             _commands: &mut Commands,
+         ) {
+-            components
+-                .sections
+-                .iter_mut()
+-                .for_each(|section| section.style.color = *cache);
++            writer.for_each_color(components, |mut c| c.0 = *cache);
+         }
+     }
+ 
+@@ -294,8 +289,8 @@ mod text {
+ 
+     impl Property for FontProperty {
+         type Cache = String;
+-        type Components = &'static mut Text;
+-        type Filters = With<Node>;
++        type Components = Entity;
++        type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+             "font"
+@@ -311,14 +306,12 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            mut components: QueryItem<Self::Components>,
++            components: QueryItem<Self::Components>,
+             asset_server: &AssetServer,
++            writer: &mut TextUiWriter,
+             _commands: &mut Commands,
+         ) {
+-            components
+-                .sections
+-                .iter_mut()
+-                .for_each(|section| section.style.font = asset_server.load(cache));
++            writer.for_each_font(components, |mut f| f.font = asset_server.load(cache));
+         }
+     }
+ 
+@@ -328,8 +321,8 @@ mod text {
+ 
+     impl Property for FontSizeProperty {
+         type Cache = f32;
+-        type Components = &'static mut Text;
+-        type Filters = With<Node>;
++        type Components = Entity;
++        type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+             "font-size"
+@@ -345,14 +338,12 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            mut components: QueryItem<Self::Components>,
++            components: QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
++            writer: &mut TextUiWriter,
+             _commands: &mut Commands,
+         ) {
+-            components
+-                .sections
+-                .iter_mut()
+-                .for_each(|section| section.style.font_size = *cache);
++            writer.for_each_font(components, |mut f| f.font_size = *cache);
+         }
+     }
+ 
+@@ -363,8 +354,8 @@ mod text {
+     impl Property for TextAlignProperty {
+         // Using Option since Cache must impl Default, which  doesn't
+         type Cache = Option<JustifyText>;
+-        type Components = &'static mut Text;
+-        type Filters = With<Node>;
++        type Components = &'static mut TextLayout;
++        type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+             "text-align"
+@@ -386,6 +377,7 @@ mod text {
+             cache: &Self::Cache,
+             mut components: QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
++            _writer: &mut TextUiWriter,
+             _commands: &mut Commands,
+         ) {
+             components.justify = cache.expect("Should always have a inner value");
+@@ -398,8 +390,8 @@ mod text {
+ 
+     impl Property for TextContentProperty {
+         type Cache = String;
+-        type Components = &'static mut Text;
+-        type Filters = With<Node>;
++        type Components = Entity;
++        type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+             "text-content"
+@@ -415,15 +407,14 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            mut components: QueryItem<Self::Components>,
++            components: QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
++            writer: &mut TextUiWriter,
+             _commands: &mut Commands,
+         ) {
+-            components
+-                .sections
+-                .iter_mut()
+-                // TODO: Maybe change this so each line break is a new section
+-                .for_each(|section| section.value.clone_from(cache));
++            writer.for_each_text(components, |mut s| {
++                s.clone_from(cache);
++            });
+         }
+     }
+ }
+@@ -453,6 +444,7 @@ impl Property for BackgroundColorProperty {
+         cache: &Self::Cache,
+         components: QueryItem<Self::Components>,
+         _asset_server: &AssetServer,
++        _writer: &mut TextUiWriter,
+         commands: &mut Commands,
+     ) {
+         commands.entity(components).insert(BackgroundColor(*cache));
+@@ -484,20 +476,21 @@ impl Property for BorderColorProperty {
+         cache: &Self::Cache,
+         components: QueryItem<Self::Components>,
+         _asset_server: &AssetServer,
++        _writer: &mut TextUiWriter,
+         commands: &mut Commands,
+     ) {
+-        commands.entity(components).insert(BorderColor::all(*cache));
++        commands.entity(components).insert(BorderColor(*cache));
+     }
+ }
+ 
+-/// Applies the `image-path` property on [`bevy::ui::UiImage`] texture property of all sections on matched [`bevy::ui::UiImage`] components.
++/// Applies the `image-path` property on [`bevy::ui::ImageNode`] texture property of all sections on matched [`bevy::ui::ImageNode`] components.
+ #[derive(Default)]
+ pub struct ImageProperty;
+ 
+ impl Property for ImageProperty {
+     type Cache = String;
+-    type Components = &'static mut UiImage;
+-    type Filters = With<Node>;
++    type Components = &'static mut ImageNode;
++    type Filters = With<ComputedNode>;
+ 
+     fn name() -> &'static str {
+         "image-path"
+@@ -515,8 +508,9 @@ impl Property for ImageProperty {
+         cache: &Self::Cache,
+         mut components: QueryItem<Self::Components>,
+         asset_server: &AssetServer,
++        _writer: &mut TextUiWriter,
+         _commands: &mut Commands,
+     ) {
+-        components.texture = asset_server.load(cache);
++        components.image = asset_server.load(cache);
+     }
+ }
+diff --git a/src/property/mod.rs b/src/property/mod.rs
+index a64de9e27180e3ca80308c5bd2e402dfe581e262..85eb55649c20107759e6b0018399c39520339f6e 100644
+--- a/src/property/mod.rs
++++ b/src/property/mod.rs
+@@ -3,12 +3,12 @@ use std::any::Any;
+ use bevy::{
+     ecs::query::{QueryData, QueryFilter, QueryItem},
+     log::{error, trace},
++    platform::collections::HashMap,
+     prelude::{
+         AssetId, AssetServer, Assets, Color, Commands, Deref, DerefMut, Entity, Local, Query, Res,
+         Resource,
+     },
+-    ui::{UiRect, Val},
+-    utils::HashMap,
++    ui::{widget::TextUiWriter, UiRect, Val},
+ };
+ 
+ use cssparser::Token;
+@@ -340,6 +340,7 @@ pub trait Property: Default + Sized + Send + Sync + 'static {
+         cache: &Self::Cache,
+         components: QueryItem<Self::Components>,
+         asset_server: &AssetServer,
++        text_writer: &mut TextUiWriter,
+         commands: &mut Commands,
+     );
+ 
+@@ -354,6 +355,7 @@ pub trait Property: Default + Sized + Send + Sync + 'static {
+         mut q_nodes: Query<Self::Components, Self::Filters>,
+         asset_server: Res<AssetServer>,
+         mut commands: Commands,
++        mut writer: TextUiWriter,
+     ) {
+         for (asset_id, _, selected) in apply_sheets.iter() {
+             if let Some(rules) = assets.get(*asset_id) {
+@@ -367,7 +369,13 @@ pub trait Property: Default + Sized + Send + Sync + 'static {
+                         );
+                         for entity in entities {
+                             if let Ok(components) = q_nodes.get_mut(*entity) {
+-                                Self::apply(cached, components, &asset_server, &mut commands);
++                                Self::apply(
++                                    cached,
++                                    components,
++                                    &asset_server,
++                                    &mut writer,
++                                    &mut commands,
++                                );
+                             }
+                         }
+                     }
+diff --git a/src/selector.rs b/src/selector.rs
+index 46dd108b7a939aa81e3e5122fe524427dbbe331b..e1be097d9a01851be03218535d59ab1b2dafd691 100644
+--- a/src/selector.rs
++++ b/src/selector.rs
+@@ -1,6 +1,6 @@
+ use std::hash::{Hash, Hasher};
+ 
+-use bevy::utils::AHasher;
++use ahash::AHasher;
+ use cssparser::CowRcStr;
+ use smallvec::{smallvec, SmallVec};
+ 
+diff --git a/src/stylesheet.rs b/src/stylesheet.rs
+index 3b5411b7ae2d8c7fb9021f04485dca5b13354b59..85f6c4420cce8ae8128374ef35fe78ef6b5c04ed 100644
+--- a/src/stylesheet.rs
++++ b/src/stylesheet.rs
+@@ -1,10 +1,12 @@
+ use std::hash::{Hash, Hasher};
+ 
++use ahash::AHasher;
+ use bevy::{
+-    asset::{io::Reader, AssetLoader, AsyncReadExt},
++    asset::{io::Reader, AssetLoader},
++    platform::collections::HashMap,
+     prelude::Asset,
+     reflect::TypePath,
+-    utils::{AHasher, ConditionalSendFuture, HashMap},
++    tasks::ConditionalSendFuture,
+ };
+ use smallvec::SmallVec;
+ use thiserror::Error;
+@@ -93,11 +95,11 @@ impl AssetLoader for StyleSheetLoader {
+     type Settings = ();
+     type Error = StyleSheetLoaderError;
+ 
+-    fn load<'a>(
+-        &'a self,
+-        reader: &'a mut Reader,
+-        _settings: &'a Self::Settings,
+-        load_context: &'a mut bevy::asset::LoadContext,
++    fn load(
++        &self,
++        reader: &mut dyn Reader,
++        _settings: &Self::Settings,
++        load_context: &mut bevy::asset::LoadContext,
+     ) -> impl ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
+         Box::pin(async move {
+             let mut bytes = Vec::new();
+diff --git a/src/system.rs b/src/system.rs
+index 97da527cd2c13d3f1990d4277b4b1223b31ab955..8ad6d1fa2c058eeedac910af974923fad28d1e68 100644
+--- a/src/system.rs
++++ b/src/system.rs
+@@ -4,12 +4,12 @@ use bevy::{
+         system::{SystemParam, SystemState},
+     },
+     log::{debug, error, trace},
++    platform::collections::HashMap,
+     prelude::{
+         AssetEvent, AssetId, Assets, Changed, Children, Component, Deref, DerefMut, Entity,
+         EventReader, Mut, Name, Query, Res, ResMut, Resource, With, World,
+     },
+-    ui::{Interaction, Node},
+-    utils::HashMap,
++    ui::{ComputedNode, Interaction},
+ };
+ use smallvec::SmallVec;
+ 
+@@ -38,6 +38,7 @@ impl<'w, 's, T: Component> ComponentFilter for SystemState<Query<'w, 's, Entity,
+     fn get_change_ticks(&self, world: &World, entity: Entity) -> Option<ComponentTicks> {
+         world
+             .get_entity(entity)
++            .ok()
+             .and_then(|e| e.get_change_ticks::<T>())
+     }
+ }
+@@ -60,8 +61,8 @@ pub(crate) struct CssQueryParam<'w, 's> {
+     >,
+     names: Query<'w, 's, (Entity, &'static Name)>,
+     classes: Query<'w, 's, (Entity, &'static Class)>,
+-    children: Query<'w, 's, &'static Children, With<Node>>,
+-    any: Query<'w, 's, Entity, With<Node>>,
++    children: Query<'w, 's, &'static Children, With<ComputedNode>>,
++    any: Query<'w, 's, Entity, With<ComputedNode>>,
+ }
+ 
+ /// Holds an previous prepared [`CssQueryParam`];
+@@ -299,6 +300,7 @@ fn get_entities_with_pseudo_class_interaction(
+         .filter(|&e| {
+             world
+                 .get_entity(e)
++                .ok()
+                 .and_then(|e| e.get::<Interaction>())
+                 .is_some_and(|i| i == interaction)
+         })
+@@ -336,7 +338,7 @@ fn get_entities_with_component(
+ /// Filters entities which have a [`Node`] component.
+ /// This is to mimic the "*" selector on CSS.
+ fn get_entities_with_any_component(
+-    query: &Query<Entity, With<Node>>,
++    query: &Query<Entity, With<ComputedNode>>,
+     entities: SmallVec<[Entity; 8]>,
+ ) -> (FilteredEntities, MatchedEntities) {
+     let filtered = query
+@@ -353,7 +355,7 @@ fn get_entities_with_any_component(
+ /// Traverse the children hierarchy three and returns all entities.
+ fn get_children_recursively(
+     children: &Children,
+-    q_childs: &Query<&Children, With<Node>>,
++    q_childs: &Query<&Children, With<ComputedNode>>,
+ ) -> SmallVec<[Entity; 8]> {
+     children
+         .iter()
+@@ -445,7 +447,7 @@ fn check_for_changed_assets(
+                 SelectorElement::PseudoClass(pseudo_class) => {
+                     any_component_changed_by_pseudo_class(world, entities, *pseudo_class)
+                 }
+-                SelectorElement::Any => any_component::<Node>(world, entities),
++                SelectorElement::Any => any_component::<ComputedNode>(world, entities),
+                 _ => unreachable!(),
+             };
+ 
+@@ -465,7 +467,11 @@ fn any_component<T: Component>(world: &World, entities: &SmallVec<[Entity; 8]>)
+     let this_run = world.read_change_tick();
+     let last_run = world.last_change_tick();
+     for e in entities {
+-        if let Some(ticks) = world.get_entity(*e).and_then(|e| e.get_change_ticks::<T>()) {
++        if let Some(ticks) = world
++            .get_entity(*e)
++            .ok()
++            .and_then(|e| e.get_change_ticks::<T>())
++        {
+             if ticks.is_changed(last_run, this_run) {
+                 return true;
+             }

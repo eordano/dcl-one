@@ -1,0 +1,452 @@
+From e8504e2dea4445ee239cdae3795835c6023fd13e
+Subject: working for windows + wasm
+Origin: https://github.com/robtfm/copypwasmta/commit/e8504e2dea4445ee239cdae3795835c6023fd13e
+Date: 2025-06-09T10:24:27+01:00
+
+---
+diff --git a/.builds/freebsd.yml b/.builds/freebsd.yml
+index 80a0ab0f61dfd0c88da86d9e0500b8674afb7474..4a8644358fe9aa30aa624fa9408a139b4fa3300e 100644
+--- a/.builds/freebsd.yml
++++ b/.builds/freebsd.yml
+@@ -7,7 +7,7 @@ packages:
+   - x11/libxkbcommon
+ 
+ sources:
+-  - https://github.com/alacritty/copypasta
++  - https://github.com/robtfm/copypwasmta
+ 
+ environment:
+   PATH: /home/build/.cargo/bin:/bin:/usr/bin:/usr/local/bin
+@@ -17,13 +17,13 @@ tasks:
+   - rustup: |
+       curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable --profile minimal
+   - test: |
+-      cd copypasta
++      cd copypwasmta
+       cargo test
+   - clippy: |
+-      cd copypasta
++      cd copypwasmta
+       rustup component add clippy
+       cargo clippy --all-targets
+   - oldstable: |
+-      cd copypasta
++      cd copypwasmta
+       rustup toolchain install --profile minimal 1.71.0
+       cargo +1.71.0 test
+diff --git a/.builds/linux.yml b/.builds/linux.yml
+index 30321b71f4721cc4bdd547155f5c0fab457a6e6f..145469aadcd2c2094bfed3dfa365e61d7f9680ac 100644
+--- a/.builds/linux.yml
++++ b/.builds/linux.yml
+@@ -5,7 +5,7 @@ packages:
+   - libxkbcommon
+ 
+ sources:
+-  - https://github.com/alacritty/copypasta
++  - https://github.com/robtfm/copypwasmta
+ 
+ environment:
+   PATH: /home/build/.cargo/bin:/usr/bin/
+@@ -14,17 +14,17 @@ tasks:
+   - rustup: |
+       curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable --profile minimal
+   - test: |
+-      cd copypasta
++      cd copypwasmta
+       cargo test
+   - rustfmt: |
+-      cd copypasta
++      cd copypwasmta
+       rustup toolchain install nightly -c rustfmt
+       cargo +nightly fmt -- --check
+   - clippy: |
+-      cd copypasta
++      cd copypwasmta
+       rustup component add clippy
+       cargo clippy --all-targets
+   - oldstable: |
+-      cd copypasta
++      cd copypwasmta
+       rustup toolchain install --profile minimal 1.71.0
+       cargo +1.71.0 test
+diff --git a/Cargo.toml b/Cargo.toml
+index 2177ed99bbe55e41336dd95add175ccbbd23d3f5..b4c7b0b19389bfda34c1f82043f51c4092cd0dd1 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,8 +1,8 @@
+ [package]
+ name = "copypwasmta"
+-version = "0.1"
++version = "0.1.0"
+ authors = ["robtfm@github.com"]
+-description = "copypasta is a cross-platform library for getting and setting the contents of the OS-level clipboard."
++description = "copypwasmta is a cross-platform library for getting and setting the contents of the OS-level clipboard."
+ repository = "https://github.com/robtfm/copypwasmta"
+ readme = "README.md"
+ license = "MIT / Apache-2.0"
+@@ -13,7 +13,7 @@ rust-version = "1.71.0"
+ [features]
+ default = ["x11", "wayland", "wayland-dlopen"]
+ x11 = ["x11-clipboard"]
+-wayland = ["smithay-clipboard"]
++wayland = ["smithay-clipboard", "dep:tokio"]
+ wayland-dlopen = ["smithay-clipboard/dlopen"]
+ 
+ [target.'cfg(windows)'.dependencies]
+@@ -31,7 +31,19 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
+     "std",
+     "NSPasteboard",
+ ] }
++tokio = { version = "1.45.1", default-features = false, features = ["sync"], optional = true }
+ 
+ [target.'cfg(all(unix, not(any(target_os="macos", target_os="android", target_os="ios", target_os="emscripten"))))'.dependencies]
+ x11-clipboard = { version = "0.9.1", optional = true }
+ smithay-clipboard = { version = "0.7.0", default-features = false, optional = true }
++
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++wasm-bindgen = "0.2"
++wasm-bindgen-futures = "0.4"
++web-sys = { version = "0.3", features = ["Window", "Clipboard", "Navigator"] }
++
++[dependencies]
++async-trait = "0.1.88"
++
++[dev-dependencies]
++tokio = { version = "1.45.1", features=["macros", "rt"] }
+diff --git a/README.md b/README.md
+index a874011eb7b9ab8549db02693b49f24c6c392af0..f2e55a1d746950255cd426f228bcedc510045c17 100644
+--- a/README.md
++++ b/README.md
+@@ -1,8 +1,8 @@
+-# copypasta
++# copypwasmta
+ 
+ copypwasmta is a [copypasta](https://github.com/alacritty/copypasta) fork, adding browser support for wasm / wasm-bindgen.
+ 
+-[copypasta] is a cross-platform library for getting and setting the contents of the OS-level clipboard.
++copypasta is a cross-platform library for getting and setting the contents of the OS-level clipboard.
+ 
+ The apis have been changed to async to support the browser interface.
+ 
+diff --git a/examples/hello_world.rs b/examples/hello_world.rs
+index 3a8db502e85844b567e4b6f8f923dce8c3afb7e1..74944c84d682ce551ed1aa913c961a0e1b8c5038 100644
+--- a/examples/hello_world.rs
++++ b/examples/hello_world.rs
+@@ -1,12 +1,13 @@
+-use copypasta::{ClipboardContext, ClipboardProvider};
++use copypwasmta::{ClipboardContext, ClipboardProvider};
+ 
+-fn main() {
++#[tokio::main(flavor = "current_thread")]
++async fn main() {
+     let mut ctx = ClipboardContext::new().unwrap();
+ 
+     let msg = "Hello, world!";
+-    ctx.set_contents(msg.to_owned()).unwrap();
++    ctx.set_contents(msg.to_owned()).await.unwrap();
+ 
+-    let content = ctx.get_contents().unwrap();
++    let content = ctx.get_contents().await.unwrap();
+ 
+     println!("{}", content);
+ }
+diff --git a/examples/primary_selection.rs b/examples/primary_selection.rs
+index 0a5e3953d262c07acfa10ed2b52c3a654194a4aa..1de306df8aee49d6311b69d5c10b2a5236f910ad 100644
+--- a/examples/primary_selection.rs
++++ b/examples/primary_selection.rs
+@@ -1,15 +1,16 @@
+ #[cfg(target_os = "linux")]
+-use copypasta::x11_clipboard::{Primary, X11ClipboardContext};
++use copypwasmta::x11_clipboard::{Primary, X11ClipboardContext};
+ #[cfg(target_os = "linux")]
+-use copypasta::ClipboardProvider;
++use copypwasmta::ClipboardProvider;
+ 
+ #[cfg(target_os = "linux")]
++#[tokio::main(flavor = "current_thread")]
+ fn main() {
+     let mut ctx = X11ClipboardContext::<Primary>::new().unwrap();
+ 
+     let the_string = "Hello, world!";
+ 
+-    ctx.set_contents(the_string.to_owned()).unwrap();
++    ctx.set_contents(the_string.to_owned()).await.unwrap();
+ }
+ 
+ #[cfg(not(target_os = "linux"))]
+diff --git a/src/common.rs b/src/common.rs
+index 389207fe4f4e65a0a006c313487489700a6632c8..74ce8c1da3038aaea9234d1599cfebcbce91f666 100644
+--- a/src/common.rs
++++ b/src/common.rs
+@@ -14,13 +14,17 @@
+ 
+ use std::error::Error;
+ 
++use async_trait::async_trait;
++
+ pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync + 'static>>;
+ 
+ // TODO: come up with some platform-agnostic API for richer types
+ /// Trait for clipboard access
++#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
++#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+ pub trait ClipboardProvider: Send {
+     /// Method to get the clipboard contents as a String
+-    fn get_contents(&mut self) -> Result<String>;
++    async fn get_contents(&mut self) -> Result<String>;
+     /// Method to set the clipboard contents as a String
+-    fn set_contents(&mut self, _: String) -> Result<()>;
++    async fn set_contents(&mut self, _: String) -> Result<()>;
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index 092a23c51ea2c79666d5cc68f0122eeb8c064f27..649227a7c5f6738f5dc48d51d802235bf6607932 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -42,6 +42,9 @@ pub mod x11_clipboard;
+ #[cfg(windows)]
+ pub mod windows_clipboard;
+ 
++#[cfg(target_arch = "wasm32")]
++pub mod wasm_clipboard;
++
+ #[cfg(target_os = "macos")]
+ pub mod osx_clipboard;
+ 
+@@ -66,9 +69,12 @@ pub type ClipboardContext = osx_clipboard::OSXClipboardContext;
+ pub type ClipboardContext = nop_clipboard::NopClipboardContext; // TODO: implement AndroidClipboardContext
+ #[cfg(target_os = "ios")]
+ pub type ClipboardContext = nop_clipboard::NopClipboardContext; // TODO: implement IOSClipboardContext
++#[cfg(target_arch = "wasm32")]
++pub type ClipboardContext = wasm_clipboard::WasmClipboardContext;
+ #[cfg(not(any(
+     unix,
+     windows,
++    target_arch = "wasm32",
+     target_os = "macos",
+     target_os = "android",
+     target_os = "ios",
+diff --git a/src/nop_clipboard.rs b/src/nop_clipboard.rs
+index af9142a75982d4ac4d1fa64fec27dda48e1daa2a..6c3d9eefb857c185d671fbf141b8895300025aed 100644
+--- a/src/nop_clipboard.rs
++++ b/src/nop_clipboard.rs
+@@ -12,6 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++use async_trait::async_trait;
++
+ use crate::common::{ClipboardProvider, Result};
+ 
+ pub struct NopClipboardContext;
+@@ -22,8 +24,10 @@ impl NopClipboardContext {
+     }
+ }
+ 
++#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
++#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+ impl ClipboardProvider for NopClipboardContext {
+-    fn get_contents(&mut self) -> Result<String> {
++    async fn get_contents(&mut self) -> Result<String> {
+         println!(
+             "Attempting to get the contents of the clipboard, which hasn't yet been implemented \
+              on this platform."
+@@ -31,7 +35,7 @@ impl ClipboardProvider for NopClipboardContext {
+         Ok("".to_string())
+     }
+ 
+-    fn set_contents(&mut self, _: String) -> Result<()> {
++    async fn set_contents(&mut self, _: String) -> Result<()> {
+         println!(
+             "Attempting to set the contents of the clipboard, which hasn't yet been implemented \
+              on this platform."
+diff --git a/src/osx_clipboard.rs b/src/osx_clipboard.rs
+index 105199d290a01a9321cc3ad6279f10807c7659b4..38656aa27ff69e21e3cf6a506f23357d6b89bb23 100644
+--- a/src/osx_clipboard.rs
++++ b/src/osx_clipboard.rs
+@@ -22,6 +22,7 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeStrin
+ use objc2_foundation::{NSArray, NSString, NSURL};
+ 
+ use crate::common::*;
++use async_trait::async_trait;
+ 
+ pub struct OSXClipboardContext {
+     pasteboard: Retained<NSPasteboard>,
+@@ -44,8 +45,9 @@ impl OSXClipboardContext {
+     }
+ }
+ 
++#[async_trait]
+ impl ClipboardProvider for OSXClipboardContext {
+-    fn get_contents(&mut self) -> Result<String> {
++    async fn get_contents(&mut self) -> Result<String> {
+         autoreleasepool(|_| {
+             let types = unsafe { self.pasteboard.types() }.unwrap();
+             let has_file = unsafe { types.containsObject(NSPasteboardTypeFileURL) };
+@@ -72,7 +74,7 @@ impl ClipboardProvider for OSXClipboardContext {
+         })
+     }
+ 
+-    fn set_contents(&mut self, data: String) -> Result<()> {
++    async fn set_contents(&mut self, data: String) -> Result<()> {
+         let string_array = NSArray::from_retained_slice(&[ProtocolObject::from_retained(
+             NSString::from_str(&data),
+         )]);
+diff --git a/src/wasm_clipboard.rs b/src/wasm_clipboard.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..2f93c2ca7f532c1113276269454ae225a533be9a
+--- /dev/null
++++ b/src/wasm_clipboard.rs
+@@ -0,0 +1,37 @@
++use wasm_bindgen_futures::JsFuture;
++use web_sys::window;
++
++use async_trait::async_trait;
++
++use crate::common::{ClipboardProvider, Result};
++
++pub struct WasmClipboardContext;
++
++impl WasmClipboardContext {
++    pub fn new() -> Result<Self> {
++        Ok(WasmClipboardContext)
++    }
++}
++
++#[async_trait(?Send)]
++impl ClipboardProvider for WasmClipboardContext {
++    async fn get_contents(&mut self) -> Result<String> {
++        let Some(window) = window() else {
++            return Err("Should have a window in this context".into());
++        };
++        let navigator = window.navigator();
++        let result = JsFuture::from(navigator.clipboard().read_text())
++            .await
++            .map_err(|jse| format!("{jse:?}"))?;
++        Ok(result.as_string().unwrap_or_default())
++    }
++
++    async fn set_contents(&mut self, data: String) -> Result<()> {
++        let Some(window) = window() else {
++            return Err("Should have a window in this context".into());
++        };
++        let navigator = window.navigator();
++        let promise = navigator.clipboard().write_text(&data);
++        JsFuture::from(promise).await.map(|_| ()).map_err(|jse| format!("{jse:?}").into())
++    }
++}
+diff --git a/src/wayland_clipboard.rs b/src/wayland_clipboard.rs
+index d33e3a79627be70eff4be958a975f5fae6beed0a..ab8b00818ac77897f2b66294ecdd1e70802fb5ce 100644
+--- a/src/wayland_clipboard.rs
++++ b/src/wayland_clipboard.rs
+@@ -13,7 +13,10 @@
+ // limitations under the License.
+ 
+ use std::ffi::c_void;
+-use std::sync::{Arc, Mutex};
++use std::sync::Arc;
++use tokio::sync::Mutex;
++
++use async_trait::async_trait;
+ 
+ use smithay_clipboard::Clipboard as WaylandClipboard;
+ 
+@@ -39,25 +42,27 @@ pub unsafe fn create_clipboards_from_external(display: *mut c_void) -> (Primary,
+     (Primary { context: context.clone() }, Clipboard { context })
+ }
+ 
++#[async_trait]
+ impl ClipboardProvider for Clipboard {
+-    fn get_contents(&mut self) -> Result<String> {
+-        Ok(self.context.lock().unwrap().load()?)
++    async fn get_contents(&mut self) -> Result<String> {
++        Ok(self.context.lock().await.load()?)
+     }
+ 
+-    fn set_contents(&mut self, data: String) -> Result<()> {
+-        self.context.lock().unwrap().store(data);
++    async fn set_contents(&mut self, data: String) -> Result<()> {
++        self.context.lock().await.store(data);
+ 
+         Ok(())
+     }
+ }
+ 
++#[async_trait]
+ impl ClipboardProvider for Primary {
+-    fn get_contents(&mut self) -> Result<String> {
+-        Ok(self.context.lock().unwrap().load_primary()?)
++    async fn get_contents(&mut self) -> Result<String> {
++        Ok(self.context.lock().await.load_primary()?)
+     }
+ 
+-    fn set_contents(&mut self, data: String) -> Result<()> {
+-        self.context.lock().unwrap().store_primary(data);
++    async fn set_contents(&mut self, data: String) -> Result<()> {
++        self.context.lock().await.store_primary(data);
+ 
+         Ok(())
+     }
+diff --git a/src/windows_clipboard.rs b/src/windows_clipboard.rs
+index 6eb0ee299c8f683cfb39ac1c54675a03bf544b03..a52a3862ae1507b3b92b99e22de78c61343176b2 100644
+--- a/src/windows_clipboard.rs
++++ b/src/windows_clipboard.rs
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++use async_trait::async_trait;
+ use clipboard_win::{get_clipboard_string, set_clipboard_string};
+ 
+ use crate::common::{ClipboardProvider, Result};
+@@ -24,12 +25,13 @@ impl WindowsClipboardContext {
+     }
+ }
+ 
++#[async_trait]
+ impl ClipboardProvider for WindowsClipboardContext {
+-    fn get_contents(&mut self) -> Result<String> {
++    async fn get_contents(&mut self) -> Result<String> {
+         Ok(get_clipboard_string()?)
+     }
+ 
+-    fn set_contents(&mut self, data: String) -> Result<()> {
++    async fn set_contents(&mut self, data: String) -> Result<()> {
+         Ok(set_clipboard_string(&data)?)
+     }
+ }
+diff --git a/src/x11_clipboard.rs b/src/x11_clipboard.rs
+index f33d0a139000eb823976f67f769097fdf97b5612..3bd1377b35eb35b9daff3da48cdcdd4f4ebda45e 100644
+--- a/src/x11_clipboard.rs
++++ b/src/x11_clipboard.rs
+@@ -18,6 +18,8 @@ use std::time::Duration;
+ use x11_clipboard::Atom;
+ use x11_clipboard::{Atoms, Clipboard as X11Clipboard};
+ 
++use async_trait::async_trait;
++
+ use crate::common::*;
+ 
+ pub trait Selection: Send {
+@@ -53,11 +55,12 @@ where
+     }
+ }
+ 
++#[async_trait]
+ impl<S> ClipboardProvider for X11ClipboardContext<S>
+ where
+     S: Selection,
+ {
+-    fn get_contents(&mut self) -> Result<String> {
++    async fn get_contents(&mut self) -> Result<String> {
+         Ok(String::from_utf8(self.0.load(
+             S::atom(&self.0.getter.atoms),
+             self.0.getter.atoms.utf8_string,
+@@ -66,7 +69,7 @@ where
+         )?)?)
+     }
+ 
+-    fn set_contents(&mut self, data: String) -> Result<()> {
++    async fn set_contents(&mut self, data: String) -> Result<()> {
+         Ok(self.0.store(S::atom(&self.0.setter.atoms), self.0.setter.atoms.utf8_string, data)?)
+     }
+ }

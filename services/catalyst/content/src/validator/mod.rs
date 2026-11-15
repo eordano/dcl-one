@@ -69,6 +69,7 @@ use crate::storage::{Storage, StorageError};
 
 pub use chain::DECENTRALAND_ADDRESS;
 pub use error::{ValidationError, ValidationResponse, ValidatorError};
+pub use helpers::{is_relative_thumbnail_path, navmap_thumbnail_error};
 pub use metadata_schema::validate_scene_metadata;
 pub use rules::{ContentValidator, ExternalCalls};
 pub use spring_bones::validate_spring_bones_metadata;

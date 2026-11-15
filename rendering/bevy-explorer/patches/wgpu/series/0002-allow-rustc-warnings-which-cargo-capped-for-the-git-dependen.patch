@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:25+00:00
+
+---
+diff --git a/naga/Cargo.toml b/naga/Cargo.toml
+index 2c8d8462896d40b6aa8be8f207e4f7939a5e4d31..9d28e98e94c8aacac6bb0717f3500a106410a89c 100644
+--- a/naga/Cargo.toml
++++ b/naga/Cargo.toml
+@@ -105,3 +105,6 @@ ron = "0.8.0"
+ rspirv = { version = "0.11", git = "https://github.com/gfx-rs/rspirv", rev = "b969f175d5663258b4891e44b76c1544da9661ab" }
+ serde = { workspace = true, features = ["default", "derive"] }
+ spirv = { version = "0.3", features = ["deserialize"] }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/wgpu-core/Cargo.toml b/wgpu-core/Cargo.toml
+index c0d3122731a3470d89f53a03c13942a7dffc0a54..7d349336ee6f02718f6c45d463703c3f27fd824c 100644
+--- a/wgpu-core/Cargo.toml
++++ b/wgpu-core/Cargo.toml
+@@ -30,6 +30,7 @@ targets = [
+ ignored = ["cfg_aliases"]
+ 
+ [lints.rust]
++warnings = { level = "allow", priority = -1 }
+ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(wgpu_validate_locks)'] }
+ 
+ [lib]
+diff --git a/wgpu-hal/Cargo.toml b/wgpu-hal/Cargo.toml
+index 7b1b111a65f5c692896eda9896823256d97dea87..e82a94ba62011e72fb17f472eac10e2e6cc3a6b7 100644
+--- a/wgpu-hal/Cargo.toml
++++ b/wgpu-hal/Cargo.toml
+@@ -110,6 +110,7 @@ device_lost_panic = []
+ internal_error_panic = []
+ 
+ [lints.rust]
++warnings = { level = "allow", priority = -1 }
+ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(web_sys_unstable_apis)'] }
+ 
+ [[example]]
+diff --git a/wgpu-types/Cargo.toml b/wgpu-types/Cargo.toml
+index e9aa95c8d142ba6d8804631990158fef2788f98c..ba27136c8ff9648bfc991cac2afcba9b4eb77437 100644
+--- a/wgpu-types/Cargo.toml
++++ b/wgpu-types/Cargo.toml
+@@ -37,6 +37,7 @@ serde = ["dep:serde"]
+ counters = []
+ 
+ [lints.rust]
++warnings = { level = "allow", priority = -1 }
+ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(web_sys_unstable_apis)'] }
+ 
+ [dependencies]
+diff --git a/wgpu/Cargo.toml b/wgpu/Cargo.toml
+index bc8cc31e76f2c9c458e4a933758f23202106d7cf..487628e1af70f4df89ac93d0fea960f329305d4a 100644
+--- a/wgpu/Cargo.toml
++++ b/wgpu/Cargo.toml
+@@ -231,3 +231,6 @@ wasm-bindgen.workspace = true
+ js-sys = { workspace = true, features = ["default"] }
+ wasm-bindgen-futures.workspace = true
+ parking_lot.workspace = true
++
++[lints.rust]
++warnings = "allow"

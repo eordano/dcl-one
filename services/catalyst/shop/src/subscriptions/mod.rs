@@ -209,10 +209,7 @@ impl IntoResponse for ApiError {
 
 fn signed_fetch_error(e: SignedFetchError) -> ApiError {
     match e {
-        SignedFetchError::MalformedChain { detail }
-            if detail.starts_with("invalid metadata content")
-                || detail.contains("non-canonical metadata") =>
-        {
+        SignedFetchError::MalformedChain { ref detail } if e.is_metadata_refusal() => {
             ApiError::bad_request(format!("Invalid signer: {detail}"))
         }
         other => {

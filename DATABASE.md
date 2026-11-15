@@ -577,12 +577,15 @@ catalyst schema status
 
 `--release` refuses while any other client session is connected to the database,
 including sessions of roles whose activity the migrator cannot read, and reports
-their count and application names; it changes nothing then. It is a best-effort
-guard: the release locks its own tables, not every table. A connection pooler or
-monitoring agent that holds sessions open also blocks it. Exit 5 reflects the
-stamp only; the release's own checks (mixed layout, receipts, destination,
-pending wallets) can still refuse it inside the transaction. A database already
-at version 3 takes the plain migrate.
+their count and application names; it changes nothing then. Server processes
+without a role, such as autovacuum workers, are not sessions and do not block it.
+Background workers that run as another role, such as parallel workers,
+logical-replication workers and logical WAL senders, still count and block it.
+It is a best-effort guard: the release locks its own tables, not every table.
+A connection pooler or monitoring agent that holds sessions open also blocks it.
+Exit 5 reflects the stamp only; the release's own checks (mixed layout,
+receipts, destination, pending wallets) can still refuse it inside the
+transaction. A database already at version 3 takes the plain migrate.
 The binary embeds `schemas/releases/v3-private-voice-pending.sql` with its includes
 (`db::RELEASE_SQL`). The same file still runs through psql, followed by
 `catalyst schema migrate`:

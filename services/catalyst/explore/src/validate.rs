@@ -25,6 +25,7 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::auth::is_eth_address;
 use crate::shared::errors::ApiError;
 
 /// Which validator wrapper upstream used on the route.
@@ -110,11 +111,7 @@ impl Format {
             Format::Uint => is_js_int(value).is_some_and(|negative| !negative),
             Format::Uuid => is_uuid(value),
             Format::DateTime => is_date_time(value),
-            Format::Address => {
-                value.len() == 42
-                    && value.starts_with("0x")
-                    && value[2..].bytes().all(|b| b.is_ascii_hexdigit())
-            }
+            Format::Address => is_eth_address(value),
             Format::Boolean => matches!(value, "0" | "1" | "true" | "false" | "True" | "False"),
             Format::Uri => is_uri(value),
             Format::Email => is_email(value),

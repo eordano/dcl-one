@@ -1,0 +1,28 @@
+From 1d6fa7c44f14f16d2842514d58e620b48d2a7adb
+Subject: remove focuspolicy::block
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/1d6fa7c44f14f16d2842514d58e620b48d2a7adb
+Date: 2025-07-22T15:15:02+01:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 1c7de170d8ca7c2b153e211f5ea365a62a3b567e..bdd326cb673f4abc983e0f010dc9e6092d8db74d 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -39,7 +39,7 @@ use bevy::{
+         ComputedTextBlock, CosmicBuffer, CosmicFontSystem, LineBreak,
+         cosmic_text::{Action, Change, Cursor, Edit, Editor, Selection},
+     },
+-    ui::FocusPolicy,
++    // ui::FocusPolicy,
+ };
+ use once_cell::unsync::Lazy;
+ 
+@@ -1183,7 +1183,7 @@ fn create(
+         // Prevent clicks from registering on UI elements underneath the text input.
+         commands
+             .entity(trigger.target())
+-            .insert(FocusPolicy::Block)
++            // .insert(FocusPolicy::Block)
+             .insert(CosmicEditor::new(&text_input.0));
+     }
+ }

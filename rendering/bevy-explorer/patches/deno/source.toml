@@ -1,0 +1,26 @@
+name       = "deno"
+upstream   = "https://github.com/denoland/deno"
+commit     = "a98e146a55b209458160bcd148497310a9e14441"
+ref        = "v1.46.3"
+origin     = "https://github.com/robtfm/deno"
+origin_rev = "3ee34819c57653610521dc6501ddf8e2cf0c5aaa"
+license    = "MIT"
+paths      = [
+    "Cargo.toml",
+    "LICENSE.md",
+    "README.md",
+    "ext/console",
+    "ext/fetch",
+    "ext/net",
+    "ext/tls",
+    "ext/url",
+    "ext/web",
+    "ext/webidl",
+    "ext/websocket",
+    "ext/webstorage",
+    "runtime/permissions",
+]
+exclude    = []
+base_tree  = "f34cd7685c3260ad70b731cb469849c346530c59"
+tree       = "f75a061b47466ccfcbafc4f6fcdf7be6c673dc50"
+nix_hash   = "sha256-AM6SjcIHo6Koxcnznhkv3cXoKaMy2TEVpiWe/bczDuA="

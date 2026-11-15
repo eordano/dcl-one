@@ -1,0 +1,21 @@
+From 812cf523cb0100dffd5939171b63845fe24e1203
+Subject: update  workgroup size
+Origin: https://github.com/robtfm/bevy_atmosphere/commit/812cf523cb0100dffd5939171b63845fe24e1203
+Date: 2025-06-17T11:49:33+01:00
+
+---
+diff --git a/src/pipeline.rs b/src/pipeline.rs
+index 2a3eeb2a505e6fe5c6d6b8328dbd61b7ce1dedf3..32122068c108dec6baeb25e8441aae85eb848fe7 100644
+--- a/src/pipeline.rs
++++ b/src/pipeline.rs
+@@ -514,8 +514,8 @@ impl render_graph::Node for AtmosphereNode {
+                     let update_pipeline = pipeline_cache.get_compute_pipeline(pipeline).unwrap();
+                     pass.set_pipeline(update_pipeline);
+                     pass.dispatch_workgroups(
+-                        settings.resolution / WORKGROUP_SIZE,
+-                        settings.resolution / WORKGROUP_SIZE,
++                        settings.resolution / WORKGROUP_SIZE / 8,
++                        settings.resolution / WORKGROUP_SIZE / 8,
+                         6,
+                     );
+                 }

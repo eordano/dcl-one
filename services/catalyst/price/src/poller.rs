@@ -20,11 +20,11 @@ use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use sqlx::postgres::PgPool;
 
+use super::MANA_ID;
 use super::store::{PriceSnapshot, Prices, SOURCE_COINGECKO, snapshot_columns, snapshot_from_row};
 use crate::http::{Outbound, read_body_capped};
 use serde_json::Value;
 
-const MANA_ID: &str = "decentraland";
 const MATIC_ID: &str = "matic-network";
 const BODY_CAP: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);

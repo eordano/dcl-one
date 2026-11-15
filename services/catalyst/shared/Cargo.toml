@@ -35,6 +35,7 @@ reqwest.workspace = true
 url.workspace = true
 prost.workspace = true
 hmac.workspace = true
+dragonbox_ecma.workspace = true
 ts-rs = { workspace = true, optional = true }
 alloy = { workspace = true, optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }

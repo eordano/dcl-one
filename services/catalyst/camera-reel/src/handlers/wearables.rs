@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use crate::SharedState;
+use crate::auth::is_eth_address;
 use crate::dto::{GetWearableImagesResponse, Image};
 use crate::handlers::{capped_limit, default_limit, default_offset};
 use crate::http::{ApiError, Query};
@@ -31,11 +32,7 @@ pub fn is_item_id(value: &str) -> bool {
     let Some((contract, item_id)) = value.split_once('-') else {
         return false;
     };
-    contract.len() == 42
-        && contract.starts_with("0x")
-        && contract[2..].bytes().all(|b| b.is_ascii_hexdigit())
-        && !item_id.is_empty()
-        && item_id.bytes().all(|b| b.is_ascii_digit())
+    is_eth_address(contract) && !item_id.is_empty() && item_id.bytes().all(|b| b.is_ascii_digit())
 }
 
 pub async fn get_wearable_images(

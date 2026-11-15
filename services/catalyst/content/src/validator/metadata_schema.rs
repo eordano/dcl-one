@@ -18,6 +18,9 @@ use serde_json::{Map, Value};
 
 use super::error::ValidationResponse;
 use super::types::*;
+use crate::auth::is_eth_address;
+use crate::entity::is_ipfs_v2;
+use crate::shared::js::is_js_whitespace;
 
 type Check = Result<(), String>;
 type Obj = Map<String, Value>;
@@ -211,15 +214,6 @@ fn pattern(v: &Value, p: &str, matches: fn(&str) -> bool) -> Check {
     Ok(())
 }
 
-fn is_eth_address(s: &str) -> bool {
-    s.len() == 42 && s.starts_with("0x") && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// `^(ba)[a-zA-Z0-9]{57}$`
-fn is_snapshot_hash(s: &str) -> bool {
-    s.len() == 59 && s.starts_with("ba") && s.bytes().all(|b| b.is_ascii_alphanumeric())
-}
-
 /// `^(?:https?):\/\/[^\s/$.?#].[^\s]*$` with the JS `u` flag.
 fn is_link_url(s: &str) -> bool {
     let Some(rest) = s
@@ -231,23 +225,10 @@ fn is_link_url(s: &str) -> bool {
     let mut chars = rest.chars();
     let first_ok = chars
         .next()
-        .is_some_and(|c| !is_js_space(c) && !"/$.?#".contains(c));
-    first_ok && chars.next().is_some_and(|c| !is_js_line_terminator(c)) && !chars.any(is_js_space)
-}
-
-/// JS `\s`.
-fn is_js_space(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{feff}'
-    )
+        .is_some_and(|c| !is_js_whitespace(c) && !"/$.?#".contains(c));
+    first_ok
+        && chars.next().is_some_and(|c| !is_js_line_terminator(c))
+        && !chars.any(is_js_whitespace)
 }
 
 /// What JS `.` does not match.
@@ -428,8 +409,8 @@ fn avatar_body(v: &Value, p: &str) -> Check {
     })?;
     nullable(m, "snapshots", p, |v, p| {
         let m = obj(v, p)?;
-        required(m, "face256", p, |v, p| pattern(v, p, is_snapshot_hash))?;
-        required(m, "body", p, |v, p| pattern(v, p, is_snapshot_hash))
+        required(m, "face256", p, |v, p| pattern(v, p, is_ipfs_v2))?;
+        required(m, "body", p, |v, p| pattern(v, p, is_ipfs_v2))
     })
 }
 

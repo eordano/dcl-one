@@ -1,0 +1,657 @@
+From cdfac1aa8867120499b4d5dc47257d6500274026
+Subject: transparent focus target for depth of field
+Origin: https://github.com/robtfm/bevy/commit/cdfac1aa8867120499b4d5dc47257d6500274026
+Date: 2026-07-16T10:31:39+01:00
+
+Alpha-blended materials previously wrote depth in the main pass
+(4dfb0a192) so dof wouldn't blur opaque-alpha pixels against the
+background, but the depth write also depth-tested transparent
+fragments against each other: the back-to-front sort is per-object
+while the test is per-pixel, so a transparent fragment behind an
+already-drawn transparent pixel was dropped entirely.
+
+Revert blend pipelines to depth-write-off and instead give the main
+transparent pass an extra Rg16Float target when the view has depth of
+field. Fragments alpha-blend (view_depth, 1, 0, alpha) into it, so it
+accumulates alpha-weighted view depth (r) and total coverage (g); the
+dof shader computes focus depth as r + (1 - g) * opaque_depth, with
+max_depth applied to the opaque term before the blend. Transparent
+surfaces attract focus in proportion to their opacity, and
+transparent-vs-transparent occlusion can no longer reject fragments.
+
+FragmentOutput gains the output behind TRANSPARENT_FOCUS_OUTPUT; wgsl
+zero-init plus over-blending makes shaders that don't set it exact
+no-ops, so existing custom material shaders keep working unmodified.
+Pipelines that render in the transparent pass but never write focus
+(gizmos) declare the target with an empty write mask. R32Float with
+max-blending would be simpler but 32-bit float blending needs
+FLOAT32_BLENDABLE, which wgpu 24 doesn't expose; f16 linear view-z
+avoids the subnormal flush that f16 reverse-z hits at distance.
+---
+diff --git a/crates/bevy_core_pipeline/src/core_3d/main_transparent_pass_3d_node.rs b/crates/bevy_core_pipeline/src/core_3d/main_transparent_pass_3d_node.rs
+index 36fe8417c4de240aef71a8e11faf00dd28835e5a..65049616471927e7f09b70beafd0d10ae896f996 100644
+--- a/crates/bevy_core_pipeline/src/core_3d/main_transparent_pass_3d_node.rs
++++ b/crates/bevy_core_pipeline/src/core_3d/main_transparent_pass_3d_node.rs
+@@ -1,4 +1,4 @@
+-use crate::core_3d::Transparent3d;
++use crate::{core_3d::Transparent3d, dof::TransparentFocusTexture};
+ use bevy_ecs::{prelude::*, query::QueryItem};
+ use bevy_render::{
+     camera::ExtractedCamera,
+@@ -24,12 +24,13 @@ impl ViewNode for MainTransparentPass3dNode {
+         &'static ExtractedView,
+         &'static ViewTarget,
+         &'static ViewDepthTexture,
++        Option<&'static TransparentFocusTexture>,
+     );
+     fn run(
+         &self,
+         graph: &mut RenderGraphContext,
+         render_context: &mut RenderContext,
+-        (camera, view, target, depth): QueryItem<Self::ViewQuery>,
++        (camera, view, target, depth, transparent_focus): QueryItem<Self::ViewQuery>,
+         world: &World,
+     ) -> Result<(), NodeRunError> {
+         let view_entity = graph.view_entity();
+@@ -44,7 +45,15 @@ impl ViewNode for MainTransparentPass3dNode {
+             return Ok(());
+         };
+ 
+-        if !transparent_phase.items.is_empty() {
++        // When depth of field is enabled the pass carries an extra attachment
++        // accumulating transparent focus depth. It must be cleared even when
++        // there is nothing to draw, since depth of field always reads it.
++        let mut color_attachments = vec![Some(target.get_color_attachment())];
++        if let Some(transparent_focus) = transparent_focus {
++            color_attachments.push(Some(transparent_focus.get_attachment()));
++        }
++
++        if !transparent_phase.items.is_empty() || transparent_focus.is_some() {
+             // Run the transparent pass, sorted back-to-front
+             // NOTE: Scoped to drop the mutable borrow of render_context
+             #[cfg(feature = "trace")]
+@@ -54,7 +63,7 @@ impl ViewNode for MainTransparentPass3dNode {
+ 
+             let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                 label: Some("main_transparent_pass_3d"),
+-                color_attachments: &[Some(target.get_color_attachment())],
++                color_attachments: &color_attachments,
+                 // NOTE: For the transparent pass we load the depth buffer. There should be no
+                 // need to write to it, but store is set to `true` as a workaround for issue #3776,
+                 // https://github.com/bevyengine/bevy/issues/3776
+diff --git a/crates/bevy_core_pipeline/src/dof/dof.wgsl b/crates/bevy_core_pipeline/src/dof/dof.wgsl
+index 59fdb2f89c9111f83ad8c720c0e6a267a94f6c16..2bfae69da9bc73aefd39093490c5a5f5788a95f8 100644
+--- a/crates/bevy_core_pipeline/src/dof/dof.wgsl
++++ b/crates/bevy_core_pipeline/src/dof/dof.wgsl
+@@ -89,6 +89,22 @@ struct DualOutput {
+ @group(0) @binding(3) var color_texture_b: texture_2d<f32>;
+ #endif  // DUAL_INPUT
+ 
++// The transparent focus texture, accumulated during the main transparent pass:
++// alpha-weighted view depth in r, total coverage in g.
++#ifdef DUAL_INPUT
++#ifdef MULTISAMPLED
++@group(0) @binding(4) var focus_texture: texture_multisampled_2d<f32>;
++#else   // MULTISAMPLED
++@group(0) @binding(4) var focus_texture: texture_2d<f32>;
++#endif  // MULTISAMPLED
++#else   // DUAL_INPUT
++#ifdef MULTISAMPLED
++@group(0) @binding(3) var focus_texture: texture_multisampled_2d<f32>;
++#else   // MULTISAMPLED
++@group(0) @binding(3) var focus_texture: texture_2d<f32>;
++#endif  // MULTISAMPLED
++#endif  // DUAL_INPUT
++
+ // The global uniforms, representing data backed by buffers shared among all
+ // views in the scene.
+ 
+@@ -118,10 +134,24 @@ fn calculate_circle_of_confusion(in_frag_coord: vec4<f32>) -> f32 {
+     let scale = dof_params.coc_scale_factor;
+     let max_coc_diameter = dof_params.max_circle_of_confusion_diameter;
+ 
+-    // Sample the depth.
++    // Sample the depth. Apply max_depth before the coverage-weighted blend
++    // below so that a distant background doesn't swamp the contribution of a
++    // partially-covering transparent surface, and cap at a large finite value
++    // so that a cleared depth of 0.0 (infinitely far away under reverse-z, and
++    // max_depth defaults to infinity) can't produce an infinity that would
++    // poison the blend.
+     let frag_coord = vec2<i32>(floor(in_frag_coord.xy));
+     let raw_depth = textureLoad(depth_texture, frag_coord, 0);
+-    let depth = clamp(-depth_ndc_to_view_z(raw_depth), focus, dof_params.max_depth);
++    let opaque_depth = min(min(-depth_ndc_to_view_z(raw_depth), dof_params.max_depth), 3.4e37);
++
++    // Blend in the view depth of transparent surfaces, weighted by how much
++    // they cover this pixel, so that they attract focus in proportion to
++    // their opacity.
++    let focus_sample = textureLoad(focus_texture, frag_coord, 0);
++    let coverage = clamp(focus_sample.g, 0.0, 1.0);
++    let blended_depth = focus_sample.r + (1.0 - coverage) * opaque_depth;
++
++    let depth = clamp(blended_depth, focus, dof_params.max_depth);
+ 
+     // Calculate the circle of confusion.
+     //
+diff --git a/crates/bevy_core_pipeline/src/dof/mod.rs b/crates/bevy_core_pipeline/src/dof/mod.rs
+index 87a10313f17a75177427453f60cc9cb3b25cf1ea..11d9d6f0f82a5d7981b68cce14a520a13accbb97 100644
+--- a/crates/bevy_core_pipeline/src/dof/mod.rs
++++ b/crates/bevy_core_pipeline/src/dof/mod.rs
+@@ -16,11 +16,12 @@
+ 
+ use bevy_app::{App, Plugin};
+ use bevy_asset::{load_internal_asset, weak_handle, Handle};
++use bevy_color::LinearRgba;
+ use bevy_derive::{Deref, DerefMut};
+ use bevy_ecs::{
+     component::Component,
+     entity::Entity,
+-    query::{QueryItem, With},
++    query::{QueryItem, With, Without},
+     reflect::ReflectComponent,
+     resource::Resource,
+     schedule::IntoScheduleConfigs as _,
+@@ -38,7 +39,8 @@ use bevy_render::{
+     },
+     render_resource::{
+         binding_types::{
+-            sampler, texture_2d, texture_depth_2d, texture_depth_2d_multisampled, uniform_buffer,
++            sampler, texture_2d, texture_2d_multisampled, texture_depth_2d,
++            texture_depth_2d_multisampled, uniform_buffer,
+         },
+         BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
+         CachedRenderPipelineId, ColorTargetState, ColorWrites, FilterMode, FragmentState, LoadOp,
+@@ -50,7 +52,7 @@ use bevy_render::{
+     renderer::{RenderContext, RenderDevice},
+     sync_component::SyncComponentPlugin,
+     sync_world::RenderEntity,
+-    texture::{CachedTexture, TextureCache},
++    texture::{CachedTexture, ColorAttachment, TextureCache},
+     view::{
+         prepare_view_targets, ExtractedView, Msaa, ViewDepthTexture, ViewTarget, ViewUniform,
+         ViewUniformOffset, ViewUniforms,
+@@ -227,6 +229,7 @@ impl Plugin for DepthOfFieldPlugin {
+                 (
+                     configure_depth_of_field_view_targets,
+                     prepare_auxiliary_depth_of_field_textures,
++                    prepare_transparent_focus_textures,
+                 )
+                     .after(prepare_view_targets)
+                     .in_set(RenderSet::ManageViews),
+@@ -307,6 +310,20 @@ struct DepthOfFieldPipelineRenderInfo {
+ #[derive(Component, Deref, DerefMut)]
+ pub struct AuxiliaryDepthOfFieldTexture(CachedTexture);
+ 
++/// The format of [`TransparentFocusTexture`].
++pub const TRANSPARENT_FOCUS_TEXTURE_FORMAT: TextureFormat = TextureFormat::Rg16Float;
++
++/// An extra render target attached to the main transparent pass when depth of
++/// field is enabled.
++///
++/// Transparent fragments alpha-blend `(view depth, 1.0)` into it, so it
++/// accumulates the alpha-weighted view depth of transparent surfaces in `r`
++/// and their total coverage in `g`. The depth of field shader combines this
++/// with the opaque depth buffer so that transparent surfaces attract focus in
++/// proportion to their opacity.
++#[derive(Component, Deref, DerefMut)]
++pub struct TransparentFocusTexture(pub ColorAttachment);
++
+ /// Bind group layouts for depth of field specific to a single view.
+ #[derive(Component, Clone)]
+ pub struct ViewDepthOfFieldBindGroupLayouts {
+@@ -338,6 +355,7 @@ impl ViewNode for DepthOfFieldNode {
+         Read<ViewDepthOfFieldBindGroupLayouts>,
+         Read<DynamicUniformIndex<DepthOfFieldUniform>>,
+         Option<Read<AuxiliaryDepthOfFieldTexture>>,
++        Option<Read<TransparentFocusTexture>>,
+     );
+ 
+     fn run<'w>(
+@@ -352,6 +370,7 @@ impl ViewNode for DepthOfFieldNode {
+             view_bind_group_layouts,
+             depth_of_field_uniform_index,
+             auxiliary_dof_texture,
++            transparent_focus_texture,
+         ): QueryItem<'w, Self::ViewQuery>,
+         world: &'w World,
+     ) -> Result<(), NodeRunError> {
+@@ -359,6 +378,13 @@ impl ViewNode for DepthOfFieldNode {
+         let view_uniforms = world.resource::<ViewUniforms>();
+         let global_bind_group = world.resource::<DepthOfFieldGlobalBindGroup>();
+ 
++        let Some(transparent_focus_texture) = transparent_focus_texture else {
++            once!(warn!(
++                "Should have created the transparent focus texture by now"
++            ));
++            return Ok(());
++        };
++
+         // We can be in either Gaussian blur or bokeh mode here. Both modes are
+         // similar, consisting of two passes each. We factor out the information
+         // specific to each pass into
+@@ -396,6 +422,7 @@ impl ViewNode for DepthOfFieldNode {
+                         view_depth_texture.view(),
+                         postprocess.source,
+                         &auxiliary_dof_texture.default_view,
++                        &transparent_focus_texture.texture.default_view,
+                     )),
+                 )
+             } else {
+@@ -406,6 +433,7 @@ impl ViewNode for DepthOfFieldNode {
+                         view_uniforms_binding,
+                         view_depth_texture.view(),
+                         postprocess.source,
++                        &transparent_focus_texture.texture.default_view,
+                     )),
+                 )
+             };
+@@ -544,6 +572,14 @@ pub fn prepare_depth_of_field_view_bind_group_layouts(
+     render_device: Res<RenderDevice>,
+ ) {
+     for (view, depth_of_field, msaa) in view_targets.iter() {
++        // The transparent focus texture matches the view's sample count and is
++        // only ever read with `textureLoad`.
++        let focus_texture_entry = if *msaa != Msaa::Off {
++            texture_2d_multisampled(TextureSampleType::Float { filterable: false })
++        } else {
++            texture_2d(TextureSampleType::Float { filterable: false })
++        };
++
+         // Create the bind group layout for the passes that take one input.
+         let single_input = render_device.create_bind_group_layout(
+             Some("depth of field bind group layout (single input)"),
+@@ -557,6 +593,7 @@ pub fn prepare_depth_of_field_view_bind_group_layouts(
+                         texture_depth_2d()
+                     },
+                     texture_2d(TextureSampleType::Float { filterable: true }),
++                    focus_texture_entry,
+                 ),
+             ),
+         );
+@@ -578,6 +615,7 @@ pub fn prepare_depth_of_field_view_bind_group_layouts(
+                         },
+                         texture_2d(TextureSampleType::Float { filterable: true }),
+                         texture_2d(TextureSampleType::Float { filterable: true }),
++                        focus_texture_entry,
+                     ),
+                 ),
+             )),
+@@ -665,6 +703,45 @@ pub fn prepare_auxiliary_depth_of_field_textures(
+     }
+ }
+ 
++/// Creates the [`TransparentFocusTexture`] for each view with depth of field
++/// enabled, and removes it from views that no longer have depth of field so
++/// the transparent pass attachments stay in sync with the specialized
++/// pipelines.
++pub fn prepare_transparent_focus_textures(
++    mut commands: Commands,
++    render_device: Res<RenderDevice>,
++    mut texture_cache: ResMut<TextureCache>,
++    view_targets: Query<(Entity, &ViewTarget), With<DepthOfField>>,
++    stale: Query<Entity, (With<TransparentFocusTexture>, Without<DepthOfField>)>,
++) {
++    for entity in stale.iter() {
++        commands.entity(entity).remove::<TransparentFocusTexture>();
++    }
++
++    for (entity, view_target) in view_targets.iter() {
++        let texture_descriptor = TextureDescriptor {
++            label: Some("transparent focus texture"),
++            size: view_target.main_texture().size(),
++            mip_level_count: 1,
++            sample_count: view_target.main_texture().sample_count(),
++            dimension: TextureDimension::D2,
++            format: TRANSPARENT_FOCUS_TEXTURE_FORMAT,
++            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
++            view_formats: &[],
++        };
++
++        let texture = texture_cache.get(&render_device, texture_descriptor);
++
++        commands
++            .entity(entity)
++            .insert(TransparentFocusTexture(ColorAttachment::new(
++                texture,
++                None,
++                Some(LinearRgba::NONE),
++            )));
++    }
++}
++
+ /// Specializes the depth of field pipelines specific to a view.
+ pub fn prepare_depth_of_field_pipelines(
+     mut commands: Commands,
+diff --git a/crates/bevy_gizmos/src/pipeline_3d.rs b/crates/bevy_gizmos/src/pipeline_3d.rs
+index 799793e6cbba688e8207395b6114383d45db1f9b..fe82c31c3a708f230330b5537efb9dd5dbf27abc 100644
+--- a/crates/bevy_gizmos/src/pipeline_3d.rs
++++ b/crates/bevy_gizmos/src/pipeline_3d.rs
+@@ -7,6 +7,7 @@ use crate::{
+ use bevy_app::{App, Plugin};
+ use bevy_core_pipeline::{
+     core_3d::{Transparent3d, CORE_3D_DEPTH_FORMAT},
++    dof::{DepthOfField, TRANSPARENT_FOCUS_TEXTURE_FORMAT},
+     oit::OrderIndependentTransparencySettings,
+     prepass::{DeferredPrepass, DepthPrepass, MotionVectorPrepass, NormalPrepass},
+ };
+@@ -97,6 +98,30 @@ struct LineGizmoPipelineKey {
+     line_style: GizmoLineStyle,
+ }
+ 
++/// The color targets for pipelines rendering in the [`Transparent3d`] phase.
++///
++/// When the view has depth of field enabled, the transparent pass carries an
++/// extra render target for transparent focus depth; every pipeline in the pass
++/// must declare it, but gizmos don't write to it.
++fn transparent_3d_targets(
++    format: TextureFormat,
++    view_key: MeshPipelineKey,
++) -> Vec<Option<ColorTargetState>> {
++    let mut targets = vec![Some(ColorTargetState {
++        format,
++        blend: Some(BlendState::ALPHA_BLENDING),
++        write_mask: ColorWrites::ALL,
++    })];
++    if view_key.contains(MeshPipelineKey::TRANSPARENT_FOCUS) {
++        targets.push(Some(ColorTargetState {
++            format: TRANSPARENT_FOCUS_TEXTURE_FORMAT,
++            blend: None,
++            write_mask: ColorWrites::empty(),
++        }));
++    }
++    targets
++}
++
+ impl SpecializedRenderPipeline for LineGizmoPipeline {
+     type Key = LineGizmoPipelineKey;
+ 
+@@ -140,11 +165,7 @@ impl SpecializedRenderPipeline for LineGizmoPipeline {
+                 shader: LINE_SHADER_HANDLE,
+                 shader_defs,
+                 entry_point: fragment_entry_point.into(),
+-                targets: vec![Some(ColorTargetState {
+-                    format,
+-                    blend: Some(BlendState::ALPHA_BLENDING),
+-                    write_mask: ColorWrites::ALL,
+-                })],
++                targets: transparent_3d_targets(format, key.view_key),
+             }),
+             layout,
+             primitive: PrimitiveState::default(),
+@@ -239,11 +260,7 @@ impl SpecializedRenderPipeline for LineJointGizmoPipeline {
+                 shader: LINE_JOINT_SHADER_HANDLE,
+                 shader_defs,
+                 entry_point: "fragment".into(),
+-                targets: vec![Some(ColorTargetState {
+-                    format,
+-                    blend: Some(BlendState::ALPHA_BLENDING),
+-                    write_mask: ColorWrites::ALL,
+-                })],
++                targets: transparent_3d_targets(format, key.view_key),
+             }),
+             layout,
+             primitive: PrimitiveState::default(),
+@@ -303,6 +320,7 @@ fn queue_line_gizmos_3d(
+             Has<MotionVectorPrepass>,
+             Has<DeferredPrepass>,
+             Has<OrderIndependentTransparencySettings>,
++            Has<DepthOfField>,
+         ),
+     )>,
+ ) {
+@@ -316,7 +334,7 @@ fn queue_line_gizmos_3d(
+         view,
+         msaa,
+         render_layers,
+-        (normal_prepass, depth_prepass, motion_vector_prepass, deferred_prepass, oit),
++        (normal_prepass, depth_prepass, motion_vector_prepass, deferred_prepass, oit, dof),
+     ) in &views
+     {
+         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
+@@ -349,6 +367,10 @@ fn queue_line_gizmos_3d(
+             view_key |= MeshPipelineKey::OIT_ENABLED;
+         }
+ 
++        if dof {
++            view_key |= MeshPipelineKey::TRANSPARENT_FOCUS;
++        }
++
+         for (entity, main_entity, config) in &line_gizmos {
+             if !config.render_layers.intersects(render_layers) {
+                 continue;
+@@ -422,6 +444,7 @@ fn queue_line_joint_gizmos_3d(
+             Has<DepthPrepass>,
+             Has<MotionVectorPrepass>,
+             Has<DeferredPrepass>,
++            Has<DepthOfField>,
+         ),
+     )>,
+ ) {
+@@ -434,7 +457,7 @@ fn queue_line_joint_gizmos_3d(
+         view,
+         msaa,
+         render_layers,
+-        (normal_prepass, depth_prepass, motion_vector_prepass, deferred_prepass),
++        (normal_prepass, depth_prepass, motion_vector_prepass, deferred_prepass, dof),
+     ) in &views
+     {
+         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
+@@ -463,6 +486,10 @@ fn queue_line_joint_gizmos_3d(
+             view_key |= MeshPipelineKey::DEFERRED_PREPASS;
+         }
+ 
++        if dof {
++            view_key |= MeshPipelineKey::TRANSPARENT_FOCUS;
++        }
++
+         for (entity, main_entity, config) in &line_gizmos {
+             if !config.render_layers.intersects(render_layers) {
+                 continue;
+diff --git a/crates/bevy_pbr/src/prepass/mod.rs b/crates/bevy_pbr/src/prepass/mod.rs
+index b58531658beb22ef32ca29c4638dd16e52cb5bea..a4debc2aa8b4d23dff79cdda5a455aefacd75df6 100644
+--- a/crates/bevy_pbr/src/prepass/mod.rs
++++ b/crates/bevy_pbr/src/prepass/mod.rs
+@@ -426,7 +426,7 @@ where
+ 
+     fn specialize(
+         &self,
+-        mut key: Self::Key,
++        key: Self::Key,
+         layout: &MeshVertexBufferLayoutRef,
+     ) -> Result<RenderPipelineDescriptor, SpecializedMeshPipelineError> {
+         let mut shader_defs = Vec::new();
+@@ -437,7 +437,6 @@ where
+             .internal
+             .specialize(key.mesh_key, shader_defs, layout)?;
+ 
+-        key.mesh_key |= MeshPipelineKey::IN_PREPASS;
+         // This is a bit risky because it's possible to change something that would
+         // break the prepass but be fine in the main pass.
+         // Since this api is pretty low-level it doesn't matter that much, but it is a potential issue.
+diff --git a/crates/bevy_pbr/src/render/forward_io.wgsl b/crates/bevy_pbr/src/render/forward_io.wgsl
+index 99f2ecced76285e4465836d9706429cddb91201e..403630f34227cbfc17ea08a6681b6dffe15f7f0b 100644
+--- a/crates/bevy_pbr/src/render/forward_io.wgsl
++++ b/crates/bevy_pbr/src/render/forward_io.wgsl
+@@ -57,4 +57,10 @@ struct VertexOutput {
+ 
+ struct FragmentOutput {
+     @location(0) color: vec4<f32>,
++#ifdef TRANSPARENT_FOCUS_OUTPUT
++    // Alpha-weighted view depth (r) and coverage (g), accumulated over the
++    // transparent pass and consumed by depth of field. Written with alpha
++    // blending, so the zero-initialized default is a no-op.
++    @location(1) focus: vec4<f32>,
++#endif
+ }
+diff --git a/crates/bevy_pbr/src/render/mesh.rs b/crates/bevy_pbr/src/render/mesh.rs
+index d738cc51cbc2f3b954d5236b63291b8b786026be..43815601976e2a08635683ea4aeba2826c4f18b5 100644
+--- a/crates/bevy_pbr/src/render/mesh.rs
++++ b/crates/bevy_pbr/src/render/mesh.rs
+@@ -66,6 +66,7 @@ use crate::{
+     *,
+ };
+ use bevy_core_pipeline::core_3d::Camera3d;
++use bevy_core_pipeline::dof::{DepthOfField, TRANSPARENT_FOCUS_TEXTURE_FORMAT};
+ use bevy_core_pipeline::oit::OrderIndependentTransparencySettings;
+ use bevy_core_pipeline::prepass::{DeferredPrepass, DepthPrepass, NormalPrepass};
+ use bevy_core_pipeline::tonemapping::{DebandDither, Tonemapping};
+@@ -365,6 +366,7 @@ pub fn check_views_need_specialization(
+             Has<RenderViewLightProbes<IrradianceVolume>>,
+         ),
+         Has<OrderIndependentTransparencySettings>,
++        Has<DepthOfField>,
+     )>,
+     ticks: SystemChangeTick,
+ ) {
+@@ -382,6 +384,7 @@ pub fn check_views_need_specialization(
+         distance_fog,
+         (has_environment_maps, has_irradiance_volumes),
+         has_oit,
++        has_dof,
+     ) in views.iter_mut()
+     {
+         let mut view_key = MeshPipelineKey::from_msaa_samples(msaa.samples())
+@@ -419,6 +422,10 @@ pub fn check_views_need_specialization(
+             view_key |= MeshPipelineKey::OIT_ENABLED;
+         }
+ 
++        if has_dof {
++            view_key |= MeshPipelineKey::TRANSPARENT_FOCUS;
++        }
++
+         if let Some(projection) = projection {
+             view_key |= match projection {
+                 Projection::Perspective(_) => MeshPipelineKey::VIEW_PROJECTION_PERSPECTIVE,
+@@ -2467,8 +2474,8 @@ bitflags::bitflags! {
+         const HAS_PREVIOUS_MORPH                = 1 << 19;
+         const OIT_ENABLED                       = 1 << 20;
+         const DISTANCE_FOG                      = 1 << 21;
+-        const IN_PREPASS                        = 1 << 22;
+-        const LAST_FLAG                         = Self::IN_PREPASS.bits();
++        const TRANSPARENT_FOCUS                 = 1 << 22;
++        const LAST_FLAG                         = Self::TRANSPARENT_FOCUS.bits();
+ 
+         // Bitfields
+         const MSAA_RESERVED_BITS                = Self::MSAA_MASK_BITS << Self::MSAA_SHIFT_BITS;
+@@ -2740,7 +2747,7 @@ impl SpecializedMeshPipeline for MeshPipeline {
+         let (label, blend, depth_write_enabled);
+         let pass = key.intersection(MeshPipelineKey::BLEND_RESERVED_BITS);
+         let (mut is_opaque, mut alpha_to_coverage_enabled) = (false, false);
+-        let alpha_depth_write = !key.contains(MeshPipelineKey::IN_PREPASS);
++        let mut is_transparent_pass = false;
+         if key.contains(MeshPipelineKey::OIT_ENABLED) && pass == MeshPipelineKey::BLEND_ALPHA {
+             label = "oit_mesh_pipeline".into();
+             // TODO tail blending would need alpha blending
+@@ -2749,12 +2756,14 @@ impl SpecializedMeshPipeline for MeshPipeline {
+             // TODO it should be possible to use this to combine MSAA and OIT
+             // alpha_to_coverage_enabled = true;
+             depth_write_enabled = false;
++            is_transparent_pass = true;
+         } else if pass == MeshPipelineKey::BLEND_ALPHA {
+             label = "alpha_blend_mesh_pipeline".into();
+             blend = Some(BlendState::ALPHA_BLENDING);
+             // For the transparent pass, fragments that are closer will be alpha blended
+             // but their depth is not written to the depth buffer
+-            depth_write_enabled = alpha_depth_write;
++            depth_write_enabled = false;
++            is_transparent_pass = true;
+         } else if pass == MeshPipelineKey::BLEND_PREMULTIPLIED_ALPHA {
+             label = "premultiplied_alpha_mesh_pipeline".into();
+             blend = Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+@@ -2762,7 +2771,8 @@ impl SpecializedMeshPipeline for MeshPipeline {
+             shader_defs.push("BLEND_PREMULTIPLIED_ALPHA".into());
+             // For the transparent pass, fragments that are closer will be alpha blended
+             // but their depth is not written to the depth buffer
+-            depth_write_enabled = alpha_depth_write;
++            depth_write_enabled = false;
++            is_transparent_pass = true;
+         } else if pass == MeshPipelineKey::BLEND_MULTIPLY {
+             label = "multiply_mesh_pipeline".into();
+             blend = Some(BlendState {
+@@ -2777,7 +2787,8 @@ impl SpecializedMeshPipeline for MeshPipeline {
+             shader_defs.push("BLEND_MULTIPLY".into());
+             // For the multiply pass, fragments that are closer will be alpha blended
+             // but their depth is not written to the depth buffer
+-            depth_write_enabled = alpha_depth_write;
++            depth_write_enabled = false;
++            is_transparent_pass = true;
+         } else if pass == MeshPipelineKey::BLEND_ALPHA_TO_COVERAGE {
+             label = "alpha_to_coverage_mesh_pipeline".into();
+             // BlendState::REPLACE is not needed here, and None will be potentially much faster in some cases
+@@ -2957,6 +2968,33 @@ impl SpecializedMeshPipeline for MeshPipeline {
+             TextureFormat::bevy_default()
+         };
+ 
++        // The transparent pass carries an extra render target accumulating
++        // alpha-weighted view depth + coverage for depth of field. Transmissive
++        // items render in their own pass, which doesn't have the attachment.
++        let mut targets = vec![Some(ColorTargetState {
++            format,
++            blend,
++            write_mask: ColorWrites::ALL,
++        })];
++        if is_transparent_pass
++            && key.contains(MeshPipelineKey::TRANSPARENT_FOCUS)
++            && !key.contains(MeshPipelineKey::READS_VIEW_TRANSMISSION_TEXTURE)
++        {
++            shader_defs.push("TRANSPARENT_FOCUS_OUTPUT".into());
++            targets.push(Some(ColorTargetState {
++                format: TRANSPARENT_FOCUS_TEXTURE_FORMAT,
++                blend: Some(BlendState {
++                    color: BlendComponent {
++                        src_factor: BlendFactor::SrcAlpha,
++                        dst_factor: BlendFactor::OneMinusSrcAlpha,
++                        operation: BlendOperation::Add,
++                    },
++                    alpha: BlendComponent::OVER,
++                }),
++                write_mask: ColorWrites::RED | ColorWrites::GREEN,
++            }));
++        }
++
+         // This is defined here so that custom shaders that use something other than
+         // the mesh binding from bevy_pbr::mesh_bindings can easily make use of this
+         // in their own shaders.
+@@ -2978,11 +3016,7 @@ impl SpecializedMeshPipeline for MeshPipeline {
+                 shader: MESH_SHADER_HANDLE,
+                 shader_defs,
+                 entry_point: "fragment".into(),
+-                targets: vec![Some(ColorTargetState {
+-                    format,
+-                    blend,
+-                    write_mask: ColorWrites::ALL,
+-                })],
++                targets,
+             }),
+             layout: bind_group_layout,
+             push_constant_ranges: vec![],
+diff --git a/crates/bevy_pbr/src/render/pbr.wgsl b/crates/bevy_pbr/src/render/pbr.wgsl
+index 1722ab9d919406c88e5ec09feaf414864cb62fc3..944caf02e034029955db8feba40a847c512e3b0e 100644
+--- a/crates/bevy_pbr/src/render/pbr.wgsl
++++ b/crates/bevy_pbr/src/render/pbr.wgsl
+@@ -31,6 +31,10 @@
+ #import bevy_pbr::decal::forward::get_forward_decal_info
+ #endif
+ 
++#ifdef TRANSPARENT_FOCUS_OUTPUT
++#import bevy_pbr::view_transformations
++#endif
++
+ @fragment
+ fn fragment(
+ #ifdef MESHLET_MESH_MATERIAL_PASS
+@@ -103,5 +107,14 @@ fn fragment(
+         out.color.a = min(forward_decal_info.alpha, out.color.a);
+ #endif
+ 
++#ifdef TRANSPARENT_FOCUS_OUTPUT
++    out.focus = vec4(
++        -view_transformations::depth_ndc_to_view_z(in.position.z),
++        1.0,
++        0.0,
++        out.color.a,
++    );
++#endif
++
+         return out;
+ }

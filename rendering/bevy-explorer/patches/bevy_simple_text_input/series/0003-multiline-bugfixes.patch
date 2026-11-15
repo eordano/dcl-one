@@ -1,0 +1,34 @@
+From 24c641bfc8ecb9e20a5dc06cd53124d030f08e1b
+Subject: multiline bugfixes
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/24c641bfc8ecb9e20a5dc06cd53124d030f08e1b
+Date: 2025-06-11T19:45:04+01:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index e3ad4d091abe24f6f1b7a3f453b2db5b9e25c6d4..3ebc35c8f74246a80bf7a28aa2e9d2ead9bd6873 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -457,10 +457,7 @@ fn keyboard(
+                         timer_should_reset = false;
+                         Some(Action::Motion(bevy::text::cosmic_text::Motion::BufferStart))
+                     }
+-                    NewLine => {
+-                        editor.0.insert_string("\n", None);
+-                        None
+-                    }
++                    NewLine => settings.multiline.then_some(Action::Enter),
+                 };
+ 
+                 if let Some(action) = editor_action {
+@@ -497,9 +494,9 @@ fn keyboard(
+                     text_input.0 = b
+                         .lines
+                         .iter()
+-                        .map(|line| line.text())
++                        .map(|line| format!("{}{}", line.text(), line.ending().as_str()))
+                         .collect::<Vec<_>>()
+-                        .join("\n");
++                        .join("");
+                 })
+             }
+         }

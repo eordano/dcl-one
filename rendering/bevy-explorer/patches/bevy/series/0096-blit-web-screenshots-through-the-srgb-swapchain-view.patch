@@ -1,0 +1,31 @@
+From eb2eb8793122035dd2127dc852f80273bfd59cac
+Subject: Blit web screenshots through the sRGB swapchain view (#7)
+Origin: https://github.com/robtfm/bevy/commit/eb2eb8793122035dd2127dc852f80273bfd59cac
+Date: 2026-10-08T21:09:44-03:00
+
+---
+diff --git a/crates/bevy_render/src/view/window/screenshot.rs b/crates/bevy_render/src/view/window/screenshot.rs
+index 9daedc7f654b569570132c6013eb4733b9dee588..c8ba494b63ee3063ec0b4fa5b4e903e3d8b7d1fa 100644
+--- a/crates/bevy_render/src/view/window/screenshot.rs
++++ b/crates/bevy_render/src/view/window/screenshot.rs
+@@ -513,10 +513,9 @@ pub(crate) fn submit_screenshot_commands(world: &World, encoder: &mut CommandEnc
+                 let Some(texture_format) = window.swap_chain_texture_format else {
+                     continue;
+                 };
+-                let Some(swap_chain_texture) = window.swap_chain_texture.as_ref() else {
++                let Some(texture_view) = window.swap_chain_texture_view.as_ref() else {
+                     continue;
+                 };
+-                let texture_view = swap_chain_texture.texture.create_view(&Default::default());
+                 render_screenshot(
+                     encoder,
+                     prepared,
+@@ -525,7 +524,7 @@ pub(crate) fn submit_screenshot_commands(world: &World, encoder: &mut CommandEnc
+                     width,
+                     height,
+                     texture_format,
+-                    &texture_view,
++                    texture_view,
+                 );
+             }
+             NormalizedRenderTarget::Image(image) => {

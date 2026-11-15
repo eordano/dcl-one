@@ -1,13 +1,14 @@
 # The bevy fork
 
-bevy-explorer builds bevy from `rendering/bevy-explorer/bevy`: upstream bevy 0.16.1 plus our
-changes, vendored from [`robtfm/bevy`, branch `release-0.16-dcl`](https://github.com/robtfm/bevy/tree/release-0.16-dcl)
-at `dac1ac9` (102 commits on top of `v0.16.1`; see the
-[ADR](../../../../docs/adr/2026-11-05-explorer-vendored-bevy.md)). Bugfix-only forks of other
-crates exist too (see the workspace `Cargo.toml`); this page is only about bevy, because that is
-where behaviour differs from stock and where a reader who knows bevy will otherwise be wrong.
+bevy-explorer builds bevy from upstream bevy 0.16.1 plus our changes. The repository tracks the
+upstream commit and one patch file per change in `rendering/bevy-explorer/patches/bevy`, and
+`tooling/patched-sources.py` writes the rebuilt tree at `rendering/bevy-explorer/bevy` (see the
+[ADR](../../../../docs/adr/2026-11-14-explorer-sources-as-patches.md)). Seventeen other sources
+are tracked the same way and rebuilt under `rendering/bevy-explorer/forks`; this page is only
+about bevy, because that is where behaviour differs from stock and where a reader who knows bevy
+will otherwise be wrong.
 
-If a change belongs in bevy, make it in the vendored tree. Changes marked **throwaway** are 0.16
+If a change belongs in bevy, make it a patch (see [Changing bevy](#changing-bevy)). Changes marked **throwaway** are 0.16
 adaptations of work that is already upstream in a later bevy and are dropped, not ported,
 on any migration.
 
@@ -45,7 +46,8 @@ across workers:
   are thread-bound.
 - `PipelinedRenderingDiagnosticsPlugin`: per-stage timings of a pipelined frame under
   `pipelined/`, including GPU backlog and animation-frame waits on the web.
-- winit comes from `robtfm/winit` `v0.30.x` for OffscreenCanvas worker windows.
+- winit is upstream `v0.30.12` plus the series in `rendering/bevy-explorer/patches/winit`, for
+  OffscreenCanvas worker windows.
 - `wasm_threaded_loader` feature (`bevy_asset`): asset loading on a worker; in-flight loads
   cancel when the last handle drops; `futures-channel` mpsc instead of `async-channel`, whose
   lock lowers to `memory.atomic.wait` and traps on the main thread.
@@ -127,7 +129,7 @@ across workers:
 - Every compressed decode (basis, dds, ktx2) gets the caller's asset usage, which upstream
   leaves at the default: a cached dds loads with `RENDER_WORLD` as its first load did.
 - The patched crates' tests (`bevy_image`, `bevy_gltf`) run in the explorer's CI ("Test the
-  patched vendored Bevy crates"): they are path dependencies, so `cargo test --all` never
+  patched Bevy crates"): they are path dependencies, so `cargo test --all` never
   compiles them. From `source`, seed the fork's workspace with this lock file and run them there:
   `cp Cargo.lock ../bevy/Cargo.lock`, then `cargo test --manifest-path ../bevy/Cargo.toml -p
   bevy_image -p bevy_gltf --lib --features bevy_gltf/dds,bevy_image/ktx2,bevy_image/zstd`.
@@ -222,33 +224,56 @@ across workers:
 
 ## Changing bevy
 
-- Edit `rendering/bevy-explorer/bevy` in place, in an ordinary PR, and update this page in the
-  same PR. This repository is the source of truth; the fork branch stays frozen at `dac1ac9`.
-- The import left out `assets/` (example assets), the symlink `examples/wasm/assets` into it, and
-  the fork's `.gitattributes`. The root `.gitattributes` sets `-text` for the tree, so its bytes
-  stay exact on every platform.
-- `source/Cargo.toml` points both patch tables at the tree. `[patch.crates-io]` lists each bevy
-  subcrate an ecosystem crate names by crates.io version (18 today);
-  `[patch."https://github.com/robtfm/bevy"]` catches `bevy_dui`, `bevy_ecss` and `boimp`, which
-  name the former fork by git. With `Cargo.lock` nothing fetches the fork. A resolve without it
-  reads the branch once, so the branch has to stay fetchable while those crates name it.
-- The tree is not a workspace member, so the explorer's Clippy and Rustfmt gates never reach it.
-  Cargo doesn't cap a path dependency's rustc warnings as it did the git dependency's: the
-  vendored root `Cargo.toml` allows `dead_code` (code our feature set leaves unused) and
-  `mismatched_lifetime_syntaxes` (a lint newer than bevy 0.16); other warnings stay visible.
-  Don't run Clippy inside bevy's own workspace: its code predates this toolchain's lints.
-  A warning the pinned toolchain raises in the tree is fixed at its site when the fix is
-  local (an import our edits left unused, a deprecated `core::f32` constant, a derived
-  `PartialEq` over a function pointer), so a build log only shows what is new.
+The same steps change any source under `rendering/bevy-explorer/patches`; use its name in place
+of `bevy`. The commands are `python3 tooling/patched-sources.py <command>`, with the path from the
+repository root.
+
+- **Files.** `patches/<name>/source.toml` records the upstream repository and commit, the licence
+  of the source (`license`), the git tree ids before and after the series, and `nix_hash`.
+  `patches/<name>/series` holds the patches in order. The rebuilt tree is
+  `rendering/bevy-explorer/bevy` for `bevy` and `rendering/bevy-explorer/forks/<name>` for every
+  other source. Git ignores it.
+- **`materialise`** writes each rebuilt tree that is missing or stale, also one that lost all its
+  files. Run it after a checkout, a pull or a rebase, before any `cargo` command. The `just`
+  recipes, the build scripts under `apps/bevy-explorer` and CI run it.
+  - Edits in a rebuilt tree stay. When the series changed below them, `materialise` rebuilds the
+    tree, applies the edits again and prints each step. On a conflict it stops, names the files
+    and changes nothing in the tree. In both cases it saves the edits as a patch file under
+    `edits/` in its cache (`~/.cache/dcl-one/patched-sources`) and prints the path.
+  - `--strict` fails on an edited tree.
+  - `--force` drops the edits.
+- **`export bevy -m "subject"`** writes the edits in the rebuilt tree as the next patch file and
+  updates the tree id in `source.toml`. Edit the rebuilt tree in place and build as usual first.
+  Commit both files, and update this page in the same PR.
+- **`status`** says which trees are missing, current, stale or edited. **`verify`** rebuilds each
+  source and checks the tree ids.
+- **Stale trees.** The build script of the `common` crate fails with one line that names
+  `materialise` when a rebuilt tree is not the one the tracked files describe. Only packages that
+  depend on `common` have this check. With no rebuilt tree at all Cargo fails earlier, when it
+  loads the manifests: ``patch location `...` does not contain packages matching `bevy` ``.
+- **Nix.** `infra/packages/bevy-explorer.nix` fetches `commit` with `nix_hash` and runs the same
+  tool. CI does not build the Nix package, so nothing there proves `nix_hash`: after a change of
+  `commit`, run `nix build .#bevy-explorer.sources`, which fails with the hash to record.
+- `.gitattributes` sets `-text -whitespace` on `patches/**`, so patch bytes stay exact on every
+  platform. Never reformat a patch file.
+- `source/Cargo.toml` points its patch tables at the rebuilt trees. `[patch.crates-io]` lists
+  each bevy subcrate an ecosystem crate names by crates.io version (18 today) and every forked
+  crate. `[patch."https://github.com/robtfm/bevy"]` catches `bevy_dui`, `bevy_ecss` and `boimp`,
+  whose manifests name a former fork by git. With `Cargo.lock` nothing fetches that repository.
+  A resolve without it reads the branch once.
+- The rebuilt trees are not workspace members, so the explorer's Clippy and Rustfmt gates never
+  reach them. Cargo doesn't cap a path dependency's rustc warnings: bevy's root `Cargo.toml`
+  allows `dead_code` (code our feature set leaves unused) and `mismatched_lifetime_syntaxes` (a
+  lint newer than bevy 0.16); other warnings stay visible. Don't run Clippy inside bevy's own
+  workspace: its code predates this toolchain's lints.
 - Backport an upstream change: `git fetch https://github.com/bevyengine/bevy <sha>`, then
-  `git format-patch -1 --stdout <sha> | git apply -3 --directory=rendering/bevy-explorer/bevy`.
-  Name the upstream PR on this page, as the entries above do.
-- Our delta over upstream, for a migration: `git fetch https://github.com/bevyengine/bevy tag v0.16.1`,
-  then `git diff v0.16.1^{tree} HEAD:rendering/bevy-explorer/bevy` (the import's omissions show
-  as deletions).
+  `git format-patch -1 --stdout <sha> | git apply --directory=rendering/bevy-explorer/bevy`, then
+  `export`. Name the upstream PR on this page, as the entries above do.
+- Our delta over upstream, for a migration: `python3 tooling/patched-sources.py divergence bevy` lists
+  files and lines changed by crate, and the series is the delta itself.
 - CI reuses cached Bevy and engine builds until their inputs change: Cargo would otherwise rebuild a path
   dependency after every checkout, since a checkout makes every file new.
-  `tooling/bevy-mtimes.py` records tracked Bevy, engine and protocol files' blob ids and times with
+  `tooling/bevy-mtimes.py` records the Bevy, fork, engine and protocol files' blob ids and times with
   the cache and gives
   unchanged files their times back; every job that caches the explorer's target runs it.
 - Never share a `target/` directory with a checkout that builds a different bevy.

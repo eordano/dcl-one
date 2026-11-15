@@ -22,7 +22,7 @@ jobs:
     # Controller-generated job metadata carries the push boundary to the privileged workflow_run scan.
     # Pull request checks keep their stable name; job scripts and artifacts cannot supply this boundary.
     name: ${{ github.event_name == 'push' && format('UI key push boundary {0}..{1}', github.event.before, github.sha) || 'key-guard' }}
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     outputs:
       ui_changed: ${{ steps.scope.outputs.ui_changed }}
     steps:
@@ -98,7 +98,7 @@ jobs:
   library:
     needs: key-guard
     if: needs.key-guard.outputs.ui_changed == 'true'
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     defaults:
       run:
         working-directory: library/ui

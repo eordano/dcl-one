@@ -1,7 +1,7 @@
 import { createAnalyticsComponent } from '../../../packages/@dcl/sdk-commands/src/components/analytics'
 import { createFsComponent } from '../../../packages/@dcl/sdk-commands/src/components/fs'
 import { createStderrCliLogger } from '../../../packages/@dcl/sdk-commands/src/components/log'
-import { createRecordConfigComponent } from '../../../packages/@dcl/sdk-commands/node_modules/@well-known-components/env-config-provider'
+import { createRecordConfigComponent } from '@well-known-components/env-config-provider'
 import { homedir } from 'os'
 import path from 'path'
 import { isCI } from '../../../packages/@dcl/sdk-commands/src/logic/config'
@@ -15,9 +15,7 @@ afterEach(() => {
 describe('Analytics Component', () => {
   test('should create .dclrc file', async () => {
     const fs = createFsComponent()
-    const config = createRecordConfigComponent({
-      /* empty config files */
-    })
+    const config = createRecordConfigComponent({/* empty config files */})
     const logger = createStderrCliLogger()
     const appendSpy = jest.spyOn(fs, 'appendFile').mockImplementation(async () => {})
 

@@ -414,5 +414,3 @@ the build; DATABASE.md gives the concurrent build to run beforehand.
 These are single warm-cache samples on synthetic data during other load. They
 do not measure production row width, cold reads, the build time or lock wait
 on the production table, or a whole pass's total.
-
-

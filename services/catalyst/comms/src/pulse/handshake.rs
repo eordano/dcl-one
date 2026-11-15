@@ -68,9 +68,7 @@ fn extract_from_object(
         };
         let link: AuthLink = serde_json::from_str(raw).map_err(|e| {
             let mut detail = e.to_string();
-            if detail.len() > 64 {
-                detail.truncate(64);
-            }
+            detail.truncate(detail.floor_char_boundary(64));
             format!("invalid auth-chain link {i}: {detail}")
         })?;
         match link.link_type {
@@ -229,6 +227,26 @@ mod tests {
         );
         assert!(!error.message().contains(CANARY));
         assert_eq!(error.message(), "Invalid auth chain");
+    }
+
+    #[test]
+    fn a_long_invalid_link_detail_is_cut_on_a_character_boundary() {
+        // The parser's message echoes the link type, so byte 64 falls inside `é`.
+        let link_type = format!("{}é", "a".repeat(46));
+        let raw = format!(r#"{{"type":"{link_type}","payload":"x"}}"#);
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            format!("{AUTH_CHAIN_HEADER_PREFIX}0"),
+            serde_json::Value::String(raw),
+        );
+        let error = extract_from_object(&obj).unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "invalid auth-chain link 0: unknown variant `{}",
+                "a".repeat(46)
+            )
+        );
     }
 
     fn header_bag_json(links: &[(usize, &AuthLink)], ts: &str, metadata: &str) -> String {

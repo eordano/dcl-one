@@ -1,0 +1,28 @@
+From 75d72efd262626e5264a5094a4a22d30f8e20951
+Subject: fix cargo
+Origin: https://github.com/robtfm/bevy_ecss/commit/75d72efd262626e5264a5094a4a22d30f8e20951
+Date: 2025-06-09T14:29:21+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 557674ab7735bc0aefaee712510f301cfc8b4f22..b9424675cc796f9726a177c7edff65c00d426fa2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,7 +12,7 @@ repository = "https://github.com/afonsolage/bevy_ecss"
+ 
+ [dependencies]
+ 
+-bevy = { path = "../bevy", default-features = false, features = [
++bevy = { version = "0.16", default-features = false, features = [
+     "std",
+     "bevy_log",
+     "bevy_ui",
+@@ -27,7 +27,7 @@ thiserror = "1.0.50"
+ ahash = "*"
+ 
+ [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+-bevy = { path = "../bevy", default-features = false, features = [
++bevy = { version = "0.16", default-features = false, features = [
+     "std",
+     "bevy_log",
+     "bevy_ui",

@@ -36,9 +36,9 @@ def executable(name):
     return git_bash() if name == 'bash' else shutil.which(name) or name
 
 
-def run(*args, cwd=SOURCE, env=None):
+def run(*args, cwd=SOURCE, env=None, **options):
     started = time.monotonic()
-    subprocess.run((executable(str(args[0])), *args[1:]), cwd=cwd, env=env, check=True)
+    subprocess.run((executable(str(args[0])), *args[1:]), cwd=cwd, env=env, check=True, **options)
     print(f'{" ".join(map(str, args))}: {time.monotonic() - started:.1f}s', flush=True)
 
 
@@ -72,6 +72,9 @@ def prepare_engine(no_opt, engine_cache, shared_build, env):
             target = ROOT / part
             if target.exists():
                 shutil.rmtree(target)
+        # Cargo reads Bevy and the forked crates from trees that are not tracked: write the ones
+        # that are missing or stale.
+        run(sys.executable, str(ROOT / 'tooling/patched-sources.py'), 'materialise', '--quiet', cwd=ROOT, env=env)
         if shared_build:
             compile_wasm(no_opt, env)
         else:
@@ -95,8 +98,11 @@ def web(no_opt=False, engine_cache=None, shared_build=False):
            'RAYON_NUM_THREADS': os.environ.get('RAYON_NUM_THREADS', str(min(os.cpu_count() or 1, 16)))}
     revision = os.environ.get('GITHUB_SHA', 'local')
     with ThreadPoolExecutor(max_workers=2) as pool:
-        installations = [pool.submit(run, 'npm', 'ci', '--prefix', project, env=env)
-                         for project in ('react-web', 'react-web/bridge-scene')]
+        installations = [
+            pool.submit(run, 'npm', 'ci', '--prefix', 'react-web', env=env),
+            pool.submit(run, 'corepack', 'pnpm@11.27.0', '--dir', 'react-web/bridge-scene',
+                        'install', '--frozen-lockfile', '--ignore-scripts', env=env),
+        ]
         engine = prepare_engine(no_opt, engine_cache, shared_build, env)
         for installation in installations:
             installation.result()
@@ -112,8 +118,12 @@ def web(no_opt=False, engine_cache=None, shared_build=False):
     # Relative URLs allow the same build at / or a gateway subpath. No upstream CDN stamping.
     web_env = {**env, 'PUBLIC_URL': '', 'SCENE_BASE_URL': '../'}
     run('npm', 'run', 'build', '--prefix', 'react-web', env=web_env)
+    run('corepack', 'pnpm@11.27.0', '--dir', 'react-web/bridge-scene',
+        '--filter', '@dcl/hashing', 'build', env=web_env)
+    run('node', str(ROOT / 'tooling/check-local-hashing.mjs'),
+        str(SOURCE / 'react-web/bridge-scene'), env=web_env)
     run('npm', 'run', 'test', '--prefix', 'react-web', env=web_env)
-    run('npm', 'run', 'bundle', '--prefix', 'react-web/bridge-scene', env=web_env)
+    run('corepack', 'pnpm@11.27.0', '--dir', 'react-web/bridge-scene', 'run', 'bundle', env=web_env)
     output = APP / 'dist/web'
     if output.exists():
         shutil.rmtree(output)

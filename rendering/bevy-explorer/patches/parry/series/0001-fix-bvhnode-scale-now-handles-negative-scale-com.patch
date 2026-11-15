@@ -1,0 +1,60 @@
+From 9bf52a52cbaa8e71d76fb8ad4ce82f9f0b39461e
+Subject: fix: BvhNode::scale now handles negative scale components correctly
+Origin: https://github.com/robtfm/parry/commit/9bf52a52cbaa8e71d76fb8ad4ce82f9f0b39461e
+Date: 2026-03-06T11:33:53+00:00
+
+Previously, scaling an AABB by a negative factor would produce an inverted
+AABB (mins > maxs on the negated axis), breaking the BVH invariant and
+causing all intersection/shapecast queries to silently miss geometry.
+
+Fix by taking component-wise inf/sup of the two scaled corners, so the
+AABB invariant is preserved regardless of sign. The parent-child containment
+property of the BVH is maintained since scale(merge(A,B)) == merge(scale(A),scale(B))
+holds for any non-zero scale.
+
+This unblocks use of TriMesh::scaled with negative scale (e.g. reflections).
+---
+diff --git a/src/partitioning/bvh/bvh_tree.rs b/src/partitioning/bvh/bvh_tree.rs
+index edc5c6c4211b91d97642eb0ff57e6109d1c79239..24c478c06a1afc6e2e498ab0a571a912d1fbbf2d 100644
+--- a/src/partitioning/bvh/bvh_tree.rs
++++ b/src/partitioning/bvh/bvh_tree.rs
+@@ -814,8 +814,12 @@ impl BvhNode {
+     /// - [`Bvh::scale`] - Scale an entire BVH tree
+     #[inline]
+     pub fn scale(&mut self, scale: &Vector<Real>) {
+-        self.mins.coords.component_mul_assign(scale);
+-        self.maxs.coords.component_mul_assign(scale);
++        let new_mins = self.mins.coords.component_mul(scale);
++        let new_maxs = self.maxs.coords.component_mul(scale);
++        // When scale has negative components, mins/maxs swap on those axes.
++        // Use component-wise inf/sup to maintain the AABB invariant (mins <= maxs).
++        self.mins.coords = new_mins.inf(&new_maxs);
++        self.maxs.coords = new_mins.sup(&new_maxs);
+     }
+ 
+     /// Calculates the volume of this node's AABB.
+@@ -2001,18 +2005,18 @@ impl Bvh {
+ 
+     /// Scales all AABBs in the tree by the given factors.
+     ///
+-    /// This multiplies all AABB coordinates (mins and maxs) by the corresponding components
+-    /// of the scale vector. This is useful when scaling an entire scene or changing coordinate
+-    /// systems.
++    /// Each AABB's coordinates are multiplied by the corresponding scale components, with
++    /// mins and maxs swapped on any axis where the scale is negative to preserve the
++    /// AABB invariant. This is useful when scaling an entire scene or changing coordinate
++    /// systems, including reflections.
+     ///
+     /// # Arguments
+     ///
+-    /// * `scale` - Per-axis scale factors (must all be positive)
++    /// * `scale` - Per-axis scale factors. Each component must be non-zero.
+     ///
+     /// # Panics
+     ///
+-    /// This function has undefined behavior if any scale component is negative or zero.
+-    /// Always use positive scale values.
++    /// Undefined behavior if any scale component is zero (degenerate AABB).
+     ///
+     /// # Example
+     ///

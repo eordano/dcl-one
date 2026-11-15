@@ -46,14 +46,7 @@ fn js_number(value: Option<&Value>) -> f64 {
         Some(Value::Null) => 0.0,
         Some(Value::Bool(b)) => f64::from(u8::from(*b)),
         Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
-        Some(Value::String(s)) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                0.0
-            } else {
-                trimmed.parse().unwrap_or(f64::NAN)
-            }
-        }
+        Some(Value::String(s)) => catalyst_shared::js::number_from_str(s),
         Some(Value::Array(items)) => match items.as_slice() {
             [] => 0.0,
             [one] => js_number(Some(one)),
@@ -78,5 +71,9 @@ mod tests {
         assert!(js_number(Some(&json!("three"))).is_nan());
         assert!(js_number(Some(&json!({}))).is_nan());
         assert_eq!(js_number(Some(&json!(true))), 1.0);
+        assert_eq!(js_number(Some(&json!("0x5"))), 5.0);
+        assert!(js_number(Some(&json!("inf"))).is_nan());
+        assert!(js_number(Some(&json!("infinity"))).is_nan());
+        assert_eq!(js_number(Some(&json!("\u{3000}4\u{FEFF}"))), 4.0);
     }
 }

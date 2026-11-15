@@ -1,0 +1,47 @@
+From 6cb2411933c7a4aafa2c0ed86107b631d583d97a
+Subject: Add a Disabled depth of field mode that keeps the effect active
+Origin: https://github.com/robtfm/bevy/commit/6cb2411933c7a4aafa2c0ed86107b631d583d97a
+Date: 2026-10-13T12:08:04+01:00
+
+No blur, but the component stays, so the transparent focus texture
+is still rendered and the view key still asks transparent materials
+to write it. Effects that read the focus target, such as the
+explorer's star pass hiding stars behind imposters, keep working
+when the user turns depth of field off. No pipelines are created,
+so the node skips the view.
+---
+diff --git a/crates/bevy_core_pipeline/src/dof/mod.rs b/crates/bevy_core_pipeline/src/dof/mod.rs
+index 11d9d6f0f82a5d7981b68cce14a520a13accbb97..b1ed472ec2ab524c25e80343a8ff91bd9da1d79b 100644
+--- a/crates/bevy_core_pipeline/src/dof/mod.rs
++++ b/crates/bevy_core_pipeline/src/dof/mod.rs
+@@ -148,6 +148,10 @@ pub enum DepthOfFieldMode {
+     /// If targeting native platforms, consider using [`DepthOfFieldMode::Bokeh`] instead.
+     #[default]
+     Gaussian,
++
++    /// No blur, but depth of field stays active: the transparent focus
++    /// texture is still rendered for other effects that read it.
++    Disabled,
+ }
+ 
+ /// Data about the depth of field effect that's uploaded to the GPU.
+@@ -601,7 +605,7 @@ pub fn prepare_depth_of_field_view_bind_group_layouts(
+         // If needed, create the bind group layout for the second bokeh pass,
+         // which takes two inputs. We only need to do this if bokeh is in use.
+         let dual_input = match depth_of_field.mode {
+-            DepthOfFieldMode::Gaussian => None,
++            DepthOfFieldMode::Gaussian | DepthOfFieldMode::Disabled => None,
+             DepthOfFieldMode::Bokeh => Some(render_device.create_bind_group_layout(
+                 Some("depth of field bind group layout (dual input)"),
+                 &BindGroupLayoutEntries::sequential(
+@@ -767,6 +771,10 @@ pub fn prepare_depth_of_field_pipelines(
+ 
+         // Go ahead and specialize the pipelines.
+         match depth_of_field.mode {
++            // no pipelines: the node skips views without them
++            DepthOfFieldMode::Disabled => {
++                commands.entity(entity).remove::<DepthOfFieldPipelines>();
++            }
+             DepthOfFieldMode::Gaussian => {
+                 commands
+                     .entity(entity)

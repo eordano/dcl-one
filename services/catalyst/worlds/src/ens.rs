@@ -98,15 +98,6 @@ pub fn resolvable(name: &str) -> bool {
     })
 }
 
-/// Whether a JSON-RPC error is the call's own revert.
-pub(crate) fn is_revert(e: &RpcError) -> bool {
-    matches!(e, RpcError::Response { code, message }
-    if *code == 3 || {
-        let m = message.to_ascii_lowercase();
-        m.contains("revert") || m.contains("vm execution error")
-    })
-}
-
 pub struct EnsResolver {
     http: Outbound,
     rpc_url: String,
@@ -302,7 +293,7 @@ pub(crate) fn call_params((contract, data): &Call) -> Value {
 fn decode(answer: Result<String, RpcError>) -> Result<Option<EvmAddress>, String> {
     let hex = match answer {
         Ok(hex) => hex,
-        Err(e) if is_revert(&e) => return Ok(None),
+        Err(e) if e.is_revert() => return Ok(None),
         Err(e) => return Err(format!("ENS ownerOf: {e}")),
     };
     let bytes = hex::decode(hex.trim_start_matches("0x"))

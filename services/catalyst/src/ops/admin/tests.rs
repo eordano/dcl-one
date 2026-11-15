@@ -37,12 +37,15 @@ pub(super) fn wallet(signer: &PrivateKeySigner) -> String {
     format!("{:#x}", signer.address())
 }
 
-async fn harness(
+/// The console state every suite builds on: content over a private temp
+/// storage, the shared session secret, `admins` as the allowlist and an idle
+/// job runner. Callers add their domains and routers.
+pub(super) async fn admin_state(
     pool: PgPool,
     writes_enabled: bool,
-    control: Option<SyncControl>,
     admins: &str,
-) -> (Router, SharedState) {
+    control: Option<SyncControl>,
+) -> State {
     let tmp = std::env::temp_dir().join(format!(
         "catalyst-ops-admin-{}-{}",
         std::process::id(),
@@ -62,13 +65,25 @@ async fn harness(
         eth_network: "mainnet".to_string(),
         writes_enabled,
     });
-    let state = Arc::new(State::new(
-        pool,
-        settings,
-        content,
-        Arc::new(Jobs::new()),
-        control,
-    ));
+    State::new(pool, settings, content, Arc::new(Jobs::new()), control)
+}
+
+/// A session cookie minted directly for `wallet`, skipping the SIWE round
+/// trip.
+pub(super) fn minted_cookie(state: &State, wallet: &str) -> String {
+    format!(
+        "cat_admin={}",
+        session::mint(&state.settings, wallet).unwrap()
+    )
+}
+
+async fn harness(
+    pool: PgPool,
+    writes_enabled: bool,
+    control: Option<SyncControl>,
+    admins: &str,
+) -> (Router, SharedState) {
+    let state = Arc::new(admin_state(pool, writes_enabled, admins, control).await);
     (router(state.clone()), state)
 }
 

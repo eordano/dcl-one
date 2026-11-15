@@ -16,6 +16,7 @@ use axum::extract::{Path, State};
 use serde_json::{Value, json};
 
 use crate::content::queries::{active_entity_docs_by_pointers, retain_non_denylisted};
+use crate::index::content_file_hash;
 use crate::shared::cache::TtlMap;
 
 use super::SharedState;
@@ -100,15 +101,7 @@ fn preview_wearable(entity: &Value, content_base: &str) -> Option<Value> {
         .and_then(|p| p.as_str())
         .or_else(|| entity.get("id").and_then(|i| i.as_str()))?;
 
-    let hash_of = |file: &str| -> Option<&str> {
-        entity
-            .get("content")?
-            .as_array()?
-            .iter()
-            .find(|c| c.get("file").and_then(|f| f.as_str()) == Some(file))?
-            .get("hash")?
-            .as_str()
-    };
+    let hash_of = |file: &str| content_file_hash(entity, file);
 
     let representations: Vec<Value> = entity
         .get("metadata")

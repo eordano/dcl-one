@@ -18,10 +18,7 @@ use crate::credits::history::{CreditOrdersOut, PurchasesOut, clamp_page};
 
 fn owner_of(signer: &str, wallet_id: &str) -> Result<String, ApiError> {
     let wallet = wallet_id.to_ascii_lowercase();
-    if !(wallet.len() == 42
-        && wallet.starts_with("0x")
-        && wallet[2..].bytes().all(|b| b.is_ascii_hexdigit()))
-    {
+    if !crate::types::is_hex_address(&wallet) {
         return Err(ApiError::bad_request("Invalid address"));
     }
     if signer != wallet {

@@ -17,7 +17,7 @@ use sqlx::PgPool;
 use crate::Address;
 use crate::comms::limits::RateLimitDecision;
 
-use super::friendship::{friendship_status, friendship_statuses};
+use super::friendship::{friendship_status, try_friendship_statuses};
 use super::http::CommError;
 use super::{SharedState, signed_path};
 
@@ -117,8 +117,12 @@ async fn require_accepted_friend(
     me: &Address,
     peer: &Address,
 ) -> Result<(), CommError> {
+    // A failed lookup is a server error, as the block query's below: an
+    // empty answer would refuse a friend with 403.
     let statuses =
-        friendship_statuses(pool, me, std::slice::from_ref(&peer.as_str().to_string())).await;
+        try_friendship_statuses(pool, me, std::slice::from_ref(&peer.as_str().to_string()))
+            .await
+            .map_err(super::http::database_error)?;
     let blocked: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM social.blocks \
          WHERE (blocker_address = $1 AND blocked_address = $2) \
@@ -353,6 +357,34 @@ mod tests {
             assert!(!accepted_for("0xpeer", &statuses));
         }
         assert!(!accepted_for("0xpeer", &HashMap::new()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_friendship_lookup_is_a_server_error_not_a_refusal() {
+        // A database of this test's own: the fault is a missing table.
+        let Some(pool) = crate::db::scratch::isolated_pool(1).await else {
+            return;
+        };
+        sqlx::query("DROP TABLE social.friendship_actions CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let me = Address::parse("0x00000000000000000000000000000000000000a1").unwrap();
+        let peer = Address::parse("0x00000000000000000000000000000000000000b2").unwrap();
+        let error = require_accepted_friend(&pool, &me, &peer)
+            .await
+            .expect_err("the lookup failed");
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // The community handlers' database envelope: one `message` string.
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let fields = body.as_object().expect("a JSON object");
+        assert_eq!(fields.len(), 1, "{body}");
+        assert!(fields["message"].is_string(), "{body}");
+        pool.close().await;
     }
 
     #[test]

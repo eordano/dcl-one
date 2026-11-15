@@ -12,6 +12,5 @@ explorer-rust:
           - 'rendering/bevy-explorer/source/local-harness/benchmark/**'
           - 'rendering/bevy-explorer/source/local-harness/presence/harness-util/**'
           - 'rendering/bevy-explorer/source/vendor/**'
-          - 'rendering/bevy-explorer/bevy/**'
-          - 'rendering/bevy-explorer/cargo-patches.toml'
-          - 'rendering/bevy-explorer/forks.toml'
+          - 'rendering/bevy-explorer/vendor/**'
+          - 'rendering/bevy-explorer/patches/**'

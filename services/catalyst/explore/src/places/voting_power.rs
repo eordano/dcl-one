@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::auth::is_eth_address;
 use crate::http::Outbound;
 
 /// `AbortSignal.timeout(10000)` (`Snapshot/utils.ts:92`).
@@ -104,11 +105,6 @@ pub fn score_from_response(body: &Value) -> i32 {
     )
 }
 
-/// validator.js `isEthereumAddress`: `^(0x)[0-9a-fA-F]{40}$`.
-fn is_ethereum_address(s: &str) -> bool {
-    s.len() == 42 && s.starts_with("0x") && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 /// The score API client: `None` as the endpoint asks nothing and scores
 /// every voter 0 (a node without the Snapshot leg). The outbound client is
 /// the one [`Client::with_http`] passed (the process's shared guarded client
@@ -158,7 +154,10 @@ impl Client {
     /// `fetchScore(address)`: the signer's voting power, 0 when it cannot be
     /// had (`Snapshot/utils.ts:72-105`).
     pub async fn fetch_score(&self, address: &str) -> f64 {
-        if !is_ethereum_address(address) {
+        // validator.js `isEthereumAddress` (`/^(0x)[0-9a-f]{40}$/i`) also
+        // takes a `0X` prefix, which no signer address the callers pass is
+        // spelled with.
+        if !is_eth_address(address) {
             return 0.0;
         }
         let Some(endpoint) = self.endpoint.as_deref() else {

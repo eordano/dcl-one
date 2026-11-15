@@ -1,0 +1,181 @@
+From 3216503ebfd067323a182550814be0fb159e4978
+Subject: auto-convert Rgba16Unorm textures
+Origin: https://github.com/robtfm/bevy/commit/3216503ebfd067323a182550814be0fb159e4978
+Date: 2025-06-20T11:56:41+01:00
+
+---
+diff --git a/crates/bevy_gltf/src/loader/mod.rs b/crates/bevy_gltf/src/loader/mod.rs
+index 031538c51f2e8d7fcc19e2bfddd09d7ee16ae90f..dbf113b6a147d2b92c7f1b577ff3539308746a43 100644
+--- a/crates/bevy_gltf/src/loader/mod.rs
++++ b/crates/bevy_gltf/src/loader/mod.rs
+@@ -514,20 +514,20 @@ async fn load_gltf<'a, 'b, 'c>(
+     // that the material's load context would no longer track those images as dependencies.
+     let mut _texture_handles = Vec::new();
+     // if gltf.textures().len() == 1 || cfg!(target_arch = "wasm32") {
+-        for texture in gltf.textures() {
+-            let parent_path = load_context.path().parent().unwrap();
+-            let image = load_image(
+-                texture,
+-                &buffer_data,
+-                &linear_textures,
+-                parent_path,
+-                loader.supported_compressed_formats,
+-                settings.load_materials,
++    for texture in gltf.textures() {
++        let parent_path = load_context.path().parent().unwrap();
++        let image = load_image(
++            texture,
++            &buffer_data,
++            &linear_textures,
++            parent_path,
++            loader.supported_compressed_formats,
++            settings.load_materials,
+             // )
+             // .await?;
+-            )?;
+-            image.process_loaded_texture(load_context, &mut _texture_handles);
+-        }
++        )?;
++        image.process_loaded_texture(load_context, &mut _texture_handles);
++    }
+     // } else {
+     //     #[cfg(not(target_arch = "wasm32"))]
+     //     IoTaskPool::get()
+@@ -982,6 +982,31 @@ fn load_image<'a, 'b>(
+                 ImageSampler::Descriptor(sampler_descriptor),
+                 render_asset_usages,
+             )?;
++
++            #[cfg(target_arch = "wasm32")]
++            let image = if image.texture_descriptor.format
++                == bevy_render::render_resource::TextureFormat::Rgba16Unorm
++            {
++                let data = image
++                    .data
++                    .unwrap()
++                    .chunks_exact(2)
++                    .map(|pair| {
++                        (u16::from_le_bytes([pair[0], pair[1]]) as f32 / u16::MAX as f32
++                            * u8::MAX as f32) as u8
++                    })
++                    .collect::<Vec<_>>();
++                Image::new(
++                    image.texture_descriptor.size,
++                    image.texture_descriptor.dimension,
++                    data,
++                    bevy_render::render_resource::TextureFormat::Rgba8Unorm,
++                    image.asset_usage,
++                )
++            } else {
++                image
++            };
++
+             Ok(ImageOrPath::Image {
+                 image,
+                 label: GltfAssetLabel::Texture(gltf_texture.index()),
+@@ -995,17 +1020,44 @@ fn load_image<'a, 'b>(
+             if let Ok(data_uri) = DataUri::parse(uri) {
+                 let bytes = data_uri.decode()?;
+                 let image_type = ImageType::MimeType(data_uri.mime_type);
++
++                let image = Image::from_buffer(
++                    #[cfg(all(debug_assertions, feature = "dds"))]
++                    name,
++                    &bytes,
++                    mime_type.map(ImageType::MimeType).unwrap_or(image_type),
++                    supported_compressed_formats,
++                    is_srgb,
++                    ImageSampler::Descriptor(sampler_descriptor),
++                    render_asset_usages,
++                )?;
++
++                #[cfg(target_arch = "wasm32")]
++                let image = if image.texture_descriptor.format
++                    == bevy_render::render_resource::TextureFormat::Rgba16Unorm
++                {
++                    let data = image
++                        .data
++                        .unwrap()
++                        .chunks_exact(2)
++                        .map(|pair| {
++                            (u16::from_le_bytes([pair[0], pair[1]]) as f32 / u16::MAX as f32
++                                * u8::MAX as f32) as u8
++                        })
++                        .collect::<Vec<_>>();
++                    Image::new(
++                        image.texture_descriptor.size,
++                        image.texture_descriptor.dimension,
++                        data,
++                        bevy_render::render_resource::TextureFormat::Rgba8Unorm,
++                        image.asset_usage,
++                    )
++                } else {
++                    image
++                };
++
+                 Ok(ImageOrPath::Image {
+-                    image: Image::from_buffer(
+-                        #[cfg(all(debug_assertions, feature = "dds"))]
+-                        name,
+-                        &bytes,
+-                        mime_type.map(ImageType::MimeType).unwrap_or(image_type),
+-                        supported_compressed_formats,
+-                        is_srgb,
+-                        ImageSampler::Descriptor(sampler_descriptor),
+-                        render_asset_usages,
+-                    )?,
++                    image,
+                     label: GltfAssetLabel::Texture(gltf_texture.index()),
+                 })
+             } else {
+diff --git a/crates/bevy_image/src/image_loader.rs b/crates/bevy_image/src/image_loader.rs
+index 4e4816b9b0a60765fcd6e695679f79f77ea3d36c..a634820e2436bc0f3dc42d1e6fb1134ce20863bc 100644
+--- a/crates/bevy_image/src/image_loader.rs
++++ b/crates/bevy_image/src/image_loader.rs
+@@ -149,7 +149,8 @@ impl AssetLoader for ImageLoader {
+                 )?)
+             }
+         };
+-        Ok(Image::from_buffer(
++
++        let image = Image::from_buffer(
+             #[cfg(all(debug_assertions, feature = "dds"))]
+             load_context.path().display().to_string(),
+             &bytes,
+@@ -162,7 +163,35 @@ impl AssetLoader for ImageLoader {
+         .map_err(|err| FileTextureError {
+             error: err,
+             path: format!("{}", load_context.path().display()),
+-        })?)
++        })?;
++
++        
++
++        #[cfg(target_arch = "wasm32")]
++        let image = if image.texture_descriptor.format
++            == wgpu_types::TextureFormat::Rgba16Unorm
++        {
++            let data = image
++                .data
++                .unwrap()
++                .chunks_exact(2)
++                .map(|pair| {
++                    (u16::from_le_bytes([pair[0], pair[1]]) as f32 / u16::MAX as f32
++                        * u8::MAX as f32) as u8
++                })
++                .collect::<Vec<_>>();
++            Image::new(
++                image.texture_descriptor.size,
++                image.texture_descriptor.dimension,
++                data,
++                wgpu_types::TextureFormat::Rgba8Unorm,
++                image.asset_usage,
++            )
++        } else {
++            image
++        };
++
++        Ok(image)
+     }
+ 
+     fn extensions(&self) -> &[&str] {

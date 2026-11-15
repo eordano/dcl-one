@@ -23,7 +23,7 @@ jobs:
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.event != 'pull_request' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     outputs:
       sha: ${{ steps.source.outputs.sha }}
       run_id: ${{ steps.source.outputs.run_id }}
@@ -48,7 +48,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.source.outputs.build-matrix) }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'ubuntu-26.04' && (vars.RUNNER_LINUX_X86 || 'ubuntu-26.04')
+      || matrix.runner == 'ubuntu-26.04-arm' && (vars.RUNNER_LINUX_ARM || 'ubuntu-26.04-arm')
+      || matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,7 +93,7 @@ jobs:
       fail-fast: false
       matrix:
         product: ${{ fromJSON(needs.source.outputs.products) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       QUAY_BEVY_EXPLORER_WEB_REPOSITORY: ${{ vars.QUAY_BEVY_EXPLORER_WEB_REPOSITORY }}

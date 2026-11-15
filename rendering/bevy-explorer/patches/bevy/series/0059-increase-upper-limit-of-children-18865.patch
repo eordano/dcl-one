@@ -1,0 +1,290 @@
+From 3584103a9ddec0da18a15f08aa0ad8638f406742
+Subject: Increase upper limit of `children!` (#18865)
+Origin: https://github.com/robtfm/bevy/commit/3584103a9ddec0da18a15f08aa0ad8638f406742
+Date: 2025-05-05T18:58:30-06:00
+
+# Objective
+
+Currently, `bevy_ecs`'s `children!` macro only supports spawning up to
+twelve children at once. Ideally there would be no limit.
+
+## Solution
+
+`children!` is limited because `SpawnableList`, [the primary trait bound
+here](https://docs.rs/bevy/0.16.0-rc.5/bevy/ecs/hierarchy/struct.Children.html#method.spawn),
+uses the fake variadics pattern on tuples of up to twelve elements.
+However, since a tuple itself implements `SpawnableList`, we can simply
+nest tuples of entities when we run out of room.
+
+This PR achieves this using `macro_rules` macros with a bit of brute
+force, following [some discussion on
+Discord](https://discord.com/channels/691052431525675048/692572690833473578/1362174415458013314).
+If we create patterns for lists of up to eleven bundles, then use a
+repetition pattern to handle the rest, we can "special-case" the
+recursion into a nested tuple.
+
+In principle, this would permit an arbitrary number of children, but
+Rust's recursion limits will cut things short at around 1400 elements by
+default. Of course, it's generally not a good idea to stick that many
+bundles in a single invocation, but it might be worth mentioning in the
+docs.
+
+## Implementation notes
+
+### Why are cases 0-11 expanded by hand?
+
+We could make use of a tertiary macro:
+
+```rs
+macro_rules! recursive_spawn {
+    // so that this...
+    ($a:expr, $b:expr) => {
+        (
+            $crate::spawn::Spawn($a),
+            $crate::spawn::Spawn($b),
+        )
+    };
+
+    // becomes this...
+    ($a:expr, $b:expr) => {
+        $crate::spawn_tuple!($a, $b)
+    };
+}
+```
+
+But I already feel a little bad exporting `recursive_spawn`. I'd really
+like to avoid exposing more internals, even if they are annotated with
+`#[doc(hidden)]`. If I had to guess, I'd say it'll also make the
+expansion a tiny bit slower.
+
+### Do we really need to handle up to twelve elements in the macro?
+
+The macro is a little long, but doing it this way maximizes the
+"flatness" of the types to be spawned. This should improve the codegen a
+bit and makes the macro output a little bit easier to look at.
+
+## Future work
+
+The `related!` macro is essentially the same as `children!`, so if this
+direction is accepted, `related!` should receive the same treatment. I
+imagine we'd want to extract out the `recursive_spawn` macro into its
+own file since it can be used for both. If this should be tackled in
+this PR, let me know!
+
+## Testing
+
+This change is fairly trivial, but I added a single test to verify that
+it compiles and nothing goes wrong once recursion starts happening. It's
+pretty easy to verify that the change works in practice -- just spawn
+over twelve entities as children at once!
+---
+diff --git a/crates/bevy_ecs/src/hierarchy.rs b/crates/bevy_ecs/src/hierarchy.rs
+index 6fd66b0bb6e08a7da9d96078870bd8f7085e1793..785a848b1add06fd50324f7f55be3e28f3137da7 100644
+--- a/crates/bevy_ecs/src/hierarchy.rs
++++ b/crates/bevy_ecs/src/hierarchy.rs
+@@ -506,7 +506,7 @@ pub fn validate_parent_has_component<C: Component>(
+ #[macro_export]
+ macro_rules! children {
+     [$($child:expr),*$(,)?] => {
+-       $crate::hierarchy::Children::spawn(($($crate::spawn::Spawn($child)),*))
++       $crate::hierarchy::Children::spawn($crate::recursive_spawn!($($child),*))
+     };
+ }
+ 
+@@ -763,6 +763,39 @@ mod tests {
+         assert_eq!(world.entity(id).get::<Children>().unwrap().len(), 2,);
+     }
+ 
++    #[test]
++    fn spawn_many_children() {
++        let mut world = World::new();
++
++        // 12 children should result in a flat tuple
++        let id = world
++            .spawn(children![(), (), (), (), (), (), (), (), (), (), (), ()])
++            .id();
++
++        assert_eq!(world.entity(id).get::<Children>().unwrap().len(), 12,);
++
++        // 13 will start nesting, but should nonetheless produce a flat hierarchy
++        let id = world
++            .spawn(children![
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++                (),
++            ])
++            .id();
++
++        assert_eq!(world.entity(id).get::<Children>().unwrap().len(), 13,);
++    }
++
+     #[test]
+     fn replace_children() {
+         let mut world = World::new();
+diff --git a/crates/bevy_ecs/src/spawn.rs b/crates/bevy_ecs/src/spawn.rs
+index 5235889ffba20512acaf0394174eb834a557a39e..d5014f22409fd9b0f908558f65841ff133430575 100644
+--- a/crates/bevy_ecs/src/spawn.rs
++++ b/crates/bevy_ecs/src/spawn.rs
+@@ -356,6 +356,151 @@ impl<T: RelationshipTarget> SpawnRelated for T {
+ #[macro_export]
+ macro_rules! related {
+     ($relationship_target:ty [$($child:expr),*$(,)?]) => {
+-       <$relationship_target>::spawn(($($crate::spawn::Spawn($child)),*))
++       <$relationship_target>::spawn($crate::recursive_spawn!($($child),*))
++    };
++}
++
++// A tail-recursive spawn utility.
++//
++// Since `SpawnableList` is only implemented for tuples
++// up to twelve elements long, this macro will nest
++// longer sequences recursively. By default, this recursion
++// will top out at around 1400 elements, but it would be
++// ill-advised to spawn that many entities with this method.
++//
++// For spawning large batches of entities at a time,
++// consider `SpawnIter` or eagerly spawning with `Commands`.
++#[macro_export]
++#[doc(hidden)]
++macro_rules! recursive_spawn {
++    // direct expansion
++    ($a:expr) => {
++        $crate::spawn::Spawn($a)
++    };
++    ($a:expr, $b:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++            $crate::spawn::Spawn($f),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++            $crate::spawn::Spawn($f),
++            $crate::spawn::Spawn($g),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++            $crate::spawn::Spawn($f),
++            $crate::spawn::Spawn($g),
++            $crate::spawn::Spawn($h),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $i:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++            $crate::spawn::Spawn($f),
++            $crate::spawn::Spawn($g),
++            $crate::spawn::Spawn($h),
++            $crate::spawn::Spawn($i),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $i:expr, $j:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++            $crate::spawn::Spawn($f),
++            $crate::spawn::Spawn($g),
++            $crate::spawn::Spawn($h),
++            $crate::spawn::Spawn($i),
++            $crate::spawn::Spawn($j),
++        )
++    };
++    ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $i:expr, $j:expr, $k:expr) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++            $crate::spawn::Spawn($f),
++            $crate::spawn::Spawn($g),
++            $crate::spawn::Spawn($h),
++            $crate::spawn::Spawn($i),
++            $crate::spawn::Spawn($j),
++            $crate::spawn::Spawn($k),
++        )
++    };
++
++    // recursive expansion
++    (
++        $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr,
++        $g:expr, $h:expr, $i:expr, $j:expr, $k:expr, $($rest:expr),*
++    ) => {
++        (
++            $crate::spawn::Spawn($a),
++            $crate::spawn::Spawn($b),
++            $crate::spawn::Spawn($c),
++            $crate::spawn::Spawn($d),
++            $crate::spawn::Spawn($e),
++            $crate::spawn::Spawn($f),
++            $crate::spawn::Spawn($g),
++            $crate::spawn::Spawn($h),
++            $crate::spawn::Spawn($i),
++            $crate::spawn::Spawn($j),
++            $crate::spawn::Spawn($k),
++            $crate::recursive_spawn!($($rest),*)
++        )
+     };
+ }

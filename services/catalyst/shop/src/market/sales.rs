@@ -481,10 +481,11 @@ pub(crate) async fn bounded_sales_rows(
             first: 0,
             skip: 0,
         };
-        let rows = readers::top_rows(state, network, url, Ttl::M5, &page, SUMMARY_MAX_SALES + 1)
-            .await
-            .map_err(|e| readers::upstream_failed(route, &e))?;
-        if rows.len() as i64 > SUMMARY_MAX_SALES {
+        let readers::Bounded::Complete(rows) =
+            readers::bounded_rows(state, network, url, Ttl::M5, &page, SUMMARY_MAX_SALES)
+                .await
+                .map_err(|e| readers::upstream_failed(route, &e))?
+        else {
             return Err(unavailable(
                 Source::CollectionsSubgraph(network),
                 &format!(
@@ -492,7 +493,7 @@ pub(crate) async fn bounded_sales_rows(
                     network.db_name()
                 ),
             ));
-        }
+        };
         out.extend(rows.into_iter().map(|row| (network, row)));
     }
     Ok(out)
@@ -585,6 +586,305 @@ mod tests {
         assert_eq!(rows[1].0.db_name(), "matic");
         assert_eq!(rows[0].1, json!({"id": "sale", "feesCollectorCut": "12"}));
         assert_eq!(rows[0].1, rows[1].1);
+        server.abort();
+    }
+
+    /// One network of [`bounded_source`]: how many sales the seller has, how
+    /// many consecutive sales share a timestamp, and whether every request
+    /// fails.
+    #[derive(Clone, Copy)]
+    struct Sales {
+        rows: i64,
+        ties: i64,
+        fail: bool,
+    }
+
+    fn sales(rows: i64, ties: i64) -> Sales {
+        Sales {
+            rows,
+            ties,
+            fail: false,
+        }
+    }
+
+    /// A request a source answered: `first`, `skip`, keyset bound or not.
+    type Requests = std::sync::Arc<std::sync::Mutex<Vec<(i64, i64, bool)>>>;
+
+    /// A collections subgraph that honours the graph's page bounds (`first`
+    /// up to 1000, `skip` up to 5000, refused past them), answering newest
+    /// first with ties in id order and applying a `timestamp_lte` bound.
+    fn source_route(spec: Sales, log: Requests) -> axum::routing::MethodRouter {
+        let rows: std::sync::Arc<Vec<Value>> = std::sync::Arc::new(
+            (0..spec.rows)
+                .map(|i| {
+                    json!({
+                        "id": format!("s{i:06}"),
+                        "type": "mint",
+                        "price": "1",
+                        "timestamp": (10_000_000 - i / spec.ties).to_string(),
+                        "searchContractAddress": "0xc",
+                        "searchItemId": "1",
+                    })
+                })
+                .collect(),
+        );
+        axum::routing::post(move |Json(body): Json<Value>| {
+            let rows = rows.clone();
+            let log = log.clone();
+            async move {
+                let vars = &body["variables"];
+                let first = vars["first"].as_i64().unwrap();
+                let skip = vars["skip"].as_i64().unwrap();
+                let bound = vars["where"]
+                    .get("timestamp_lte")
+                    .map(|v| v.as_str().unwrap().parse::<i64>().unwrap());
+                log.lock().unwrap().push((first, skip, bound.is_some()));
+                if spec.fail || first > 1000 || skip > 5000 {
+                    return (axum::http::StatusCode::BAD_REQUEST, "refused").into_response();
+                }
+                let ts = |r: &Value| readers::int_of(r, "timestamp");
+                let start = bound.map_or(0, |b| rows.partition_point(|r| ts(r) > b));
+                let from = (start + skip as usize).min(rows.len());
+                let to = (from + first as usize).min(rows.len());
+                Json(json!({ "data": { "sales": rows[from..to] } })).into_response()
+            }
+        })
+    }
+
+    /// A state reading Ethereum and Polygon sales from two bounded sources,
+    /// with each source's request log.
+    async fn bounded_source(
+        eth: Sales,
+        matic: Sales,
+    ) -> (SharedState, [Requests; 2], tokio::task::JoinHandle<()>) {
+        use super::super::tests::support::state_without_db_settings;
+        let logs: [Requests; 2] = Default::default();
+        let app = axum::Router::new()
+            .route("/eth", source_route(eth, logs[0].clone()))
+            .route("/matic", source_route(matic, logs[1].clone()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let state = state_without_db_settings(super::super::Settings {
+            eth_collections_subgraph_url: Some(format!("http://{addr}/eth")),
+            matic_collections_subgraph_url: Some(format!("http://{addr}/matic")),
+            ..super::super::Settings::for_tests()
+        });
+        state
+            .test_allow_loopback
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        (state, logs, server)
+    }
+
+    async fn parts(response: Response) -> (u16, Option<String>, Option<String>, Value) {
+        let header = |name| {
+            response
+                .headers()
+                .get(name)
+                .map(|v: &axum::http::HeaderValue| v.to_str().unwrap().to_string())
+        };
+        let (status, content_type, retry_after) = (
+            response.status().as_u16(),
+            header(axum::http::header::CONTENT_TYPE),
+            header(axum::http::header::RETRY_AFTER),
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            content_type,
+            retry_after,
+            serde_json::from_slice(&body).unwrap(),
+        )
+    }
+
+    /// The unavailable envelope the bounded reader answers for a seller past
+    /// `SUMMARY_MAX_SALES` on `network`.
+    async fn assert_over_limit(response: Response, network: &str, configure: &str) {
+        assert_eq!(
+            parts(response).await,
+            (
+                503,
+                Some("application/json".into()),
+                Some("60".into()),
+                json!({
+                    "error": "Service Unavailable",
+                    "message": format!("this seller has more than 25000 sales on {network}, more than the bounded reader summarises"),
+                    "source": format!("collections-subgraph:{network}"),
+                    "configure": configure,
+                })
+            )
+        );
+    }
+
+    const MAX: i64 = SUMMARY_MAX_SALES;
+
+    /// The bound decided on a small `max`: every row up to it, the overflow
+    /// at one row past it, on untied and tied orders.
+    #[tokio::test]
+    async fn bounded_rows_overflow_one_row_past_the_bound() {
+        use super::super::graph::Network;
+        const SMALL: i64 = 12;
+        for ties in [1, 7] {
+            for (count, complete) in [
+                (0, true),
+                (SMALL - 1, true),
+                (SMALL, true),
+                (SMALL + 1, false),
+                (3 * SMALL, false),
+            ] {
+                let (state, logs, server) =
+                    bounded_source(sales(count, ties), sales(0, ties)).await;
+                let url = Network::Ethereum.url(&state.index).unwrap();
+                let page = GraphPage {
+                    entity: "sales",
+                    filter_type: "Sale_filter",
+                    fields: SUMMARY_FIELDS,
+                    where_: json!({}),
+                    order_by: "timestamp",
+                    direction: "desc",
+                    first: 0,
+                    skip: 0,
+                };
+                let read =
+                    readers::bounded_rows(&state, Network::Ethereum, url, Ttl::M5, &page, SMALL)
+                        .await
+                        .unwrap();
+                match read {
+                    readers::Bounded::Complete(rows) => {
+                        assert!(
+                            complete,
+                            "{count} rows (ties {ties}) were presented as complete"
+                        );
+                        let ids: Vec<_> = rows.iter().map(|r| readers::str_of(r, "id")).collect();
+                        let expected: Vec<_> = (0..count).map(|i| format!("s{i:06}")).collect();
+                        assert_eq!(ids, expected, "ties {ties}");
+                    }
+                    readers::Bounded::Overflow => {
+                        assert!(!complete, "{count} rows (ties {ties}) overflowed");
+                    }
+                }
+                assert_eq!(
+                    *logs[0].lock().unwrap(),
+                    vec![(SMALL + 1, 0, false)],
+                    "one request for the bound and its probe row (ties {ties})"
+                );
+                server.abort();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_seller_past_the_bound_on_either_network_is_unavailable() {
+        assert_eq!(MAX, 25_000);
+        for (eth, matic, network, configure) in [
+            (MAX + 1, 0, "ethereum", "ETH_COLLECTIONS_SUBGRAPH_URL"),
+            (MAX, MAX + 1, "matic", "MATIC_COLLECTIONS_SUBGRAPH_URL"),
+        ] {
+            let (state, _, server) = bounded_source(sales(eth, 7), sales(matic, 7)).await;
+            match bounded_sales_rows(&state, json!({}), SUMMARY_FIELDS, "/test").await {
+                Ok(_) => panic!("a seller past the bound on {network} was presented as complete"),
+                Err(response) => assert_over_limit(response, network, configure).await,
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn an_in_limit_seller_reads_the_same_pages_and_the_bound_one_probe_more() {
+        let (state, logs, server) = bounded_source(sales(MAX - 1, 7), sales(MAX, 7)).await;
+        let rows = bounded_sales_rows(&state, json!({}), SUMMARY_FIELDS, "/test")
+            .await
+            .unwrap_or_else(|_| panic!("in limit"));
+        let on = |name: &str| rows.iter().filter(|(n, _)| n.db_name() == name).count();
+        assert_eq!((on("ethereum") as i64, on("matic") as i64), (MAX - 1, MAX));
+        let ids: std::collections::HashSet<_> = rows
+            .iter()
+            .map(|(n, r)| (n.db_name(), readers::str_of(r, "id")))
+            .collect();
+        assert_eq!(ids.len(), rows.len(), "no row read twice");
+        let below = logs[0].lock().unwrap().clone();
+        assert_eq!(below.len(), 25, "six skip pages, then keyset pages");
+        assert!(below.iter().all(|(first, _, _)| *first == 1000));
+        assert_eq!(
+            below[..6].iter().map(|r| r.1).collect::<Vec<_>>(),
+            vec![0, 1000, 2000, 3000, 4000, 5000]
+        );
+        assert!(
+            below[6..].iter().all(|r| r.2),
+            "past the skip window by keyset"
+        );
+        let at = logs[1].lock().unwrap().clone();
+        assert_eq!(at.len(), 26);
+        assert_eq!(at[..25], below[..25]);
+        let (first, skip, keyset) = at[25];
+        assert_eq!((first, keyset), (1, true), "the overflow probe is one row");
+        assert_eq!(skip, (MAX - 1) % 7 + 1, "past the rows tied at the cursor");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_failing_source_is_the_upstream_envelope_never_a_partial_summary() {
+        for (eth, matic) in [
+            (
+                sales(3, 1),
+                Sales {
+                    fail: true,
+                    ..sales(3, 1)
+                },
+            ),
+            (
+                Sales {
+                    fail: true,
+                    ..sales(3, 1)
+                },
+                sales(3, 1),
+            ),
+        ] {
+            let (state, _, server) = bounded_source(eth, matic).await;
+            match bounded_sales_rows(&state, json!({}), SUMMARY_FIELDS, "/test").await {
+                Ok(_) => panic!("a failing source was presented as complete"),
+                Err(response) => assert_eq!(
+                    parts(response).await,
+                    (
+                        503,
+                        Some("application/json".into()),
+                        None,
+                        json!({ "error": "Service Unavailable", "message": "upstream reader unavailable" })
+                    )
+                ),
+            }
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn both_summary_routes_refuse_an_over_limit_seller() {
+        let seller = "0x1111111111111111111111111111111111111111";
+        let query = || Query(pairs(&[("seller", seller)]));
+        let (state, _, server) = bounded_source(sales(MAX, 7), sales(4, 7)).await;
+        let (status, _, _, body) =
+            parts(get_sales_summary(State(state.clone()), query()).await).await;
+        assert_eq!((status, &body["data"]["total"]), (200, &json!(MAX + 4)));
+        let (status, _, _, body) =
+            parts(crate::proceeds::get_proceeds_summary(State(state), query()).await).await;
+        assert_eq!((status, &body["data"]["sales"]), (200, &json!(MAX + 4)));
+        server.abort();
+
+        let (state, _, server) = bounded_source(sales(4, 7), sales(MAX + 1, 7)).await;
+        assert_over_limit(
+            get_sales_summary(State(state.clone()), query()).await,
+            "matic",
+            "MATIC_COLLECTIONS_SUBGRAPH_URL",
+        )
+        .await;
+        assert_over_limit(
+            crate::proceeds::get_proceeds_summary(State(state), query()).await,
+            "matic",
+            "MATIC_COLLECTIONS_SUBGRAPH_URL",
+        )
+        .await;
         server.abort();
     }
 

@@ -103,12 +103,9 @@ impl ChannelConfig {
     /// The old service's `validate` plus the lowercase form the schema's
     /// wallet CHECKs expect; `Err` carries the message the wire answered.
     pub fn validate(&self) -> Result<(), &'static str> {
-        let wallet_ok = |w: &String| {
-            w.len() == 42 && w.starts_with("0x") && w[2..].bytes().all(|c| c.is_ascii_hexdigit())
-        };
         if self.members.len() > MAX_CHANNEL_MEMBERS
             || self.slow_mode > MAX_SLOW_MODE.as_secs()
-            || !self.members.iter().all(wallet_ok)
+            || !self.members.iter().all(|w| crate::auth::is_eth_address(w))
         {
             return Err("Use valid wallet addresses and a slow mode of up to one hour");
         }

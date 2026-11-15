@@ -14,11 +14,10 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 
 use super::console::{CONSOLE_ROUTES, Domains};
-use super::tests::{SECRET, audit_rows, cleanup, lazy_pool, send, session_cookie, wallet};
-use super::{RawSettings, Settings, State, router};
+use super::router;
+use super::tests::{admin_state, audit_rows, cleanup, lazy_pool, send, session_cookie, wallet};
 use crate::content::{ContentState, Settings as ContentSettings};
 use crate::http::Outbound;
-use crate::jobs::Jobs;
 use crate::storage::Storage;
 
 const TOKEN: &str = "console-test-bearer";
@@ -33,21 +32,10 @@ async fn storage() -> Arc<Storage> {
 }
 
 async fn app(pool: PgPool, ops_writes: bool, domains: Domains, admin: &str) -> Router {
-    let content = Arc::new(ContentState::new(
-        pool.clone(),
-        ContentSettings::for_tests(),
-        storage().await,
-    ));
-    let settings = Settings::parse(RawSettings {
-        session_secret: Some(SECRET.to_string()),
-        admin_addresses: admin.to_string(),
-        session_ttl_secs: 0,
-        cookie_insecure: true,
-        eth_network: "mainnet".to_string(),
-        writes_enabled: ops_writes,
-    });
     router(Arc::new(
-        State::new(pool, settings, content, Arc::new(Jobs::new()), None).with_domains(domains),
+        admin_state(pool, ops_writes, admin, None)
+            .await
+            .with_domains(domains),
     ))
 }
 

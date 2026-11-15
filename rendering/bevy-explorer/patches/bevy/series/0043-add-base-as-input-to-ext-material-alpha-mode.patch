@@ -1,0 +1,45 @@
+From 949683f459983a07b7619d43dad65f102cc8b619
+Subject: add base as input to ext material alpha_mode
+Origin: https://github.com/robtfm/bevy/commit/949683f459983a07b7619d43dad65f102cc8b619
+Date: 2026-01-12T17:20:42Z
+
+---
+diff --git a/crates/bevy_pbr/src/decal/forward.rs b/crates/bevy_pbr/src/decal/forward.rs
+index 2445c3e723f52d3c195d593cfb3d9844a9064c40..49a2a0e3aae59f2c1a898050231d6346bc9bcb9e 100644
+--- a/crates/bevy_pbr/src/decal/forward.rs
++++ b/crates/bevy_pbr/src/decal/forward.rs
+@@ -120,7 +120,7 @@ impl AsBindGroupShaderType<ForwardDecalMaterialExtUniform> for ForwardDecalMater
+ }
+ 
+ impl MaterialExtension for ForwardDecalMaterialExt {
+-    fn alpha_mode() -> Option<AlphaMode> {
++    fn alpha_mode(_: AlphaMode) -> Option<AlphaMode> {
+         Some(AlphaMode::Blend)
+     }
+ 
+diff --git a/crates/bevy_pbr/src/extended_material.rs b/crates/bevy_pbr/src/extended_material.rs
+index e01dd0ff14ef36c36f9765bc3b2f8832542b419f..05e12ed2385be1ac504d94109eb2789d477991df 100644
+--- a/crates/bevy_pbr/src/extended_material.rs
++++ b/crates/bevy_pbr/src/extended_material.rs
+@@ -47,7 +47,7 @@ pub trait MaterialExtension: Asset + AsBindGroup + Clone + Sized {
+     }
+ 
+     // Returns this material’s AlphaMode. If None is returned, the base material alpha mode will be used.
+-    fn alpha_mode() -> Option<AlphaMode> {
++    fn alpha_mode(_base_mode: AlphaMode) -> Option<AlphaMode> {
+         None
+     }
+ 
+@@ -302,9 +302,10 @@ impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
+     }
+ 
+     fn alpha_mode(&self) -> AlphaMode {
+-        match E::alpha_mode() {
++        let base_mode = B::alpha_mode(&self.base);
++        match E::alpha_mode(base_mode) {
+             Some(specified) => specified,
+-            None => B::alpha_mode(&self.base),
++            None => base_mode,
+         }
+     }
+ 

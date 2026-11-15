@@ -1,0 +1,126 @@
+From 5f85f2e48174620090860d395c1c6c62ba81dcf7
+Subject: bevy_image: trigger reduce_image_sizes on dimensions, not bytes
+Origin: https://github.com/robtfm/bevy/commit/5f85f2e48174620090860d395c1c6c62ba81dcf7
+Date: 2026-05-21T13:21:22+01:00
+
+Switch the `reduce_image_sizes` resize trigger from total-byte threshold
+to per-dimension threshold. Catches long-and-thin oversized textures
+that the byte check missed when they sat under 4MB total but exceeded
+wgpu's per-device dim cap (causing `create_texture` validation panics
+mid-bake — observed at 17855x100 RGBA8).
+
+Parameterise the resize target as a single per-platform constant:
+wasm keeps the aggressive 1024-pixel cap (memory-bounded); native uses
+8192, which is just below wgpu's typical 16384 hard cap on every
+desktop GPU. Downstream BC7 reprocessing replaces textures with <=1024
+anyway, so native fidelity at this stage doesn't matter — the resize
+is purely to dodge the validation panic on initial load.
+---
+diff --git a/crates/bevy_image/src/image_loader.rs b/crates/bevy_image/src/image_loader.rs
+index ccc83b5b8a256df206d1b9740b5ae433a80e6240..7f3b2b0021070d8d90e7e92a872aab8105be7eff 100644
+--- a/crates/bevy_image/src/image_loader.rs
++++ b/crates/bevy_image/src/image_loader.rs
+@@ -1,5 +1,7 @@
+ use crate::image::{Image, ImageFormat, ImageType, TextureError};
+-use bevy_asset::{AssetLoader, LoadContext, RenderAssetTransferPriority, RenderAssetUsages, io::Reader};
++use bevy_asset::{
++    io::Reader, AssetLoader, LoadContext, RenderAssetTransferPriority, RenderAssetUsages,
++};
+ use thiserror::Error;
+ 
+ use super::{CompressedImageFormats, ImageSampler};
+@@ -190,48 +192,58 @@ impl AssetLoader for ImageLoader {
+         };
+ 
+         #[cfg(feature = "reduce_image_sizes")]
+-        let image = if image.data.as_ref().unwrap().len() > 1024 * 1024 * 4 {
+-            use crate::image::TextureFormatPixelInfo;
++        let image = {
++            // wasm shrinks aggressively for memory; native shrinks only to
++            // dodge wgpu's per-device texture-dim cap (downstream BC7
++            // reprocess replaces with <=1024 anyway).
++            #[cfg(target_arch = "wasm32")]
++            const MAX_BASE_SIZE: u32 = 1024;
++            #[cfg(not(target_arch = "wasm32"))]
++            const MAX_BASE_SIZE: u32 = 8192;
++            let size = image.texture_descriptor.size;
++            if size.width > MAX_BASE_SIZE || size.height > MAX_BASE_SIZE {
++                use crate::image::TextureFormatPixelInfo;
+ 
+-            let is_srgb = image.texture_descriptor.format.is_srgb();
+-            let asset_usage = image.asset_usage;
+-            let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
++                let is_srgb = image.texture_descriptor.format.is_srgb();
++                let asset_usage = image.asset_usage;
++                let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
+ 
+-            let empty_image = Image {
+-                data: None,
+-                texture_descriptor: image.texture_descriptor.clone(),
+-                sampler: image.sampler.clone(),
+-                texture_view_descriptor: image.texture_view_descriptor.clone(),
+-                asset_usage: image.asset_usage,
+-                transfer_priority: image.transfer_priority,
+-            };
++                let empty_image = Image {
++                    data: None,
++                    texture_descriptor: image.texture_descriptor.clone(),
++                    sampler: image.sampler.clone(),
++                    texture_view_descriptor: image.texture_view_descriptor.clone(),
++                    asset_usage: image.asset_usage,
++                    transfer_priority: image.transfer_priority,
++                };
+ 
+-            match image.try_into_dynamic() {
+-                Ok(dyn_image) => {
+-
+-                    let dyn_image = dyn_image.resize(
+-                        1024 * 4 / pixel_size,
+-                        1024 * 4 / pixel_size,
+-                        image::imageops::FilterType::CatmullRom,
+-                    );
+-                    let resized_image = Image::from_dynamic(dyn_image, is_srgb, asset_usage);
+-                    let mut texture_descriptor = resized_image.texture_descriptor;
+-                    texture_descriptor.usage = empty_image.texture_descriptor.usage;
+-                    texture_descriptor.view_formats = empty_image.texture_descriptor.view_formats;
+-                    Image {
+-                        data: resized_image.data,
+-                        texture_descriptor,
+-                        ..empty_image
++                match image.try_into_dynamic() {
++                    Ok(dyn_image) => {
++                        let dyn_image = dyn_image.resize(
++                            MAX_BASE_SIZE * 4 / pixel_size,
++                            MAX_BASE_SIZE * 4 / pixel_size,
++                            image::imageops::FilterType::CatmullRom,
++                        );
++                        let resized_image = Image::from_dynamic(dyn_image, is_srgb, asset_usage);
++                        let mut texture_descriptor = resized_image.texture_descriptor;
++                        texture_descriptor.usage = empty_image.texture_descriptor.usage;
++                        texture_descriptor.view_formats =
++                            empty_image.texture_descriptor.view_formats;
++                        Image {
++                            data: resized_image.data,
++                            texture_descriptor,
++                            ..empty_image
++                        }
++                    }
++                    Err(e) => {
++                        let image = e.image();
++                        tracing::warn!("failed to resize {:?}", image.texture_descriptor.format);
++                        image
+                     }
+                 }
+-                Err(e) => {
+-                    let image = e.image();
+-                    tracing::warn!("failed to resize {:?}", image.texture_descriptor.format);
+-                    image
+-                }
++            } else {
++                image
+             }
+-        } else {
+-            image
+         };
+ 
+         let image = Image {

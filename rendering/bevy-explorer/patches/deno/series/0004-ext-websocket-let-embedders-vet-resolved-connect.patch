@@ -1,0 +1,135 @@
+From 4ecaf52e29460848d24b8300ec769e8b184dba47
+Subject: ext/websocket: let embedders vet resolved connect addresses
+Origin: https://github.com/robtfm/deno/commit/4ecaf52e29460848d24b8300ec769e8b184dba47
+Date: 2026-08-11T16:56:31+01:00
+
+Add WebSocketPermissions::check_resolved (default allow-all). handshake_websocket resolves the host once and dials exactly the vetted addresses, keeping the hostname for TLS SNI, so an embedder enforcing an SSRF policy gets checked==dialled.
+---
+diff --git a/ext/websocket/lib.rs b/ext/websocket/lib.rs
+index 9e320040b995563ab09e2fdc505ebfbf78cc5862..bce4006f72503baf033607d8af7e663dbaeb6298 100644
+--- a/ext/websocket/lib.rs
++++ b/ext/websocket/lib.rs
+@@ -1,6 +1,7 @@
+ // Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
+ use crate::stream::WebSocketStream;
+ use bytes::Bytes;
++use std::net::SocketAddr;
+ use deno_core::anyhow::bail;
+ use deno_core::error::invalid_hostname;
+ use deno_core::error::type_error;
+@@ -96,6 +97,19 @@ pub trait WebSocketPermissions {
+     _url: &url::Url,
+     _api_name: &str,
+   ) -> Result<(), AnyError>;
++
++  /// Validate the addresses a WebSocket is about to be dialled at, after the hostname has
++  /// been resolved. Because these are the exact addresses the handshake then connects to,
++  /// an embedder that enforces an SSRF policy rejects here and the checked answer is the
++  /// dialled answer — which a URL-only pre-flight cannot guarantee against a rebinding
++  /// nameserver. The default allows everything (plain resolve-and-connect).
++  fn check_resolved(
++    &mut self,
++    _addrs: &[SocketAddr],
++    _api_name: &str,
++  ) -> Result<(), AnyError> {
++    Ok(())
++  }
+ }
+ 
+ impl WebSocketPermissions for deno_permissions::PermissionsContainer {
+@@ -163,7 +177,7 @@ pub struct CreateResponse {
+   extensions: String,
+ }
+ 
+-async fn handshake_websocket(
++async fn handshake_websocket<WP: WebSocketPermissions + 'static>(
+   state: &Rc<RefCell<OpState>>,
+   uri: &Uri,
+   protocols: &str,
+@@ -196,17 +210,28 @@ async fn handshake_websocket(
+ 
+   let request = request.body(http_body_util::Empty::new())?;
+   let domain = &uri.host().unwrap().to_string();
+-  let port = &uri.port_u16().unwrap_or(match uri.scheme_str() {
++  let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
+     Some("wss") => 443,
+     Some("ws") => 80,
+     _ => unreachable!(),
+   });
+-  let addr = format!("{domain}:{port}");
++
++  // Resolve once here, let the permissions object vet the resolved addresses, then dial
++  // exactly those — so the checked answer is the dialled answer (closing the DNS-rebind
++  // window). `domain` is still used for TLS SNI / the `Host` header below; the connect target
++  // is `addrs`, never a re-resolution of `domain`.
++  let addrs: Vec<SocketAddr> = tokio::net::lookup_host((domain.as_str(), port))
++    .await?
++    .collect();
++  {
++    let mut s = state.borrow_mut();
++    s.borrow_mut::<WP>().check_resolved(&addrs, "WebSocket")?;
++  }
+ 
+   let res = match uri.scheme_str() {
+-    Some("ws") => handshake_http1_ws(request, &addr).await?,
++    Some("ws") => handshake_http1_ws(request, &addrs).await?,
+     Some("wss") => {
+-      match handshake_http1_wss(state, request, domain, &addr).await {
++      match handshake_http1_wss(state, request, domain, &addrs).await {
+         Ok(res) => res,
+         Err(_) => {
+           handshake_http2_wss(
+@@ -217,7 +242,7 @@ async fn handshake_websocket(
+             protocols,
+             domain,
+             &headers,
+-            &addr,
++            &addrs,
+           )
+           .await?
+         }
+@@ -230,9 +255,9 @@ async fn handshake_websocket(
+ 
+ async fn handshake_http1_ws(
+   request: Request<http_body_util::Empty<Bytes>>,
+-  addr: &String,
++  addrs: &[SocketAddr],
+ ) -> Result<(WebSocket<WebSocketStream>, http::HeaderMap), AnyError> {
+-  let tcp_socket = TcpStream::connect(addr).await?;
++  let tcp_socket = TcpStream::connect(addrs).await?;
+   handshake_connection(request, tcp_socket).await
+ }
+ 
+@@ -240,9 +265,9 @@ async fn handshake_http1_wss(
+   state: &Rc<RefCell<OpState>>,
+   request: Request<http_body_util::Empty<Bytes>>,
+   domain: &str,
+-  addr: &str,
++  addrs: &[SocketAddr],
+ ) -> Result<(WebSocket<WebSocketStream>, http::HeaderMap), AnyError> {
+-  let tcp_socket = TcpStream::connect(addr).await?;
++  let tcp_socket = TcpStream::connect(addrs).await?;
+   let tls_config = create_ws_client_config(state, SocketUse::Http1Only)?;
+   let dnsname = ServerName::try_from(domain.to_string())
+     .map_err(|_| invalid_hostname(domain))?;
+@@ -265,9 +290,9 @@ async fn handshake_http2_wss(
+   protocols: &str,
+   domain: &str,
+   headers: &Option<Vec<(ByteString, ByteString)>>,
+-  addr: &str,
++  addrs: &[SocketAddr],
+ ) -> Result<(WebSocket<WebSocketStream>, http::HeaderMap), AnyError> {
+-  let tcp_socket = TcpStream::connect(addr).await?;
++  let tcp_socket = TcpStream::connect(addrs).await?;
+   let tls_config = create_ws_client_config(state, SocketUse::Http2Only)?;
+   let dnsname = ServerName::try_from(domain.to_string())
+     .map_err(|_| invalid_hostname(domain))?;
+@@ -426,7 +451,7 @@ where
+ 
+   let uri: Uri = url.parse()?;
+ 
+-  let handshake = handshake_websocket(&state, &uri, &protocols, headers)
++  let handshake = handshake_websocket::<WP>(&state, &uri, &protocols, headers)
+     .map_err(|err| {
+       AnyError::from(DomExceptionNetworkError::new(&format!(
+         "failed to connect to WebSocket: {err}"

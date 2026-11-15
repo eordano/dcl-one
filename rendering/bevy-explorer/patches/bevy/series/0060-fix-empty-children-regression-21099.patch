@@ -1,0 +1,45 @@
+From 4c108e72ece792f3d134454dcd047e1031e70054
+Subject: Fix empty children regression (#21099)
+Origin: https://github.com/robtfm/bevy/commit/4c108e72ece792f3d134454dcd047e1031e70054
+Date: 2025-09-17T17:44:55+01:00
+
+## Objective
+
+#18865 introduced a regression for an empty invocation of `children!`
+and `related!`. The `recursive_spawn` macro has no case for zero inputs,
+so the compiler rejects `children![]`. Whether this is particularly
+meaningful isn't important; there are a number of situations in which
+you might want your code to compile even with an empty set of children.
+
+## Solution
+
+A case has been added to `recursive_spawn` for no inputs, returning a
+unit. This matches the previous behavior for `children!` and `related!`
+exactly.
+---
+diff --git a/crates/bevy_ecs/src/hierarchy.rs b/crates/bevy_ecs/src/hierarchy.rs
+index 785a848b1add06fd50324f7f55be3e28f3137da7..20eb6a3aa8dd8678c9c153902ce3c88a5c87fc42 100644
+--- a/crates/bevy_ecs/src/hierarchy.rs
++++ b/crates/bevy_ecs/src/hierarchy.rs
+@@ -767,6 +767,9 @@ mod tests {
+     fn spawn_many_children() {
+         let mut world = World::new();
+ 
++        // ensure an empty set can be mentioned
++        world.spawn(children![]);
++
+         // 12 children should result in a flat tuple
+         let id = world
+             .spawn(children![(), (), (), (), (), (), (), (), (), (), (), ()])
+diff --git a/crates/bevy_ecs/src/spawn.rs b/crates/bevy_ecs/src/spawn.rs
+index d5014f22409fd9b0f908558f65841ff133430575..00628e770b16df7c792206fe7ac82a235d3affce 100644
+--- a/crates/bevy_ecs/src/spawn.rs
++++ b/crates/bevy_ecs/src/spawn.rs
+@@ -374,6 +374,7 @@ macro_rules! related {
+ #[doc(hidden)]
+ macro_rules! recursive_spawn {
+     // direct expansion
++    () => { () };
+     ($a:expr) => {
+         $crate::spawn::Spawn($a)
+     };

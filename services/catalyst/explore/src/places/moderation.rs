@@ -846,11 +846,10 @@ mod tests {
     /// drops only aged terminal rows.
     #[tokio::test]
     async fn notices_are_captured_durably_and_delivered_by_the_worker() {
-        use crate::moderation_hooks::{Endpoints, TEST_LOCK, cleanup, run_once};
+        use crate::moderation_hooks::{Endpoints, cleanup, run_once};
         use chrono::NaiveDateTime;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let _guard = TEST_LOCK.lock().await;
         let to = |endpoint: Option<&str>| Endpoints {
             events: None,
             places: endpoint.map(str::to_owned),
@@ -860,7 +859,8 @@ mod tests {
             jump_in_site_url: "https://decentraland.org/jump".into(),
             asset_base: "https://example.org/events".into(),
         };
-        let Some(pool) = crate::db::scratch::pool(4).await else {
+        // Rewrites the activation singleton: its own database.
+        let Some(pool) = crate::db::scratch::isolated_pool(4).await else {
             return;
         };
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1132,33 +1132,6 @@ mod tests {
             vec![("disabled".into(), 2)],
             "a deliverable retry outlives retention; completed and exhausted rows do not"
         );
-
-        sqlx::query(
-            "DELETE FROM explore.moderation_hooks WHERE channel = 'places' AND subject = $1",
-        )
-        .bind(&id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query("DELETE FROM explore.moderation_hook_activation")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM explore.place_content_ratings WHERE entity_id = $1")
-            .bind(&id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM explore.place_moderation WHERE place_id = $1")
-            .bind(&id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM explore.place WHERE id = $1")
-            .bind(&id)
-            .execute(&pool)
-            .await
-            .unwrap();
         server.abort();
     }
 }

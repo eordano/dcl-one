@@ -14,7 +14,8 @@ module.exports = {
       }
     ]
   },
-  transformIgnorePatterns: ['node_modules/(?!(@dcl/(ecs-math|quests-client))/)'],
+  // @noble/hashes is ESM only; library/hashing gets it from a pnpm store, so its path has two node_modules parts
+  transformIgnorePatterns: ['node_modules/(?!(\\.pnpm|@noble/hashes|@dcl/(ecs-math|quests-client))/)'],
   coverageDirectory: 'coverage',
   coverageThreshold: {
     global: {

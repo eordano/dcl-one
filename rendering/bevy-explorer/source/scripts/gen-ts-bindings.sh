@@ -14,6 +14,9 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 case "$(uname -s)" in
 MINGW* | MSYS*) root="$(cd "$root" && pwd -W)" ;;
 esac
+# Cargo reads Bevy and the forked crates from trees that are not tracked: write the ones that are
+# missing or stale.
+sh "$(dirname "$0")/patched-sources.sh"
 out="$root/../../../library/explorer-core/engine/generated"
 rm -rf "$out"
 mkdir -p "$out"

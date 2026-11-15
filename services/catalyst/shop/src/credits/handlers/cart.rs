@@ -184,10 +184,7 @@ pub(crate) fn validate_item_id(raw: &str) -> Result<String, ApiError> {
 
 pub(crate) fn validate_collection(raw: &str) -> Result<String, ApiError> {
     let s = raw.trim().to_ascii_lowercase();
-    let is_addr = s
-        .strip_prefix("0x")
-        .is_some_and(|hex| hex.len() == 40 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
-    if !is_addr {
+    if !crate::types::is_hex_address(&s) {
         return Err(ApiError::bad_request(
             "invalid collection (expected 0x + 40 hex)",
         ));

@@ -198,11 +198,8 @@ impl IntoResponse for ApiError {
 /// other refusal is the static 401 body.
 fn signed_fetch_error(e: SignedFetchError) -> ApiError {
     match e {
-        SignedFetchError::MalformedChain { detail }
-            if detail.starts_with("invalid metadata content")
-                || detail.contains("non-canonical metadata") =>
-        {
-            ApiError::bad_request("invalid_signer", detail)
+        SignedFetchError::MalformedChain { ref detail } if e.is_metadata_refusal() => {
+            ApiError::bad_request("invalid_signer", detail.clone())
         }
         other => {
             tracing::debug!(error = %other, "signed-fetch verification failed for an outfits route");
@@ -395,16 +392,10 @@ pub fn can_read(outfit: &Outfit, caller: Option<&str>, settings: &Settings) -> b
 fn js_number_or(raw: Option<&String>, default: i64) -> i64 {
     match raw {
         None => default,
-        Some(s) => {
-            let t = s.trim();
-            if t.is_empty() {
-                return default;
-            }
-            match t.parse::<f64>() {
-                Ok(n) if n.is_finite() && n.trunc() != 0.0 => n.trunc() as i64,
-                _ => default,
-            }
-        }
+        Some(s) => match catalyst_shared::js::number_from_str(s) {
+            n if n.is_finite() && n.trunc() != 0.0 => n.trunc() as i64,
+            _ => default,
+        },
     }
 }
 

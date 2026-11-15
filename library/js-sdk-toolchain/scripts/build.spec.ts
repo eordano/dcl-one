@@ -26,6 +26,7 @@ import {
   SDK_COMMANDS_PATH
 } from './common'
 import {
+  PNPM,
   copyFile,
   ensureFileExists,
   ensureFileExistsSilent,
@@ -48,7 +49,6 @@ flow('build-all', () => {
   commonChecks()
 
   flow('@dcl/js-runtime', () => {
-    itExecutes('npm i --silent', ECS7_PATH)
 
     it('compile protos', async () => {
       const rpcProtoPath = path.resolve(__dirname, 'rpc-api-generation', 'src', 'proto')
@@ -73,7 +73,6 @@ flow('build-all', () => {
 
   flow('@dcl/ecs build', () => {
     itDeletesFolder('dist', ECS7_PATH)
-    itExecutes('npm i --silent', ECS7_PATH)
     compileEcsComponents(
       `${ECS7_PATH}/src/components`,
       `${process.cwd()}/node_modules/@dcl/protocol/proto/decentraland/sdk/components`,
@@ -95,7 +94,7 @@ flow('build-all', () => {
       ])
     })
 
-    itExecutes('npm run build --silent', ECS7_PATH)
+    itExecutes(`${PNPM} --silent run build`, ECS7_PATH)
     it('check file exists', () => {
       ensureFileExists('dist/index.d.ts', ECS7_PATH)
       ensureFileExists('dist/index.js', ECS7_PATH)
@@ -103,9 +102,7 @@ flow('build-all', () => {
   })
 
   flow('@dcl/react-ecs', () => {
-    itExecutes('npm i --silent', REACT_ECS)
-    itExecutes(`npm install --silent ${ECS7_PATH}`, REACT_ECS)
-    itExecutes('npm run build --silent', REACT_ECS)
+    itExecutes(`${PNPM} --silent run build`, REACT_ECS)
     it('check file exists', () => {
       ensureFileExists('dist/index.js', REACT_ECS)
       ensureFileExists('dist/index.d.ts', REACT_ECS)
@@ -114,10 +111,8 @@ flow('build-all', () => {
 
   flow('@dcl/sdk-commands build', () => {
     itDeletesFolder('dist', SDK_COMMANDS_PATH)
-    itExecutes(`npm i --silent`, SDK_COMMANDS_PATH)
 
-    // install required dependencies
-    itExecutes('npm run build --silent', SDK_COMMANDS_PATH)
+    itExecutes(`${PNPM} --silent run build`, SDK_COMMANDS_PATH)
 
     it('check files exists', () => {
       ensureFileExists('dist/index.js', SDK_COMMANDS_PATH)
@@ -130,17 +125,10 @@ flow('build-all', () => {
 
   flow('@dcl/sdk build', () => {
     itDeletesFolder('dist', SDK_PATH)
-    itExecutes(`npm i --silent`, SDK_PATH)
 
     itDeletesGlob('types/*.d.ts', SDK_PATH)
 
-    // install required dependencies
-    itExecutes(`npm install --silent ${SDK_COMMANDS_PATH}`, SDK_PATH)
-    itExecutes(`npm install --silent ${JS_RUNTIME}`, SDK_PATH)
-    itExecutes(`npm install --silent ${ECS7_PATH}`, SDK_PATH)
-    itExecutes(`npm install --silent ${REACT_ECS}`, SDK_PATH)
-
-    itExecutes('npm run build --silent', SDK_PATH)
+    itExecutes(`${PNPM} --silent run build`, SDK_PATH)
 
     it('check files exists', () => {
       ensureFileExists('index.js', SDK_PATH)
@@ -158,13 +146,8 @@ flow('build-all', () => {
     itDeletesFolder('dist', PLAYGROUND_ASSETS_PATH)
     itDeletesFolder('bin', PLAYGROUND_ASSETS_PATH)
 
-    itExecutes(`npm i --silent`, PLAYGROUND_ASSETS_PATH)
-
-    // install required dependencies
-    itExecutes(`npm install --silent ${SDK_PATH}`, PLAYGROUND_ASSETS_PATH)
-
     if (process.env.GITHUB_STEP_SUMMARY) {
-      itExecutes('npm run build --silent', PLAYGROUND_ASSETS_PATH)
+      itExecutes(`${PNPM} --silent run build`, PLAYGROUND_ASSETS_PATH)
       it('set the output as summary', async () => {
         const file = path.resolve(PLAYGROUND_ASSETS_PATH, 'etc/playground-assets.api.md')
         if (!existsSync(file)) throw new Error(`${file} doesn't exist`)
@@ -172,7 +155,7 @@ flow('build-all', () => {
       })
     } else {
       itDeletesGlob('etc/*', PLAYGROUND_ASSETS_PATH)
-      itExecutes('npm run build-local --silent', PLAYGROUND_ASSETS_PATH)
+      itExecutes(`${PNPM} --silent run build-local`, PLAYGROUND_ASSETS_PATH)
     }
 
     it('check no ae-forgotten-export are present in bundle file', async () => {

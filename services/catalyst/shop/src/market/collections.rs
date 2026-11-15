@@ -55,10 +55,10 @@ pub fn marketplace_contracts(chain_id: ChainId) -> Vec<Contract> {
     };
     use NftCategory::*;
     vec![
-        mk("LAND", "0xf87e31492faf9a91b02ee0deaad50d51d56d5d4d", Parcel),
+        mk("LAND", crate::land_authz::LAND_REGISTRY_MAINNET, Parcel),
         mk(
             "Estates",
-            "0x959e104e1a4db6317fa58f8295f586e1a978c297",
+            crate::land_authz::ESTATE_REGISTRY_MAINNET,
             Estate,
         ),
         mk("Names", "0x2a187453064356c898cae034eaed119e1663acb8", Ens),

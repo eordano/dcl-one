@@ -27,8 +27,9 @@
     "protocVersion": "22.2"
   },
   "dependencies": {
+    "long": "5.3.2",
     "@dcl/ts-proto": "1.154.0",
-    "protobufjs": "7.2.4"
+    "protobufjs": "7.6.6"
   },
   "files": [
     "proto/decentraland",

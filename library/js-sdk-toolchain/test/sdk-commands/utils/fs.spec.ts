@@ -1,5 +1,5 @@
-jest.mock('../../../packages/@dcl/sdk-commands/node_modules/extract-zip')
-import * as extractZip from '../../../packages/@dcl/sdk-commands/node_modules/extract-zip'
+jest.mock('extract-zip')
+import * as extractZip from 'extract-zip'
 import * as fsUtils from '../../../packages/@dcl/sdk-commands/src/logic/fs'
 import { createFsComponent } from '../../../packages/@dcl/sdk-commands/src/components/fs'
 import { createFetchComponent } from '../../../packages/@dcl/sdk-commands/src/components/fetch'

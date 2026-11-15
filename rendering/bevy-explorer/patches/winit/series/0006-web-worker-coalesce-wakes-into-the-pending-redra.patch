@@ -1,0 +1,62 @@
+From 29c7b96d1baa87be9c31c34228dee1937503be76
+Subject: web worker: coalesce wakes into the pending redraw's cycle
+Origin: https://github.com/robtfm/winit/commit/29c7b96d1baa87be9c31c34228dee1937503be76
+Date: 2026-09-22T19:24:44+01:00
+
+Every event the page forwards notifies the worker, and each notify ran a
+full cycle. With a redraw already scheduled that meant one application
+iteration per pointer or key event on top of the frame's own, and a busy
+mouse slowed the application down noticeably.
+
+When a redraw is pending, leave forwarded events queued for that cycle,
+which drains them before RedrawRequested: one iteration per frame, as a
+native loop batches everything pending.
+
+The frame may never come, since a hidden or occluded tab stops the
+worker's requestAnimationFrame. So a wake with a redraw pending arms the
+runner's timer as a fallback unless a cycle is already timed (Poll or
+WaitUntil). A cycle takes the timer on entry, so a running rAF cancels it
+and the foreground behaviour is pure coalescing. 100 ms is longer than any
+display's refresh interval, so the rAF always wins when it runs; while
+hidden the browser clamps it to its background throttle, which is enough
+to keep serving winit-level events such as LoopExiting.
+---
+diff --git a/src/platform_impl/web/worker.rs b/src/platform_impl/web/worker.rs
+index 4716a797e706bbc99aeeb5f777d2ae61437689c6..86eec784fffc61d6894f23c0f9852199bd314bf0 100644
+--- a/src/platform_impl/web/worker.rs
++++ b/src/platform_impl/web/worker.rs
+@@ -270,6 +270,10 @@ impl WorkerRunner {
+         Ok(Window { inner: self.shared.window.inner.clone(), worker_id: Some(self.id) })
+     }
+ 
++    /// How long forwarded events wait for a scheduled redraw before a cycle serves them
++    /// anyway. Longer than any display's refresh interval, so a running rAF always wins.
++    const WAKE_FALLBACK_MS: i32 = 100;
++
+     pub(crate) fn run(self: &Rc<Self>, handler: Box<EventHandler>) {
+         assert!(self.handler.borrow().is_none(), "worker event loop already running");
+         *self.handler.borrow_mut() = Some(handler);
+@@ -293,6 +297,23 @@ impl WorkerRunner {
+                     break;
+                 }
+                 let Some(runner) = runner.upgrade() else { break };
++                // A wake while a redraw is already scheduled leaves the forwarded events queued
++                // for the redraw's cycle, which drains them first: one cycle per iteration, as a
++                // native loop batches everything pending, instead of one per forwarded event.
++                // The frame may not come (a hidden tab stops the worker's rAF), so unless a
++                // cycle is already timed, arm a fallback the frame cancels when it does run.
++                if runner.frame.borrow().is_some() {
++                    if runner.timer.borrow().is_none() {
++                        let weak = Rc::downgrade(&runner);
++                        *runner.timer.borrow_mut() =
++                            Some(Callback::timeout(Self::WAKE_FALLBACK_MS, move || {
++                                if let Some(runner) = weak.upgrade() {
++                                    runner.cycle(runner.wake_cause());
++                                }
++                            }));
++                    }
++                    continue;
++                }
+                 runner.cycle(runner.wake_cause());
+             }
+         });

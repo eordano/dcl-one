@@ -1,0 +1,279 @@
+From 5e6ad881698dc3625679cfd90b9d8eb2e6e2e264
+Subject: reduce image sizes
+Origin: https://github.com/robtfm/bevy/commit/5e6ad881698dc3625679cfd90b9d8eb2e6e2e264
+Date: 2025-07-01T12:38:13+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index ca63c115557e264e5c7c6fd66ff36889696ad58c..bf61a03c94b08a88d2008eda6906ec03ced3101e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -517,6 +517,9 @@ async_executor = ["std", "bevy_internal/async_executor"]
+ # Allows passing in a thread for asset load processing
+ wasm_threaded_asset_loader = ["bevy_internal/wasm_threaded_asset_loader"]
+ 
++# reduce image sizes to max 1024x1024x4
++reduce_image_sizes = ["bevy_internal/reduce_image_sizes"]
++
+ # Allows access to the `std` crate.
+ std = ["bevy_internal/std"]
+ 
+diff --git a/crates/bevy_gltf/Cargo.toml b/crates/bevy_gltf/Cargo.toml
+index cc95d9bf70b1debc461535640b666bb6b61d3b00..8d1226665c4c32bc0a0926c262f84a1915c66f21 100644
+--- a/crates/bevy_gltf/Cargo.toml
++++ b/crates/bevy_gltf/Cargo.toml
+@@ -17,6 +17,8 @@ pbr_multi_layer_material_textures = [
+ pbr_anisotropy_texture = ["bevy_pbr/pbr_anisotropy_texture"]
+ pbr_specular_textures = ["bevy_pbr/pbr_specular_textures"]
+ 
++reduce_image_sizes = []
++
+ [dependencies]
+ # bevy
+ bevy_animation = { path = "../bevy_animation", version = "0.16.1", optional = true }
+@@ -65,6 +67,7 @@ serde = { version = "1.0", features = ["derive"] }
+ serde_json = "1.0.140"
+ smallvec = "1.11"
+ tracing = { version = "0.1", default-features = false, features = ["std"] }
++image = { version = "0.25.2", default-features = false }
+ 
+ [dev-dependencies]
+ bevy_log = { path = "../bevy_log", version = "0.16.1" }
+diff --git a/crates/bevy_gltf/src/loader/mod.rs b/crates/bevy_gltf/src/loader/mod.rs
+index dbf113b6a147d2b92c7f1b577ff3539308746a43..0b2226fd2bd11521ab9fb52a7771c1f583e9f312 100644
+--- a/crates/bevy_gltf/src/loader/mod.rs
++++ b/crates/bevy_gltf/src/loader/mod.rs
+@@ -1007,6 +1007,33 @@ fn load_image<'a, 'b>(
+                 image
+             };
+ 
++            #[cfg(feature = "reduce_image_sizes")]
++            let image = if image.data.as_ref().unwrap().len() > 1024 * 1024 * 4 {
++                use bevy_image::TextureFormatPixelInfo;
++
++                let is_srgb = image.texture_descriptor.format.is_srgb();
++                let asset_usage = image.asset_usage;
++                let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
++
++                match image.try_into_dynamic() {
++                    Ok(dyn_image) => {
++                        let dyn_image = dyn_image.resize(
++                            1024 * 4 / pixel_size,
++                            1024 * 4 / pixel_size,
++                            image::imageops::FilterType::CatmullRom,
++                        );
++                        Image::from_dynamic(dyn_image, is_srgb, asset_usage)
++                    }
++                    Err(e) => {
++                        let image = e.image();
++                        warn!("failed to resize {:?}", image.texture_descriptor.format);
++                        image
++                    }
++                }
++            } else {
++                image
++            };
++
+             Ok(ImageOrPath::Image {
+                 image,
+                 label: GltfAssetLabel::Texture(gltf_texture.index()),
+@@ -1056,6 +1083,33 @@ fn load_image<'a, 'b>(
+                     image
+                 };
+ 
++                #[cfg(feature = "reduce_image_sizes")]
++                let image = if image.data.as_ref().unwrap().len() > 1024 * 1024 * 4 {
++                    use bevy_image::TextureFormatPixelInfo;
++                    
++                    let is_srgb = image.texture_descriptor.format.is_srgb();
++                    let asset_usage = image.asset_usage;
++                    let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
++
++                    match image.try_into_dynamic() {
++                        Ok(dyn_image) => {
++                            let dyn_image = dyn_image.resize(
++                                1024 * 4 / pixel_size,
++                                1024 * 4 / pixel_size,
++                                image::imageops::FilterType::CatmullRom,
++                            );
++                            Image::from_dynamic(dyn_image, is_srgb, asset_usage)
++                        }
++                        Err(e) => {
++                            let image = e.image();
++                            warn!("failed to resize {:?}", image.texture_descriptor.format);
++                            image
++                        }
++                    }
++                } else {
++                    image
++                };
++
+                 Ok(ImageOrPath::Image {
+                     image,
+                     label: GltfAssetLabel::Texture(gltf_texture.index()),
+diff --git a/crates/bevy_image/Cargo.toml b/crates/bevy_image/Cargo.toml
+index 0ce13749459c2146133d0685a1a29cf270a02a79..148839469f260016c6b3b7992e3946fdd46cdc83 100644
+--- a/crates/bevy_image/Cargo.toml
++++ b/crates/bevy_image/Cargo.toml
+@@ -38,6 +38,8 @@ serialize = ["bevy_reflect", "bevy_platform/serialize", "bevy_utils/serde"]
+ zlib = ["flate2"]
+ zstd = ["ruzstd"]
+ 
++reduce_image_sizes = []
++
+ [dependencies]
+ # bevy
+ bevy_app = { path = "../bevy_app", version = "0.16.1" }
+diff --git a/crates/bevy_image/src/image_loader.rs b/crates/bevy_image/src/image_loader.rs
+index a634820e2436bc0f3dc42d1e6fb1134ce20863bc..530dfc804b6c19e23c92551c9fee79c88cec8384 100644
+--- a/crates/bevy_image/src/image_loader.rs
++++ b/crates/bevy_image/src/image_loader.rs
+@@ -165,12 +165,8 @@ impl AssetLoader for ImageLoader {
+             path: format!("{}", load_context.path().display()),
+         })?;
+ 
+-        
+-
+         #[cfg(target_arch = "wasm32")]
+-        let image = if image.texture_descriptor.format
+-            == wgpu_types::TextureFormat::Rgba16Unorm
+-        {
++        let image = if image.texture_descriptor.format == wgpu_types::TextureFormat::Rgba16Unorm {
+             let data = image
+                 .data
+                 .unwrap()
+@@ -191,6 +187,33 @@ impl AssetLoader for ImageLoader {
+             image
+         };
+ 
++        #[cfg(feature = "reduce_image_sizes")]
++        let image = if image.data.as_ref().unwrap().len() > 1024 * 1024 * 4 {
++            use crate::image::TextureFormatPixelInfo;
++
++            let is_srgb = image.texture_descriptor.format.is_srgb();
++            let asset_usage = image.asset_usage;
++            let pixel_size = image.texture_descriptor.format.pixel_size() as u32;
++
++            match image.try_into_dynamic() {
++                Ok(dyn_image) => {
++                    let dyn_image = dyn_image.resize(
++                        1024 * 4 / pixel_size,
++                        1024 * 4 / pixel_size,
++                        image::imageops::FilterType::CatmullRom,
++                    );
++                    Image::from_dynamic(dyn_image, is_srgb, asset_usage)
++                }
++                Err(e) => {
++                    let image = e.image();
++                    tracing::warn!("failed to resize {:?}", image.texture_descriptor.format);
++                    image
++                }
++            }
++        } else {
++            image
++        };
++
+         Ok(image)
+     }
+ 
+diff --git a/crates/bevy_image/src/image_texture_conversion.rs b/crates/bevy_image/src/image_texture_conversion.rs
+index 1eb3b78b1eaff321f7ba5400d6db8d8ab222fd41..eb9754243dcb08a66d21a02c282f1b51973b4839 100644
+--- a/crates/bevy_image/src/image_texture_conversion.rs
++++ b/crates/bevy_image/src/image_texture_conversion.rs
+@@ -173,21 +173,21 @@ impl Image {
+         let width = self.width();
+         let height = self.height();
+         let Some(data) = self.data else {
+-            return Err(IntoDynamicImageError::UninitializedImage);
++            return Err(IntoDynamicImageError::UninitializedImage(self));
+         };
+-        match self.texture_descriptor.format {
++        Ok(match self.texture_descriptor.format {
+             TextureFormat::R8Unorm => {
+-                ImageBuffer::from_raw(width, height, data).map(DynamicImage::ImageLuma8)
++                DynamicImage::ImageLuma8(ImageBuffer::from_raw(width, height, data).unwrap())
+             }
+             TextureFormat::Rg8Unorm => {
+-                ImageBuffer::from_raw(width, height, data).map(DynamicImage::ImageLumaA8)
++                DynamicImage::ImageLumaA8(ImageBuffer::from_raw(width, height, data).unwrap())
+             }
+             TextureFormat::Rgba8UnormSrgb => {
+-                ImageBuffer::from_raw(width, height, data).map(DynamicImage::ImageRgba8)
++                DynamicImage::ImageRgba8(ImageBuffer::from_raw(width, height, data).unwrap())
+             }
+             // This format is commonly used as the format for the swapchain texture
+             // This conversion is added here to support screenshots
+-            TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm => {
++            TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm => DynamicImage::ImageRgba8(
+                 ImageBuffer::from_raw(width, height, {
+                     let mut data = data;
+                     for bgra in data.chunks_exact_mut(4) {
+@@ -195,14 +195,19 @@ impl Image {
+                     }
+                     data
+                 })
+-                .map(DynamicImage::ImageRgba8)
+-            }
++                .unwrap(),
++            ),
+             // Throw and error if conversion isn't supported
+-            texture_format => return Err(IntoDynamicImageError::UnsupportedFormat(texture_format)),
+-        }
+-        .ok_or(IntoDynamicImageError::UnknownConversionError(
+-            self.texture_descriptor.format,
+-        ))
++            texture_format => {
++                return Err(IntoDynamicImageError::UnsupportedFormat(
++                    texture_format,
++                    Self {
++                        data: Some(data),
++                        ..self
++                    },
++                ))
++            }
++        })
+     }
+ }
+ 
+@@ -212,15 +217,25 @@ impl Image {
+ pub enum IntoDynamicImageError {
+     /// Conversion into dynamic image not supported for source format.
+     #[error("Conversion into dynamic image not supported for {0:?}.")]
+-    UnsupportedFormat(TextureFormat),
++    UnsupportedFormat(TextureFormat, Image),
+ 
+     /// Encountered an unknown error during conversion.
+     #[error("Failed to convert into {0:?}.")]
+-    UnknownConversionError(TextureFormat),
++    UnknownConversionError(TextureFormat, Image),
+ 
+     /// Tried to convert an image that has no texture data
+     #[error("Image has no texture data")]
+-    UninitializedImage,
++    UninitializedImage(Image),
++}
++
++impl IntoDynamicImageError {
++    pub fn image(self) -> Image {
++        match self {
++            IntoDynamicImageError::UnsupportedFormat(_, image)
++            | IntoDynamicImageError::UnknownConversionError(_, image)
++            | IntoDynamicImageError::UninitializedImage(image) => image,
++        }
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/bevy_internal/Cargo.toml b/crates/bevy_internal/Cargo.toml
+index 28e22a636c6b083cfd01f96a5be4a782200a07e8..fd2e9256e253afbc2704495f541d46646a492f8f 100644
+--- a/crates/bevy_internal/Cargo.toml
++++ b/crates/bevy_internal/Cargo.toml
+@@ -343,6 +343,8 @@ async_executor = [
+ 
+ wasm_threaded_asset_loader = ["bevy_asset?/wasm_threaded_loader"]
+ 
++reduce_image_sizes = ["bevy_image?/reduce_image_sizes", "bevy_gltf?/reduce_image_sizes"]
++
+ # Enables use of browser APIs.
+ # Note this is currently only applicable on `wasm32` architectures.
+ web = [

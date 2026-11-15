@@ -1,0 +1,53 @@
+From 1fd3d9c1ff7ff5dc227fac09e02f512ae56f9f00
+Subject: pub manager
+Origin: https://github.com/robtfm/bevy_kira_audio/commit/1fd3d9c1ff7ff5dc227fac09e02f512ae56f9f00
+Date: 2024-08-10T16:55:41+01:00
+
+---
+diff --git a/src/audio_output.rs b/src/audio_output.rs
+index 762996bfcdb29f603fd4ec67784462a0f9c847b2..c7a3159ed8d414937450666148f66022fbf1a40b 100644
+--- a/src/audio_output.rs
++++ b/src/audio_output.rs
+@@ -25,8 +25,8 @@ use std::collections::HashMap;
+ ///
+ /// This struct holds the [`AudioManager`] to play audio through. It also
+ /// keeps track of all audio instance handles and which sounds are playing in which channel.
+-pub(crate) struct AudioOutput<B: Backend = DefaultBackend> {
+-    manager: Option<AudioManager<B>>,
++pub struct AudioOutput<B: Backend = DefaultBackend> {
++    pub manager: Option<AudioManager<B>>,
+     instances: HashMap<Channel, Vec<Handle<AudioInstance>>>,
+     channels: HashMap<Channel, ChannelState>,
+ }
+diff --git a/src/instance.rs b/src/instance.rs
+index deeee904e0eb043d3eb172ff74a729af667cdc69..c40fd362e778ca8f79dba6f1660842ffe2423fa3 100644
+--- a/src/instance.rs
++++ b/src/instance.rs
+@@ -64,6 +64,14 @@ impl AudioInstance {
+     pub fn seek_by(&mut self, amount: f64) {
+         self.handle.seek_by(amount);
+     }
++
++    /// set loop
++    pub fn set_loop(&mut self, looped: bool) -> Option<AudioCommandError> {
++        self.handle
++            .set_loop_region(looped.then_some(Region::default()))
++            .err()
++            .map(|kira_error| kira_error.into())
++    }
+ }
+ 
+ /// Extension trait to remove some boilerplate when
+diff --git a/src/lib.rs b/src/lib.rs
+index d985e0f1289024caebcdb5996e498900759eabde..73738d5f7ebb968eddf3d77a73a40c12ed961975 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -35,7 +35,7 @@
+ #![warn(unused_imports, missing_docs)]
+ 
+ mod audio;
+-mod audio_output;
++pub mod audio_output;
+ mod backend_settings;
+ mod channel;
+ mod instance;

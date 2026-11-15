@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -19,6 +20,21 @@ SHA = 'a' * 40
 
 
 class EngineCacheTests(unittest.TestCase):
+    def test_hashing_changes_invalidate_web_artifacts_but_reuse_the_engine(self):
+        path = 'library/hashing/src/index.ts'
+        self.write(path, 'first hashing implementation')
+        subprocess.run(['git', 'add', path], cwd=self.root, check=True)
+        web_before = artifact.inputs(self.root)
+        engine_before = artifact.engine_inputs(self.root)
+        self.write(path, 'second hashing implementation')
+        web_after = artifact.inputs(self.root)
+        self.assertNotEqual(web_after, web_before)
+        self.assertEqual(artifact.engine_inputs(self.root), engine_before)
+        # bevy-ci.py selects no lane for markdown, so markdown is not part of the fingerprint.
+        self.write('library/hashing/README.md', 'prose')
+        subprocess.run(['git', 'add', 'library/hashing/README.md'], cwd=self.root, check=True)
+        self.assertEqual(artifact.inputs(self.root), web_after)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -202,17 +218,25 @@ class EngineCacheTests(unittest.TestCase):
                 patch.dict(os.environ, {'GITHUB_SHA': SHA}):
             build.web(engine_cache=self.cache)
             self.assertEqual(sum(c[0] == 'wasm-pack' for c in calls), 2)
+            # The trees Cargo reads are written before the first compile, and only for a compile.
+            rebuild = (sys.executable, str(self.root / 'tooling/patched-sources.py'), 'materialise', '--quiet')
+            self.assertLess(calls.index(rebuild), next(i for i, c in enumerate(calls) if c[0] == 'wasm-pack'))
             self.assertTrue(any(c[0] == 'bash' for c in calls))
             self.assertFalse((self.cache / 'pkg/sandbox_worker.bundle.js').exists())
             calls.clear()
             with patch.dict(os.environ, {'GITHUB_SHA': 'b' * 40}):
                 build.web(no_opt=True, engine_cache=self.cache)
         self.assertFalse(any(c[0] in ('wasm-pack', 'bash') for c in calls))
+        self.assertNotIn(rebuild, calls)
         self.assertNotIn(('npm', 'run', 'test:shared-inputs', '--prefix', 'react-web'), calls)
         self.assertIn(('node', './react-web/scripts/shared-inputs.mjs', '--check'), calls)
         self.assertIn(('npm', 'run', 'test', '--prefix', 'react-web'), calls)
         self.assertIn(('npm', 'run', 'build', '--prefix', 'react-web'), calls)
-        self.assertIn(('npm', 'run', 'bundle', '--prefix', 'react-web/bridge-scene'), calls)
+        self.assertIn(('corepack', 'pnpm@11.27.0', '--dir', 'react-web/bridge-scene', 'run', 'bundle'), calls)
+        self.assertIn(('corepack', 'pnpm@11.27.0', '--dir', 'react-web/bridge-scene',
+                       'install', '--frozen-lockfile', '--ignore-scripts'), calls)
+        self.assertIn(('node', str(self.root / 'tooling/check-local-hashing.mjs'),
+                       str(self.source / 'react-web/bridge-scene')), calls)
         self.assertTrue(any(c[0] == 'node' for c in calls))
         meta = artifact.verify(app / 'dist/web', self.root, allow_unoptimized=False)
         self.assertEqual(meta['engine']['revision'], SHA)

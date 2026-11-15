@@ -7,6 +7,9 @@ set positional-arguments
 # the wasm rustflags (+atomics, ...) need nightly; same pin as apps/bevy-explorer/build-web.py
 wasm_toolchain := "nightly-2026-04-15"
 
+# the bridge scene's package manager; a shell with pnpm on its PATH sets PNPM=pnpm (nix develop .#wasm does)
+pnpm := env_var_or_default("PNPM", "corepack pnpm@11.27.0")
+
 # nixos: cef's bundled libvulkan.so.1 can't find the system's vulkan drivers without this
 nixos_vulkan := if path_exists("/run/opengl-driver/share") == "true" { 'XDG_DATA_DIRS="/run/opengl-driver/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"' } else { "" }
 
@@ -22,7 +25,7 @@ wasm: ts-bindings
     # pkg/sandbox_worker.bundle.js, so this must re-run on every wasm build.
     npx --yes esbuild@0.28.1 ./deploy/web/engine/sandbox_worker.js --bundle --format=esm --log-level=error --outfile=./deploy/web/engine/pkg/sandbox_worker.bundle.js
     cd react-web && npm install
-    cd react-web/bridge-scene && npm install
+    cd react-web/bridge-scene && {{pnpm}} install --frozen-lockfile --ignore-scripts && {{pnpm}} --filter @dcl/hashing build
     cd react-web && npm run dev -- --open
 
 # regenerate the TypeScript bindings for the ~system/BevyExplorerApi boundary from the Rust
@@ -34,7 +37,7 @@ ts-bindings:
 # ts-bindings first so the TS the page + bridge scene import is regenerated from the Rust structs.
 bundle-native: ts-bindings
     cd react-web && npm install
-    cd react-web/bridge-scene && npm install
+    cd react-web/bridge-scene && {{pnpm}} install --frozen-lockfile --ignore-scripts && {{pnpm}} --filter @dcl/hashing build
     cd react-web && npm run bundle:native
     mkdir -p target && touch target/.bundle-native-stamp
 
@@ -61,16 +64,22 @@ _bundle-native-if-stale:
 
 # build + run the native app (debug) with the CEF react HUD. extra args pass through, e.g.
 #   just native-debug --realm https://realm-provider-ea.decentraland.org/main
-native-debug *ARGS: _bundle-native-if-stale
+native-debug *ARGS: _sources _bundle-native-if-stale
     cargo build --package dcl_deno_ipc
     cargo build --bin decentra-bevy-cef
     {{nixos_vulkan}} cargo run --bin decentra-bevy -- "$@"
 
 # build + run the native app (release) with the CEF react HUD
-native-release *ARGS: _bundle-native-if-stale
+native-release *ARGS: _sources _bundle-native-if-stale
     cargo build --release --package dcl_deno_ipc
     cargo build --release --bin decentra-bevy-cef
     {{nixos_vulkan}} cargo run --release --bin decentra-bevy -- "$@"
+
+# cargo reads bevy and the forked crates from ../bevy and ../forks, which are not tracked: write the
+# ones that are missing or stale from ../patches. scripts/gen-ts-bindings.sh calls the same script
+# for the wasm and ts-bindings recipes.
+_sources:
+    ./scripts/patched-sources.sh
 
 # one-time per machine: fetch the CEF framework. only macos falls back to it at runtime; on linux
 # and windows the loader must find it (LD_LIBRARY_PATH on linux, see readme.md)

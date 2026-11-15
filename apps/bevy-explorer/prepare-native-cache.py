@@ -6,8 +6,9 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-# The path dependencies outside the engine workspace. The cache keeps their compiled crates.
-VENDORED = ('rendering/bevy-explorer/bevy', 'library/vendor/rusty_enet')
+# The tracked sources of the path dependencies outside the engine workspace. The cache keeps their
+# compiled crates. The patch series stand for the trees that tooling/patched-sources.py rebuilds.
+VENDORED = ('rendering/bevy-explorer/patches', 'rendering/bevy-explorer/vendor', 'library/vendor/rusty_enet')
 KEY_FILE = ROOT / 'rendering/bevy-explorer/source/cache-key/.cargo/config.toml'
 
 

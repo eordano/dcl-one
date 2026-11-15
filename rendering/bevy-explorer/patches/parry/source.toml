@@ -1,0 +1,12 @@
+name       = "parry"
+upstream   = "https://github.com/dimforge/parry"
+commit     = "3a41ac21c5ded2337937cc450d2cbf64a31c9d38"
+ref        = "v0.25.3"
+origin     = "https://github.com/robtfm/parry"
+origin_rev = "1d3d84559da96ae6033035a17ac57b36cc447416"
+license    = "Apache-2.0"
+paths      = ["."]
+exclude    = []
+base_tree  = "c9910a84c9a9d3f3d37720d91cfb67f49006aaac"
+tree       = "26a06f0882c627345b50e02a164f3eddeed96012"
+nix_hash   = "sha256-uwsA2Vve0zXoNUe3RqW5eCrhOxNQM8qCW4bY6kchbj8="

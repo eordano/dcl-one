@@ -3,6 +3,7 @@
 //! rankings are never recalculated here.
 use std::{sync::Arc, time::Duration};
 
+use anyhow::Context as _;
 use chrono::{NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -411,16 +412,22 @@ pub fn spawn_jobs(state: &Arc<super::State>, jobs: &crate::jobs::Jobs) {
         }
     });
     let pool = state.pool.clone();
-    jobs.spawn_leased("community-ranking", move |ctx| { let pool = pool.clone(); async move {
-        loop {
-            match recalculate(&pool,Utc::now().naive_utc()).await {
-                Ok(count)=>ctx.progress(format!("{count} community scores calculated")),
-                Err(error)=>{ctx.error(error.to_string()); tracing::error!(%error,"community ranking calculation failed");}
+    // Daily, first pass on every lease acquisition; a failed pass waits the
+    // same day as a successful one.
+    jobs.spawn_periodic_leased(
+        "community-ranking",
+        crate::jobs::PeriodicCfg::every(Duration::from_secs(86_400)),
+        move |_ctx| {
+            let pool = pool.clone();
+            async move {
+                let count = recalculate(&pool, Utc::now().naive_utc())
+                    .await
+                    .context("community ranking calculation failed")?;
+                tracing::info!(count, "community scores calculated");
+                Ok(())
             }
-            ctx.pass_done();
-            tokio::select! { _=ctx.cancel.cancelled()=>return Ok(()), _=tokio::time::sleep(Duration::from_secs(86400))=>{} }
-        }
-    }});
+        },
+    );
 }
 
 #[cfg(test)]

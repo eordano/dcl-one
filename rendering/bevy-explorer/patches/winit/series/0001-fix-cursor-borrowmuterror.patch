@@ -1,0 +1,32 @@
+From a8c6812b563f9c0974a17226f566705bbc9ee674
+Subject: fix cursor borrowmuterror
+Origin: https://github.com/robtfm/winit/commit/a8c6812b563f9c0974a17226f566705bbc9ee674
+Date: 2025-10-22T12:54:12+01:00
+
+---
+diff --git a/src/platform_impl/web/window.rs b/src/platform_impl/web/window.rs
+index 29ca7302996e98d7574c3adff6fd05b328314ae3..a70126ed3051d35cc5c6ef233db5db72e4f71cbb 100644
+--- a/src/platform_impl/web/window.rs
++++ b/src/platform_impl/web/window.rs
+@@ -218,7 +218,9 @@ impl Inner {
+ 
+     #[inline]
+     pub fn set_cursor(&self, cursor: Cursor) {
+-        self.canvas.borrow_mut().cursor.set_cursor(cursor)
++        if let Ok(canvas) = self.canvas.try_borrow_mut() {
++            canvas.cursor.set_cursor(cursor);
++        }
+     }
+ 
+     #[inline]
+@@ -241,7 +243,9 @@ impl Inner {
+ 
+     #[inline]
+     pub fn set_cursor_visible(&self, visible: bool) {
+-        self.canvas.borrow_mut().cursor.set_cursor_visible(visible)
++        if let Ok(canvas) = self.canvas.try_borrow_mut() {
++            canvas.cursor.set_cursor_visible(visible);
++        }
+     }
+ 
+     #[inline]

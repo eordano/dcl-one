@@ -168,6 +168,8 @@ sys.exit(29)
         self.assertLess(workflow.index('sudo rm -rf'), workflow.index('uses: actions/checkout@'))
         self.assertLess(workflow.index('Put the Nix Rust toolchain on PATH'), workflow.index('uses: Swatinem/rust-cache@'))
         self.assertLess(workflow.index('uses: Swatinem/rust-cache@'), workflow.index('bash tooling/social-voice-release-test.sh'))
+        self.assertIn("        if: runner.os == 'Linux' && runner.environment == 'github-hosted'\n", workflow)
+        self.assertIn('sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup', workflow)
 
 
 if __name__ == '__main__':

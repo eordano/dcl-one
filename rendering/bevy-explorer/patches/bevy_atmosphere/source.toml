@@ -1,0 +1,12 @@
+name       = "bevy_atmosphere"
+upstream   = "https://github.com/JonahPlusPlus/bevy_atmosphere"
+commit     = "159a7f26aeffa9dca9837301704c0be7979ca522"
+ref        = "0.13.0"
+origin     = "https://github.com/robtfm/bevy_atmosphere"
+origin_rev = "d18523c8fdecb1847b4f6f82a597752207373cc2"
+license    = "MIT OR Apache-2.0"
+paths      = ["."]
+exclude    = []
+base_tree  = "8b15945c44f8cc4fa8bd15c2222c5bcad445ba36"
+tree       = "d35eadb316ac5e300d11eb9a7266698d61ae9318"
+nix_hash   = "sha256-ODATsWOBC5qfcYCYCZgp/Nc2sgBQplY1rdbVVqbe+DY="

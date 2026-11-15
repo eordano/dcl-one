@@ -7,12 +7,15 @@ on:
       - 'flake.*'
       - 'infra/dev/**'
       - 'infra/gateway/**'
+      - 'infra/packages/**'
       - 'tooling/dev*'
       - 'tooling/catalyst-test*.sh'
       - 'tooling/enet-provenance.py'
       - 'tooling/*.py'
       - 'tooling/tests/**'
       - 'services/catalyst/**'
+      # the node never links the scene CLI, but the workspace reads its manifest
+      - 'apps/dcl-scene-cli/Cargo.toml'
       - 'library/**'
       - '.cargo/**'
       - 'apps/sites/**'
@@ -42,7 +45,7 @@ jobs:
   changes:
     name: Changes
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 10
     outputs:
       run: ${{ steps.plan.outputs.run }}
@@ -65,10 +68,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-26"]') }}
+        os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-15"]') }}
         # Each shard compiles the tests and runs every third test executable.
         shard: [1, 2, 3]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-26.04' && (vars.RUNNER_LINUX_X86 || 'ubuntu-26.04')
+      || matrix.os == 'macos-15' && (vars.RUNNER_MACOS || 'macos-15')
+      || matrix.os }}
     timeout-minutes: 100
     env:
       CATALYST_TEST_SHARD: ${{ matrix.shard }}/3
@@ -77,7 +82,7 @@ jobs:
       FOUNDATION_DEV_STARTUP_TIMEOUT: '120'
     steps:
       - name: Reserve disk space for the Rust test build
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
           # The catalyst test build, the Nix store and the pnpm store can fill the disk of a hosted runner.
           # The delete takes time, so it runs only when 25 GB or less is free.
@@ -146,8 +151,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-26"]') }}
-    runs-on: ${{ matrix.os }}
+        os: ${{ fromJSON(github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && '["ubuntu-26.04"]' || '["ubuntu-26.04", "macos-15"]') }}
+    runs-on: ${{ matrix.os == 'ubuntu-26.04' && (vars.RUNNER_LINUX_X86 || 'ubuntu-26.04')
+      || matrix.os == 'macos-15' && (vars.RUNNER_MACOS || 'macos-15')
+      || matrix.os }}
     timeout-minutes: 100
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -157,7 +164,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Reserve disk space for the Rust test build
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
           # The catalyst test build, the Nix store and the pnpm store can fill the disk of a hosted runner.
           # The delete takes time, so it runs only when 25 GB or less is free.
@@ -194,7 +201,7 @@ jobs:
         run: |
           # Hash tracked inputs, not the commit: unrelated documentation edits
           # reuse a snapshot, while schema, protocol and vendored SDK edits do not.
-          source=$(git ls-tree -r HEAD -- services/catalyst library schemas .cargo apps/dcl-scene-cli flake.nix Makefile tooling infra/dev .github/workflows/development.yml | git hash-object --stdin)
+          source=$(git ls-tree -r HEAD -- services/catalyst library schemas .cargo apps/dcl-scene-cli flake.nix Makefile tooling infra/dev infra/packages .github/workflows/development.yml | git hash-object --stdin)
           echo "source=$source" >> "$GITHUB_OUTPUT"
       - name: Restore Rust build cache
         id: rust-cache
@@ -274,7 +281,7 @@ jobs:
     name: Web tests and contracts
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -347,7 +354,7 @@ jobs:
     # Smoke is needed for its workflow tests: they check that the Rust shards cover every test.
     needs: [changes, rust, smoke, web]
     if: ${{ always() }}
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 5
     steps:
       - name: Require the Rust, smoke and web jobs to pass or be skipped

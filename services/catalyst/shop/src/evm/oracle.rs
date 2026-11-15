@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use super::errors::ApiError;
 use super::signer::DirectSigner;
+use crate::types::ManaWei;
 
 /// A feed's `decimals()` is immutable, so it is fetched once per (chain, aggregator).
 static FEED_DECIMALS: OnceLock<TtlMap<(u64, Address), u8>> = OnceLock::new();
@@ -20,8 +21,6 @@ pub const MANA_USD_AGGREGATOR_POLYGON: Address =
     address!("0xA1CbF3Fe43BC3501e3Fc4b573e822c70e76A7512");
 
 pub const ONCHAIN_MANA_USD_STALE_TOLERANCE_SECS: u64 = 60;
-
-const WAD: U256 = U256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
 
 const BPS_DENOMINATOR: u64 = 10_000;
 
@@ -150,14 +149,14 @@ pub fn ensure_fresh(rate: &ManaUsdRate, now_s: i64, max_age_secs: u64) -> Result
     Ok(())
 }
 
+/// The MANA a USD-pegged amount settles for at an 18-decimal oracle answer:
+/// [`ManaWei::from_usd_wei`], the quote's own formula.
 pub fn usd_to_mana_wei(usd_wei: U256, rate_18: U256) -> Result<U256, ApiError> {
-    if rate_18.is_zero() {
-        return Err(err("MANA/USD rate is 0; refusing"));
-    }
-    let scaled = usd_wei
-        .checked_mul(WAD)
-        .ok_or_else(|| err("USD amount too large to convert (mul overflow); refusing"))?;
-    Ok(scaled / rate_18)
+    let rate = crate::types::ManaUsdRate::new(rate_18, 18)
+        .ok_or_else(|| err("MANA/USD rate is 0; refusing"))?;
+    ManaWei::from_usd_wei(usd_wei, rate)
+        .map(ManaWei::get)
+        .ok_or_else(|| err("USD amount too large to convert (mul overflow); refusing"))
 }
 
 pub fn within_slippage_bps(exec_mana: U256, quote_mana: U256, tolerance_bps: u64) -> bool {
@@ -213,6 +212,8 @@ pub fn charge_basis_for_usd_pegged(
 mod tests {
     use super::*;
     use alloy_primitives::I256;
+
+    const WAD: U256 = U256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
 
     fn wei(n: u64) -> U256 {
         U256::from(n)
@@ -342,6 +343,47 @@ mod tests {
         assert_eq!(usd_to_mana_wei(eth(1), WAD).unwrap(), eth(1));
         assert!(usd_to_mana_wei(eth(1), U256::ZERO).is_err());
         assert!(usd_to_mana_wei(U256::MAX, WAD).is_err());
+        // The largest amount that scales without overflow, and one more.
+        let largest = U256::MAX / WAD;
+        assert_eq!(usd_to_mana_wei(largest, WAD).unwrap(), largest);
+        assert_eq!(
+            usd_to_mana_wei(largest, U256::from(3u64)).unwrap(),
+            largest * WAD / U256::from(3u64)
+        );
+        assert!(usd_to_mana_wei(largest + U256::from(1u64), WAD).is_err());
+    }
+
+    #[test]
+    fn the_settlement_conversion_is_the_quote_formula() {
+        let rate_text = [
+            "0.26960836",
+            "1",
+            "0.000000000000000001",
+            "12345.678901234567890123",
+        ];
+        let amounts = [
+            wei(0),
+            wei(1),
+            wei(999),
+            eth(1),
+            eth(7) + wei(3),
+            U256::MAX / WAD,
+        ];
+        for text in rate_text {
+            let rate = crate::types::ManaUsdRate::parse_usd_per_mana(text).unwrap();
+            assert_eq!(rate.decimals(), 18);
+            for usd_wei in amounts {
+                assert_eq!(
+                    usd_to_mana_wei(usd_wei, rate.rate()).ok(),
+                    ManaWei::from_usd_wei(usd_wei, rate).map(ManaWei::get),
+                    "{text} {usd_wei}"
+                );
+                assert_eq!(
+                    usd_to_mana_wei(usd_wei, rate.rate()).unwrap(),
+                    usd_wei * WAD / rate.rate()
+                );
+            }
+        }
     }
 
     #[test]

@@ -37,6 +37,7 @@ use serde_json::{Value, json};
 
 use crate::auth::{AuthChain, AuthError, AuthLinkType, is_eth_address};
 use crate::comms::world_identity::{DCL_ETH_SUFFIX, ParcelSet, WorldName};
+use crate::content::entity::is_ipfs_v2;
 use crate::policy::Deploy;
 use crate::shared::identity::{Address, AuthorityNotEstablished};
 
@@ -459,11 +460,6 @@ fn deprecated_config_error(entity: &Value) -> Option<&'static str> {
         );
     }
     None
-}
-
-/// `@dcl/schemas` `IPFSv2.validate`: `^(ba)[a-zA-Z0-9]{57}$`.
-fn is_ipfs_v2(name: &str) -> bool {
-    name.len() == 59 && name.starts_with("ba") && name.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// The uploaded files in upload order, keyed by their form name (the form refuses a repeated

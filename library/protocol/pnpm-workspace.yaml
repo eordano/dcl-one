@@ -1,0 +1,4 @@
+nodeLinker: hoisted
+minimumReleaseAge: 1440
+allowBuilds:
+  protobufjs: false

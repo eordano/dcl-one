@@ -1,6 +1,6 @@
 //! Chain and marketplace indexing in a process without an HTTP listener.
-use crate::settings::{land_settings, market_settings};
-use crate::{config::Config, content, db, http, jobs, land_authz, shop};
+use crate::settings::{jobs_from_config, land_settings, market_settings};
+use crate::{config::Config, content, db, http, land_authz, shop};
 use anyhow::Context;
 use std::{sync::Arc, time::Duration};
 
@@ -21,19 +21,7 @@ pub async fn run(mut config: Config) -> anyhow::Result<()> {
     let http = http::Outbound::new(http::HttpClientCfg::serve(
         config.content.connections_max_idle,
     ))?;
-    let jobs = if config.node.job_leases_enabled {
-        jobs::Jobs::with_leases(
-            pool.clone(),
-            jobs::LeaseSettings {
-                namespace: config.node.job_lease_namespace.clone(),
-                ..Default::default()
-            },
-        )
-    } else {
-        jobs::Jobs::new()
-    }
-    .with_fleet_jobs(config.node.fleet_jobs_enabled)
-    .with_first_pass_now(config.node.jobs_first_pass_now);
+    let jobs = jobs_from_config(&config, &pool);
     let market = Arc::new(shop::market::MarketplaceState::new(
         pool.clone(),
         http.clone(),

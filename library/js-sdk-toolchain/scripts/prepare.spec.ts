@@ -1,10 +1,9 @@
 import { readdirSync, readFileSync } from 'fs'
 import { pathExistsSync } from 'fs-extra'
-import { readFile } from 'fs/promises'
 import { resolve } from 'path'
 import { flow, commonChecks } from './common'
 
-import { itExecutes, itInstallsADependencyFromFolderAndCopiesTheVersion, patchJson } from './helpers'
+import { PNPM, itExecutes, patchJson } from './helpers'
 
 flow('build-all', () => {
   commonChecks()
@@ -24,19 +23,18 @@ flow('build-all', () => {
 
     for (const dependency of processWithOptimisticDependencies(graph)) {
       const projectDirectory = resolveProjectPath(dependency)
-      itExecutes(
-        `npm version ${JSON.stringify(version)} --force --no-git-tag-version --allow-same-version`,
-        projectDirectory
-      )
+      it(`set ${dependency} version`, () => {
+        patchJson('package.json', projectDirectory, ($) => ({ ...$, version }))
+      })
     }
   })
 
-  flow('resolve and install dependencies', () => {
+  flow('pack workspace dependencies', () => {
     for (const dependency of processWithOptimisticDependencies(graph)) {
       const projectDirectory = resolveProjectPath(dependency)
-      installCrossDependencies(projectDirectory)
-      pinProtocol(projectDirectory)
-      itExecutes('npm pack', projectDirectory)
+      pinLinked(projectDirectory, '@dcl/protocol', 'PROTOCOL_VERSION')
+      pinLinked(projectDirectory, '@dcl/hashing', 'HASHING_VERSION')
+      itExecutes(`${PNPM} pack`, projectDirectory)
     }
   })
 })
@@ -110,47 +108,23 @@ function detectCyclesTest(graph: Map<string, Set<string>>) {
   })
 }
 
-// this step checks for dependencies in this monorepo and fixes their versions
-function installCrossDependencies(...paths: string[]) {
-  for (const path of paths) {
-    const packageJson = resolve(path, 'package.json')
-    const { dependencies, devDependencies } = JSON.parse(readFileSync(packageJson, 'utf-8'))
-
-    for (const [key] of Object.entries({ ...dependencies, ...devDependencies } as Record<string, string>)) {
-      if (key.startsWith('@dcl')) {
-        const dependencyRootPath = resolve('packages', key)
-        if (pathExistsSync(dependencyRootPath)) {
-          itInstallsADependencyFromFolderAndCopiesTheVersion(
-            path,
-            dependencyRootPath,
-            (devDependencies && key in devDependencies) || false
-          )
-        }
-      }
-    }
-  }
-}
-
-// @dcl/protocol is the file: link to library/protocol while developing. A packed manifest names
-// the version published from there, which only the caller knows (PROTOCOL_VERSION: the publish
-// job's value, or a self-describing one for tarballs that are not published); there is no
-// fallback, since the folder's own version is not necessarily on npm.
-function pinProtocol(path: string) {
+// Packed manifests need caller-supplied published versions.
+function pinLinked(path: string, name: string, variable: string) {
   const packageJson = resolve(path, 'package.json')
   const { dependencies } = JSON.parse(readFileSync(packageJson, 'utf-8'))
-  if (!dependencies || !('@dcl/protocol' in dependencies)) return
-  it(`pin @dcl/protocol in ${path}`, () => {
-    const version = process.env.PROTOCOL_VERSION
+  if (!dependencies || !(name in dependencies)) return
+  it(`pin ${name} in ${path}`, () => {
+    const version = process.env[variable]
     if (!version) {
       throw new Error(
-        `PROTOCOL_VERSION is unset: set it to the @dcl/protocol version this build is published with ` +
+        `${variable} is unset: set it to the ${name} version this build is published with ` +
           `(or e.g. 0.0.0-unpublished.local for tarballs that are not published), so ${path} never packs ` +
-          `the file: link or a version that is not on npm`
+          `a local link or a version that is not on npm`
       )
     }
     patchJson('package.json', path, ($) => ({
       ...$,
-      dependencies: { ...$.dependencies, '@dcl/protocol': version }
+      dependencies: { ...$.dependencies, [name]: version }
     }))
   })
 }

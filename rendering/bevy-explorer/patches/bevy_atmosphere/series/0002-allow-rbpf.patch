@@ -1,0 +1,43 @@
+From 87168130b4b4ac0c14a106c1bb3680e918dbd189
+Subject: allow rbpf
+Origin: https://github.com/robtfm/bevy_atmosphere/commit/87168130b4b4ac0c14a106c1bb3680e918dbd189
+Date: 2025-07-01T12:40:36+01:00
+
+---
+diff --git a/src/pipeline.rs b/src/pipeline.rs
+index 32122068c108dec6baeb25e8441aae85eb848fe7..a0a9649660c215283062e36b6124b2c2228e5203 100644
+--- a/src/pipeline.rs
++++ b/src/pipeline.rs
+@@ -335,7 +335,9 @@ fn prepare_atmosphere_resources(
+             name = "bevy_atmosphere::pipeline::prepare_atmosphere_assets"
+         )
+         .entered();
+-        let texture = &gpu_images.get(&atmosphere_image.handle).unwrap().texture;
++        let Some(texture) = &gpu_images.get(&atmosphere_image.handle).map(|t| &t.texture) else {
++            return;
++        };
+         let view = texture.create_view(&ATMOSPHERE_ARRAY_TEXTURE_VIEW_DESCRIPTOR);
+         atmosphere_image.array_view = Some(view);
+         update();
+@@ -370,7 +372,9 @@ fn prepare_atmosphere_bind_group(
+     image_bind_group_layout: Res<AtmosphereImageBindGroupLayout>,
+     atmosphere: Option<Res<AtmosphereModel>>,
+ ) {
+-    let view = atmosphere_image.array_view.as_ref().expect("prepare_changed_settings should have took care of making AtmosphereImage.array_value Some(TextureView)");
++    let Some(view) = atmosphere_image.array_view.as_ref() else {
++        return;
++    };
+ 
+     let atmosphere = match atmosphere {
+         Some(a) => a.clone(),
+@@ -491,7 +495,9 @@ impl render_graph::Node for AtmosphereNode {
+             AtmosphereState::Update => {
+                 if !update_events.is_empty() {
+                     // only run when there are update events available
+-                    let bind_groups = world.resource::<AtmosphereBindGroups>();
++                    let Some(bind_groups) = world.get_resource::<AtmosphereBindGroups>() else {
++                        return Ok(());
++                    };
+                     let pipeline_cache = world.resource::<PipelineCache>();
+                     let cached_metadata = world.resource::<CachedAtmosphereModelMetadata>();
+                     let settings = world.resource::<AtmosphereSettings>();

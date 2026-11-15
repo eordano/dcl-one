@@ -24,13 +24,12 @@ use super::orders::{Order, OrderFilters, list_orders};
 use super::readers::READER_MAX_FIRST;
 use super::sales::{Sale, SaleFilters, list_sales};
 use super::signed::{MARKETPLACE_AUTH_SIGNERS, require_auth_metadata};
-use super::trades::{
-    ASSET_TYPE_ERC20, ASSET_TYPE_USD_PEGGED_MANA, Trade, TradeAsset, trades_of_address,
-};
+use super::trades::{Trade, TradeAsset, trades_of_address};
 use super::wire::{ApiError, get_number_parameter};
 use crate::shared::signed_fetch::{
     self, AUTH_CHAIN_HEADER_PREFIX, AUTH_TIMESTAMP_HEADER, PayloadPolicy, SignedFetchError,
 };
+use crate::types::{ASSET_TYPE_ERC20, ASSET_TYPE_USD_PEGGED_MANA};
 
 const INTERNAL_FETCH_CAP: i64 = 500;
 const MAX_PAGE_SIZE: i64 = 500;

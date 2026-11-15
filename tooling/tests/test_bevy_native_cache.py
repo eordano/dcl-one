@@ -1,6 +1,7 @@
 """Unused runner compilers must not change the native Rust cache identity; vendored sources must."""
 import importlib.util
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,9 @@ SPEC = importlib.util.spec_from_file_location(
 cache = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cache)
 ROOT = Path(__file__).resolve().parents[2]
+TARGET_SPEC = importlib.util.spec_from_file_location('bevy_target_cache', ROOT / 'tooling/bevy-target-cache.py')
+target_cache = importlib.util.module_from_spec(TARGET_SPEC)
+TARGET_SPEC.loader.exec_module(target_cache)
 WORKSPACE = 'workspaces: rendering/bevy-explorer/source -> target'
 # The key file works because this version hashes each .cargo/config.toml below the workspace into
 # the last part of its key. Check that again before a change of this pin.
@@ -25,7 +29,7 @@ class NativeCacheTest(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.key_file = Path(folder.name) / 'cache-key/.cargo/config.toml'
-        for name, value in (('KEY_FILE', self.key_file), ('vendored_trees', lambda: ['a' * 40, 'b' * 40])):
+        for name, value in (('KEY_FILE', self.key_file), ('vendored_trees', lambda: ['a' * 40, 'b' * 40, 'd' * 40])):
             patcher = patch.object(cache, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -59,7 +63,7 @@ class NativeCacheTest(unittest.TestCase):
             cache.prepare()
         run.assert_not_called()
         self.assertEqual(self.key_file.read_text(), ''.join(
-            f'# {path} {tree}\n' for path, tree in zip(cache.VENDORED, ('a' * 40, 'b' * 40))))
+            f'# {path} {tree}\n' for path, tree in zip(cache.VENDORED, ('a' * 40, 'b' * 40, 'd' * 40))))
 
     def test_developer_and_self_hosted_environments_are_never_modified(self):
         for environment in ('', 'self-hosted'):
@@ -106,12 +110,13 @@ class NativeCacheKeyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             key_file = Path(folder) / 'cache-key/.cargo/config.toml'
             texts = []
-            for trees in (['a' * 40, 'b' * 40], ['a' * 40, 'b' * 40], ['c' * 40, 'b' * 40], ['a' * 40, 'c' * 40]):
+            for trees in (['a' * 40, 'b' * 40, 'd' * 40], ['a' * 40, 'b' * 40, 'd' * 40], ['c' * 40, 'b' * 40, 'd' * 40],
+                          ['a' * 40, 'c' * 40, 'd' * 40], ['a' * 40, 'b' * 40, 'c' * 40]):
                 with patch.object(cache, 'KEY_FILE', key_file), patch.object(cache, 'vendored_trees', lambda: trees):
                     cache.write_cache_key()
                 texts.append(key_file.read_bytes())
         self.assertEqual(texts[0], texts[1])
-        self.assertEqual(len(set(texts)), 3)
+        self.assertEqual(len(set(texts)), 4)
         # A comment only: Cargo would get no setting from it.
         self.assertTrue(all(line.startswith(b'# ') for line in texts[0].splitlines()))
 
@@ -126,17 +131,23 @@ class NativeCacheKeyTest(unittest.TestCase):
                 if source.resolve() not in target.parents:
                     outside.add(target.relative_to(ROOT.resolve()).as_posix())
         self.assertTrue(outside)
+        # tooling/patched-sources.py rebuilds one tree for each patch series; the series is its tracked source.
+        explorer = 'rendering/bevy-explorer/'
+        rebuilt = {explorer + ('bevy' if series.name == 'bevy' else 'forks/' + series.name): explorer + 'patches'
+                   for series in (ROOT / explorer / 'patches').iterdir()}
+        self.assertIn(explorer + 'bevy', rebuilt)
         for path in outside:
-            self.assertTrue(any(path == tree or path.startswith(tree + '/') for tree in cache.VENDORED), path)
+            tracked = next((series for tree, series in rebuilt.items() if path == tree or path.startswith(tree + '/')), path)
+            self.assertTrue(any(tracked == tree or tracked.startswith(tree + '/') for tree in cache.VENDORED), path)
         for tree in cache.VENDORED:
             self.assertTrue((ROOT / tree).is_dir(), tree)
 
     def test_identity_comes_from_the_commit_and_rejects_anything_else(self):
-        with patch.object(cache, 'output', side_effect=['a' * 40, 'b' * 40]) as output:
-            self.assertEqual(cache.vendored_trees(), ['a' * 40, 'b' * 40])
+        with patch.object(cache, 'output', side_effect=['a' * 40, 'b' * 40, 'c' * 40]) as output:
+            self.assertEqual(cache.vendored_trees(), ['a' * 40, 'b' * 40, 'c' * 40])
         self.assertEqual([call.args[-1] for call in output.call_args_list],
                          [f'HEAD:{path}' for path in cache.VENDORED])
-        with patch.object(cache, 'output', side_effect=['a' * 40, 'HEAD:missing']):
+        with patch.object(cache, 'output', side_effect=['a' * 40, 'b' * 40, 'HEAD:missing']):
             with self.assertRaisesRegex(RuntimeError, 'no Git identity'):
                 cache.vendored_trees()
 
@@ -153,7 +164,13 @@ class NativeCacheKeyTest(unittest.TestCase):
                     self.assertTrue(('Swatinem/rust-cache@' + step).startswith(RUST_CACHE), workflow.name)
                     self.assertIn('prepare-native-cache.py', before.rsplit('actions/checkout@', 1)[-1], workflow.name)
                 before = step
-        self.assertGreaterEqual(uses, 6)
+        self.assertGreaterEqual(uses, 3)
+        # Bevy Explorer / CI keys its native caches with tooling/bevy-target-cache.py, which puts
+        # the same trees in each key.
+        ci = (ROOT / '.github/workflows/bevy-explorer-ci.yml').read_text()
+        self.assertNotIn('Swatinem/rust-cache@', ci)
+        self.assertEqual(len(re.findall(r'bevy-target-cache\.py" key --lane \w+\n', ci)), 3)
+        self.assertLessEqual(set(cache.VENDORED), set(target_cache.VENDORED))
 
 
 if __name__ == '__main__':

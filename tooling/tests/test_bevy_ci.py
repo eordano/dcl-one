@@ -36,6 +36,54 @@ class WorkflowTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(any(fnmatch.fnmatchcase(path.lstrip('/'), pattern) for pattern in ci.IMAGES_INPUTS))
 
+    def test_workflow_filters_watch_the_rebuild_tool_and_its_action(self):
+        for name in (ci.WORKFLOW, ci.SCENES_WORKFLOW, '.github/workflows/bevy-explorer-e2e.yml'):
+            patterns = re.findall(r"^ +- '?([^'\n]+)'?$", (ci.ROOT / name).read_text(), re.M)
+            for path in ('tooling/patched-sources.py', '.github/actions/bevy-explorer-sources/action.yml',
+                         'rendering/bevy-explorer/vendor/boimp/Cargo.toml'):
+                with self.subTest(workflow=name, path=path):
+                    self.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns))
+
+    def test_source_job_runs_the_online_guards_for_what_changed_and_the_daily_run_proves_the_series(self):
+        workflow = (ci.ROOT / ci.WORKFLOW).read_text()
+        source = workflow.split('\n  source:\n', 1)[1].split('\n  changes:\n', 1)[0]
+        # Every build job proves the tree ids when it rebuilds the trees, so only the daily run verifies with no build.
+        verify = 'uses: ./.github/actions/bevy-explorer-sources\n        with:\n          verify: true'
+        self.assertNotIn(verify, source)
+        self.assertIn(verify, (ci.ROOT / '.github/workflows/bevy-explorer-upstream.yml').read_text())
+        for step in ("python3 -m unittest discover -s tooling/tests -p 'test_upstream_*.py' -v",
+                     'run: python3 tooling/bevy-ci.py guards-plan',
+                     "if: steps.guards.outputs.pins != ''",
+                     'run: python3 tooling/upstream-drift.py check $PINS',
+                     "if: steps.guards.outputs.provenance == 'true'\n        run: python3 tooling/vendor-provenance.py"):
+            self.assertIn(step, source)
+        # A change to only a pin, the upstream check, its tests or a provenance tool starts the run.
+        for event, end in (('push', 'pull_request'), ('pull_request', 'workflow_dispatch')):
+            block = workflow.split('  ' + event + ':', 1)[1].split('  ' + end + ':', 1)[0]
+            patterns = [line.strip()[2:] for line in block.splitlines() if line.strip().startswith('- ')]
+            for name in ('rendering/bevy-explorer/patches/winit/source.toml', 'tooling/upstream-drift.py',
+                         'tooling/upstream-drift-site.py', 'tooling/tests/test_upstream_drift.py',
+                         'tooling/vendor-provenance.py', 'tooling/enet-provenance.py'):
+                with self.subTest(event=event, path=name):
+                    self.assertTrue(any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns))
+
+    def test_daily_upstream_run_checks_every_pin_and_every_in_tree_crate(self):
+        daily = (ci.ROOT / '.github/workflows/bevy-explorer-upstream.yml').read_text()
+        self.assertIn('run: python3 tooling/upstream-drift.py check | tee -a "$GITHUB_STEP_SUMMARY"\n', daily)
+        self.assertIn('run: python3 tooling/vendor-provenance.py\n', daily)
+        # The directory mode moved out of the ENet tool; no workflow or action may still call it.
+        for path in sorted((ci.ROOT / '.github').rglob('*.yml')):
+            self.assertNotRegex(path.read_text(encoding='utf-8'), r'enet-provenance\.py[ \t]+\S', path.name)
+
+    def test_sources_action_restores_the_newest_bases_and_never_rewrites_an_edited_tree(self):
+        action = (ci.ROOT / '.github/actions/bevy-explorer-sources/action.yml').read_text()
+        key = re.search(r'^ +key: (bevy-explorer-patch-bases-\$\{\{ runner\.os \}\}-)\$\{\{ steps\.bases\.outputs\.key \}\}$', action, re.M)
+        self.assertIsNotNone(key)
+        self.assertIn(f'restore-keys: |\n          {key.group(1)}\n', action)
+        self.assertEqual(re.findall(r'patched-sources\.py (.+)', action), ['verify', 'materialise --strict'])
+        self.assertIn("- if: inputs.verify == 'true'", action)
+        self.assertIn("- if: inputs.verify != 'true'", action)
+
     def test_the_windows_ffmpeg_archive_is_accepted_only_with_its_pinned_digest(self):
         # The desktop package ships the libraries of this archive, and a release tag can get a new file.
         pins = set()
@@ -95,8 +143,9 @@ class WorkflowTest(unittest.TestCase):
         block = ''.join(lines[:next(i for i, line in enumerate(lines) if line[:1] not in (' ', '#'))])
         self.assertIn("  group: bevy-explorer-ci-${{ github.event.pull_request.number && format('pr-{0}', "
                       "github.event.pull_request.number) || github.ref }}\n", block)
-        self.assertIn("  cancel-in-progress: ${{ github.event_name == 'pull_request' || "
-                      "github.ref != 'refs/heads/main' }}\n", block)
+        # Marking a draft ready does not cancel the run whose web build the smoke job waits for.
+        self.assertIn("  cancel-in-progress: ${{ github.event.action != 'ready_for_review' && "
+                      "(github.event_name == 'pull_request' || github.ref != 'refs/heads/main') }}\n", block)
 
     def test_the_build_jobs_start_beside_the_guards_and_a_failed_check_stops_them(self):
         workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
@@ -148,15 +197,15 @@ class WorkflowTest(unittest.TestCase):
                       "github.head_ref != 'main' && github.head_ref != 'master' && "
                       "contains(github.event.pull_request.labels.*.name, 'ci:preview')) }}\n", job)
         self.assertIn('      publish: ${{ env.BEVY_WEB_PUBLISH }}\n', job)
-        # The package upload and the publish job read only that answer.
+        # The package job and the publish job read only that answer.
         self.assertIn("      - name: Upload the stamped package for publication\n"
-                      "        if: env.BEVY_WEB_PUBLISH == 'true'\n", job)
+                      "        if: needs.build-deploy-web.outputs.publish == 'true'\n", job)
         self.assertIn("\n  publish-web:\n    # lab: the publication broker serves only the upstream organisation.\n"
                       "    if: needs.build-deploy-web.outputs.publish == 'true' && github.repository == 'decentraland/dcl-one'\n", workflow)
         notice = job[job.index('      - name: Say how to get a preview\n'):
                      job.index('      - name: Upload the stamped package for publication\n')]
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository && "
-                      "env.BEVY_WEB_PUBLISH != 'true'\n", notice)
+                      "needs.build-deploy-web.outputs.publish != 'true'\n", notice)
         self.assertIn('Add the ci:preview label, then push or reopen', notice)
         # A closed pull request removes its tag with or without the label.
         cleanup = workflow.split('\n  preview-cleanup:\n', 1)[1].split('\n    name:', 1)[0]
@@ -169,8 +218,7 @@ class WorkflowTest(unittest.TestCase):
                       '          echo "key=$key" >> "$GITHUB_OUTPUT"\n', job)
         self.assertIn("      - name: Save tested compiled engine\n"
                       "        if: steps.engine-cache.outputs.cache-matched-key == ''\n", job)
-        self.assertIn("      BEVY_WEB_OPT: ${{ github.event_name == 'pull_request' && "
-                      "vars.BENCHMARK_ENABLED_RUNNERS == 'none' && 'unoptimized' || 'optimized' }}\n", job)
+        self.assertIn("      BEVY_WEB_OPT: unoptimized\n", job)  # lab: every build is unoptimized
         self.assertIn('          key: bevy-engine-v1-${{ env.BEVY_WEB_OPT }}-${{ steps.engine-inputs.outputs.key }}\n'
                       '          restore-keys: bevy-engine-v1-optimized-${{ steps.engine-inputs.outputs.key }}\n',
                       job)
@@ -345,6 +393,18 @@ class SelectionTest(unittest.TestCase):
                 self.assertEqual({lane for lane in (*ci.LANES, 'native-matrix', 'scenes')
                                   if selected[lane]}, {'web'})
 
+    def test_local_hashing_and_its_check_validate_web_only(self):
+        # play-artifact.py fingerprints these paths with the web app: a change needs a web build
+        # with the new fingerprint, or fetch-play.py finds no producer for it. Markdown is in
+        # neither the fingerprint nor the selection.
+        for name, lanes in (('library/hashing/src/cid.ts', {'web'}), ('library/hashing/package.json', {'web'}),
+                            ('tooling/check-local-hashing.mjs', {'web'}), ('library/hashing/README.md', set())):
+            with self.subTest(path=name):
+                before = self.git('rev-parse', 'HEAD')
+                self.write(name, 'changed')
+                selected = ci.select(before, self.commit())
+                self.assertEqual({lane for lane in (*ci.LANES, 'native-matrix', 'scenes') if selected[lane]}, lanes)
+
     def test_library_ui_outside_the_hud_entries_selects_nothing(self):
         for name in ('library/ui/figma/src/cli.ts', 'library/ui/index.ts', 'library/ui/index.tsx',
                      'library/ui/components/NavBar/NavBar.tsx',
@@ -486,8 +546,8 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(larger, set())  # lab: this repository maps the larger runners to standard ones
         self.assertEqual(set(conditions.values()), set(ci.HELD_ON_DRAFT))
         # The development smoke job and the images read the web job's output, so a draft still builds it.
-        self.assertNotIn('web', ci.HELD_ON_DRAFT)
-        self.assertNotIn('held', jobs['images'])
+        for name in ('build-deploy-web', 'images'):
+            self.assertNotRegex(jobs[name], r'needs\.changes\.outputs\.(test|headless)\b', name)
         for name, lane in conditions.items():
             self.assertRegex(jobs[name], rf"if: .*needs\.changes\.outputs\.{lane} == 'true'")
         # Marking a draft ready starts the run that the hold skipped.
@@ -545,6 +605,14 @@ class SelectionTest(unittest.TestCase):
             self.write(f'.github/workflows/bevy-explorer-{name}.yml', 'changed')
         result = ci.select(self.base, self.commit())
         self.assertFalse(any(result[lane] for lane in ci.LANES))
+
+    def test_the_upstream_and_provenance_tools_run_the_guards_and_build_nothing(self):
+        # The workflow filters start the run for these; the `source` job tests and runs them.
+        for name in ('tooling/upstream-drift.py', 'tooling/upstream-drift-site.py', 'tooling/tests/test_upstream_drift.py',
+                     'tooling/vendor-provenance.py', 'tooling/enet-provenance.py'):
+            self.write(name, 'changed')
+        result = ci.select(self.base, self.commit())
+        self.assertFalse(any(result[lane] for lane in (*ci.LANES, 'native-matrix', 'scenes')))
 
     def test_platform_workflow_changes_select_the_shared_linux_producer(self):
         for name in ('bevy-explorer-headless.yml', 'bevy-explorer-headless-build.yml'):
@@ -659,9 +727,8 @@ class SelectionTest(unittest.TestCase):
                 self.assertFalse(ci.consumer_plan('pull_request', before, head, '')['images'])
 
     def test_removed_or_renamed_embedded_markdown_selects_builds(self):
-        for path in ('rendering/bevy-explorer/bevy/crates/example/README.md',
-                     'rendering/bevy-explorer/bevy/crates/bevy_color/docs/conversion.md',
-                     'rendering/bevy-explorer/bevy/errors/B0001.md'):
+        for path in ('rendering/bevy-explorer/source/crates/example/README.md',
+                     'rendering/bevy-explorer/source/crates/example/docs/conversion.md'):
             for rename in (False, True):
                 with self.subTest(path=path, rename=rename):
                     self.write(path, 'original')
@@ -729,7 +796,7 @@ class SelectionTest(unittest.TestCase):
             'apps/bevy-explorer/Dockerfile.headless': {'headless'},
             'apps/bevy-explorer/image-smoke.py': {'web', 'headless'},
             '.github/workflows/bevy-explorer-images.yml': {'web', 'headless'},
-            'apps/bevy-explorer/prepare-native-cache.py': {'clippy', 'test', 'headless', 'native-matrix', 'scenes'},
+            'apps/bevy-explorer/prepare-native-cache.py': {'headless', 'native-matrix', 'scenes'},
             'apps/bevy-explorer/install-linux-deps.py': {*ci.LANES, 'scenes'},
             'apps/bevy-explorer/install-cef.py': {'test', 'native-matrix', 'scenes'},
             'apps/bevy-explorer/install-web-tools.py': {'web'},
@@ -747,7 +814,7 @@ class SelectionTest(unittest.TestCase):
 
     def test_unknown_inputs_and_shared_protoc_changes_run_all_platforms_and_scenes(self):
         for path in ('apps/bevy-explorer/future-build-input', 'apps/bevy-explorer/install-protoc.py',
-                     'tooling/bevy-ci.py', 'tooling/bevy-mtimes.py'):
+                     'tooling/bevy-ci.py', 'tooling/bevy-mtimes.py', 'tooling/bevy-target-cache.py'):
             before = self.git('rev-parse', 'HEAD')
             self.write(path, 'changed')
             result = ci.select(before, self.commit())
@@ -769,15 +836,69 @@ class SelectionTest(unittest.TestCase):
         result = ci.select(before, self.commit())
         self.assertFalse(any(result[lane] for lane in (*ci.LANES, 'native-matrix', 'scenes')))
 
-    def test_vendored_bevy_selects_every_lane_and_the_native_matrix(self):
-        # The Explorer builds Bevy from rendering/bevy-explorer/bevy, platform code included.
-        self.write('rendering/bevy-explorer/bevy/crates/bevy_scene/src/scene_spawner.rs', 'changed')
+    def test_a_bevy_patch_selects_every_lane_and_the_native_matrix(self):
+        # The patch series decides the Bevy tree the Explorer builds, platform code included.
+        self.write('rendering/bevy-explorer/patches/bevy/series/0001-scene-spawner.patch', 'changed')
         result = ci.select(self.base, self.commit())
         self.assertTrue(all(result[lane] for lane in (*ci.LANES, 'native-matrix', 'scenes')))
 
-    def test_vendored_bevy_rebuilds_the_images(self):
-        self.write('rendering/bevy-explorer/bevy/crates/bevy_scene/src/scene_spawner.rs', 'changed')
+    def test_a_bevy_patch_rebuilds_the_images(self):
+        self.write('rendering/bevy-explorer/patches/bevy/series/0001-scene-spawner.patch', 'changed')
         self.assertTrue(ci.consumer_changed(self.base, self.commit(), 'images'))
+
+    def test_in_tree_crates_and_the_rebuild_tool_select_every_lane_and_rebuild_the_images(self):
+        # The crates tracked as exact bytes, the tool that writes the Bevy and fork trees, and the
+        # action that runs it before each Cargo step.
+        for path in ('rendering/bevy-explorer/vendor/boimp/src/lib.rs', 'tooling/patched-sources.py',
+                     '.github/actions/bevy-explorer-sources/action.yml'):
+            with self.subTest(path=path):
+                before = self.git('rev-parse', 'HEAD')
+                self.write(path, 'changed')
+                head = self.commit()
+                result = ci.select(before, head)
+                self.assertTrue(all(result[lane] for lane in (*ci.LANES, 'native-matrix', 'scenes')))
+                self.assertTrue(ci.consumer_changed(before, head, 'images'))
+
+    def test_online_guards_follow_the_changed_pins_and_the_in_tree_crates(self):
+        pins, vendor = 'rendering/bevy-explorer/patches', 'rendering/bevy-explorer/vendor'
+        for name in ('bevy', 'winit', 'old'):
+            self.write(f'{pins}/{name}/source.toml', f'name = "{name}"\ncommit = "1"\n')
+        self.write(f'{pins}/bevy/series/0001-one.patch', 'one')
+        self.write(f'{vendor}/boimp/src/lib.rs', 'one')
+        before = self.commit()
+        cases = [
+            # A patch, a document and a file beside the pin change no pin.
+            ({f'{pins}/bevy/series/0001-one.patch': 'two', f'{pins}/README.md': 'text', f'{pins}/winit/notes.toml': 'x'}, '', False),
+            ({f'{pins}/winit/source.toml': 'name = "winit"\ncommit = "2"\n'}, 'winit', False),
+            ({f'{pins}/bevy/source.toml': 'commit = "3"\n', f'{pins}/new/source.toml': 'commit = "1"\n'}, 'bevy new', False),
+            ({f'{vendor}/boimp/src/lib.rs': 'two'}, '', True),
+            ({f'{vendor}/boimp/upstream.lock.json': '{}'}, '', True),
+            ({'tooling/vendor-provenance.py': 'changed'}, '', True),
+            ({'tooling/enet-provenance.py': 'changed'}, '', True),
+            ({'tooling/upstream-drift.py': 'changed', 'rendering/bevy-explorer/source/vendor/basisu/x.c': 'x'}, '', False),
+        ]
+        for files, expected, provenance in cases:
+            with self.subTest(files=sorted(files)):
+                for name, value in files.items():
+                    self.write(name, value)
+                head = self.commit()
+                result = ci.guards_plan('pull_request', before, head)
+                self.assertEqual((result['pins'], result['provenance']), (expected, provenance))
+                before = head
+        # A removed source has no pin to prove.
+        (self.root / pins / 'old/source.toml').unlink()
+        self.assertEqual(ci.guards_plan('push', before, self.commit())['pins'], '')
+
+    def test_online_guards_all_run_without_a_comparison(self):
+        for name in ('bevy', 'winit'):
+            self.write(f'rendering/bevy-explorer/patches/{name}/source.toml', 'commit = "1"\n')
+        self.write('rendering/bevy-explorer/patches/winit/series/0001-one.patch', 'one')
+        head = self.commit()
+        everything = {'pins': 'bevy winit', 'provenance': True, 'reason': 'Comparison unavailable; every online source guard runs'}
+        with patch('builtins.print'):
+            self.assertEqual(ci.guards_plan('workflow_dispatch', self.base, head), everything)
+            self.assertEqual(ci.guards_plan('push', '0' * 40, head), everything)
+            self.assertEqual(ci.guards_plan('pull_request', '', head), everything)
 
     def test_newer_web_pass_cannot_hide_an_unvalidated_native_change_on_main(self):
         self.write('rendering/bevy-explorer/source/src/lib.rs', 'native change')
@@ -1017,6 +1138,86 @@ class PublicationTest(unittest.TestCase):
             self.assertEqual(values['build'], 'true')
             self.assertEqual(json.loads(values['products']), ['web'])
             self.assertEqual(json.loads(values['build-matrix']), ci.image_matrix(['web']))
+
+
+def load_tool(name):
+    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), Path(__file__).parents[1] / f'{name}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def workflow_patterns(text):
+    """Every entry of a `paths:` list and every argument of a hashFiles() call of a workflow or an action."""
+    patterns, indent = set(), None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped in ('paths:', 'paths-ignore:'):
+            indent = len(line) - len(line.lstrip())
+        elif indent is not None and stripped.startswith('- ') and len(line) - len(line.lstrip()) >= indent:
+            patterns.add(stripped[2:].strip().strip('\'"'))
+        elif stripped and not stripped.startswith('#'):
+            indent = None
+    for call in re.findall(r'hashFiles\(([^)]*)\)', text, re.S):
+        patterns.update(re.findall(r"'([^']+)'", call))
+    return {pattern.lstrip('!') for pattern in patterns}
+
+
+class PathListTest(unittest.TestCase):
+    """The Explorer's patch, in-tree crate and tool paths are repeated in workflow filters, cache
+    keys, the labeler, the sources action and the selection tools. A list that names a path the
+    repository does not have watches nothing: a moved directory must fail here."""
+    EXPLORER = 'rendering/bevy-explorer/'
+    # Watched so that the file selects the builds when it is added; the repository has none today.
+    WATCH_ONLY = {'rust-toolchain*'}
+
+    def tracked(self, pattern):
+        return bool(subprocess.run(['git', 'ls-files', '-z', '--', pattern], cwd=ci.ROOT, capture_output=True, check=True,
+                                   env={**os.environ, 'GIT_GLOB_PATHSPECS': '1'}).stdout)
+
+    def lists(self):
+        found = {}
+        for path in sorted((ci.ROOT / '.github').rglob('*.yml')):
+            text = path.read_text(encoding='utf-8')
+            patterns = workflow_patterns(text)
+            if path.name == 'labeler.yml':
+                patterns = set(re.findall(r"^ +- '([^']+)'$", text, re.M))
+            if path.name == 'action.yml':
+                patterns.update(re.findall(r'\S*/source\.toml', text))
+            if any(pattern.startswith(self.EXPLORER) for pattern in patterns):
+                found[path.relative_to(ci.ROOT).as_posix()] = patterns
+        artifact, local = load_tool('play-artifact'), load_tool('ci-local')
+        found['tooling/bevy-ci.py'] = {*ci.INPUTS, *ci.IMAGES_INPUTS, *ci.TOOLS_INPUTS, *ci.GATEWAY_HUD_INPUTS,
+                                       *ci.HARNESS_WEB_READS, *ci.PROVENANCE_INPUTS, ci.PATCHES, ci.SOURCE,
+                                       *('apps/bevy-explorer/' + name for name in ci.APP_INPUTS)}
+        found['tooling/play-artifact.py'] = {*artifact.INPUTS, artifact.SOURCE, artifact.PATCHES, artifact.VENDOR,
+                                             artifact.PROTO, artifact.HUD, artifact.BINDINGS}
+        found['tooling/ci-local.py'] = set(local.workflow_paths('bevy-explorer-headless.yml', source=ci.ROOT))
+        return found
+
+    def missing(self, lists):
+        return sorted((name, pattern) for name, patterns in lists.items() for pattern in patterns
+                      if pattern not in self.WATCH_ONLY and not self.tracked(pattern))
+
+    def test_every_path_list_names_paths_of_the_repository(self):
+        lists = self.lists()
+        for name in (ci.WORKFLOW, ci.SCENES_WORKFLOW, '.github/workflows/bevy-explorer-e2e.yml', '.github/labeler.yml',
+                     '.github/actions/bevy-explorer-sources/action.yml'):
+            self.assertIn(name, lists)
+            self.assertTrue(any('bevy-explorer/patches' in pattern or pattern == 'rendering/bevy-explorer/**' for pattern in lists[name]), name)
+        self.assertEqual(self.missing(lists), [])
+
+    def test_a_watch_only_entry_names_nothing_yet_and_is_in_use(self):
+        used = set().union(*self.lists().values())
+        for pattern in self.WATCH_ONLY:
+            self.assertIn(pattern, used)
+            self.assertFalse(self.tracked(pattern), f'{pattern} exists now: remove it from WATCH_ONLY')
+
+    def test_a_list_that_names_a_moved_directory_fails(self):
+        lists = {'workflow': workflow_patterns("    paths:\n      - 'rendering/bevy-explorer/forks/**'\n      - rendering/bevy-explorer/patches/**\n"
+                                              "    steps:\n      - run: echo ${{ hashFiles('rendering/bevy-explorer/source/vendor/enet/**', '!flake.lock') }}\n")}
+        self.assertEqual(self.missing(lists), [('workflow', 'rendering/bevy-explorer/forks/**'),
+                                               ('workflow', 'rendering/bevy-explorer/source/vendor/enet/**')])
 
 
 if __name__ == '__main__':

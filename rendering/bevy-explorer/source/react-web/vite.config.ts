@@ -40,7 +40,7 @@ function bridgeScenePreview(): Plugin {
           if (!path) throw new Error('package.json names no sdk-commands bin')
           script = join(pkgDir, path)
         } catch (error) {
-          console.warn(`[bridge-scene] cannot start @dcl/sdk-commands (run npm install in react-web/bridge-scene): ${error}`)
+          console.warn(`[bridge-scene] cannot start @dcl/sdk-commands (run pnpm install in react-web/bridge-scene): ${error}`)
           return
         }
         // Windows has no process group to signal, so the tree is stopped with taskkill.

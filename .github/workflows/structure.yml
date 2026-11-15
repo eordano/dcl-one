@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   structure:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,6 +49,12 @@ jobs:
       - name: Test shared asynchronous utilities
         if: success() || failure()
         run: node --test library/async/*.test.mts
+      - name: Test the hashing package
+        if: success() || failure()
+        working-directory: library/hashing
+        run: |
+          corepack pnpm@11.27.0 install --frozen-lockfile --ignore-scripts
+          node --test test/*.test.ts
       - name: Test the shop parity harness
         if: success() || failure()
         working-directory: tooling/shop-parity
@@ -67,7 +73,7 @@ jobs:
           node --test lib/*.test.mts
   # Advisory until its default-branch run history supports required-check promotion.
   social-service-contracts:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

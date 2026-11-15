@@ -1,0 +1,99 @@
+From 633553a6f180b2a38bb25e1cdd42b131c8d1f607
+Subject: ext/fetch: drop auth headers, cookies on redirect to a different origin
+Origin: https://github.com/robtfm/deno/commit/633553a6f180b2a38bb25e1cdd42b131c8d1f607
+Date: 2024-11-25T10:07:00-08:00
+
+Backport of denoland/deno@7456255c (CVE-2025-21620): authorization, proxy-authorization and cookie are removed from the request before following a redirect to a different host (other than a subdomain) or from https to http.
+
+(cherry picked from commit 7456255cd10286d71363fc024e51b2662790448a)
+---
+diff --git a/ext/fetch/26_fetch.js b/ext/fetch/26_fetch.js
+index 47186fb2dd0bdcd6b7b6c790392aef22409ed108..0564c606b18c41288827dc5498df9491ca086b33 100644
+--- a/ext/fetch/26_fetch.js
++++ b/ext/fetch/26_fetch.js
+@@ -29,6 +29,7 @@ const {
+   PromisePrototypeCatch,
+   SafeArrayIterator,
+   String,
++  StringPrototypeEndsWith,
+   StringPrototypeStartsWith,
+   StringPrototypeToLowerCase,
+   TypeError,
+@@ -63,6 +64,12 @@ const REQUEST_BODY_HEADER_NAMES = [
+   "content-type",
+ ];
+ 
++const REDIRECT_SENSITIVE_HEADER_NAMES = [
++  "authorization",
++  "proxy-authorization",
++  "cookie",
++];
++
+ /**
+  * @param {number} rid
+  * @returns {Promise<{ status: number, statusText: string, headers: [string, string][], url: string, responseRid: number, error: [string, string]? }>}
+@@ -250,12 +257,14 @@ function httpRedirectFetch(request, response, terminator) {
+   if (locationHeaders.length === 0) {
+     return response;
+   }
++
++  const currentURL = new URL(request.currentUrl());
+   const locationURL = new URL(
+     locationHeaders[0][1],
+     response.url() ?? undefined,
+   );
+   if (locationURL.hash === "") {
+-    locationURL.hash = request.currentUrl().hash;
++    locationURL.hash = currentURL.hash;
+   }
+   if (locationURL.protocol !== "https:" && locationURL.protocol !== "http:") {
+     return networkError("Can not redirect to a non HTTP(s) url");
+@@ -294,6 +303,28 @@ function httpRedirectFetch(request, response, terminator) {
+       }
+     }
+   }
++
++  // Drop confidential headers when redirecting to a less secure protocol
++  // or to a different domain that is not a superdomain
++  if (
++    locationURL.protocol !== currentURL.protocol &&
++      locationURL.protocol !== "https:" ||
++    locationURL.host !== currentURL.host &&
++      !isSubdomain(locationURL.host, currentURL.host)
++  ) {
++    for (let i = 0; i < request.headerList.length; i++) {
++      if (
++        ArrayPrototypeIncludes(
++          REDIRECT_SENSITIVE_HEADER_NAMES,
++          byteLowerCase(request.headerList[i][0]),
++        )
++      ) {
++        ArrayPrototypeSplice(request.headerList, i, 1);
++        i--;
++      }
++    }
++  }
++
+   if (request.body !== null) {
+     const res = extractBody(request.body.source);
+     request.body = res.body;
+@@ -410,6 +441,19 @@ function abortFetch(request, responseObject, error) {
+   return error;
+ }
+ 
++/**
++ * Checks if the given string is a subdomain of the given domain.
++ *
++ * @param {String} subdomain
++ * @param {String} domain
++ * @returns {Boolean}
++ */
++function isSubdomain(subdomain, domain) {
++  const dot = subdomain.length - domain.length - 1;
++  return dot > 0 && subdomain[dot] === "." &&
++    StringPrototypeEndsWith(subdomain, domain);
++}
++
+ /**
+  * Handle the Response argument to the WebAssembly streaming APIs, after
+  * resolving if it was passed as a promise. This function should be registered

@@ -1,0 +1,594 @@
+From 442ba0be83aa4a36f6a8ed2fb92ae892de3c43a4
+Subject: bevy: start the engine on web workers from one page call
+Origin: https://github.com/robtfm/bevy/commit/442ba0be83aa4a36f6a8ed2fb92ae892de3c43a4
+Date: 2026-09-23T11:42:35+01:00
+
+`bevy::web_worker::start` takes the page's canvas and spawns the workers
+the engine runs on: the render worker (the OffscreenCanvas, the wgpu
+device and the render world), the compute workers (the ComputeTaskPool)
+and the engine worker (the app world and winit's event loop). Every
+worker runs the same script, shipped with bevy_internal as a wasm-bindgen
+snippet, which instantiates the module over the page's shared memory and
+calls bevy's own export for its role: the render, compute and attach
+entries are bevy's, so the app supplies just its engine export, which
+builds the app and runs it. An optional render-worker setup export runs
+there before the render world exists, for patching WebGPU or providing
+the wgpu resources.
+
+Page functions, the JS hooks the engine looks up on `self`, are relayed
+from every worker to the page's global. Their names come from the
+declarations: the `#[page_functions]` attribute (bevy_derive) on a
+`js_namespace = self` extern block re-emits the block and adds a generated
+export listing its JS names, which the worker script finds by prefix and
+installs relays for. No list to maintain and no link-section registry,
+which linkme cannot provide on wasm32. Worker console output is mirrored
+to the page, and a worker posts `__bevy_ready` once its entries return.
+---
+diff --git a/crates/bevy_derive/Cargo.toml b/crates/bevy_derive/Cargo.toml
+index 04f72829a0e3e3f32653acd836fce11dca5a5d5a..6dec15e49b4458347f9fc977ab7c1c234ca94574 100644
+--- a/crates/bevy_derive/Cargo.toml
++++ b/crates/bevy_derive/Cargo.toml
+@@ -14,6 +14,7 @@ proc-macro = true
+ [dependencies]
+ bevy_macro_utils = { path = "../bevy_macro_utils", version = "0.16.1" }
+ 
++proc-macro2 = "1.0"
+ quote = "1.0"
+ syn = { version = "2.0", features = ["full"] }
+ 
+diff --git a/crates/bevy_derive/src/lib.rs b/crates/bevy_derive/src/lib.rs
+index 2636ffc57d13f1fa0afbf3148e87787aa7eb17eb..82afa031c3fb4eb75db686d1387608c8c1d1bae9 100644
+--- a/crates/bevy_derive/src/lib.rs
++++ b/crates/bevy_derive/src/lib.rs
+@@ -11,6 +11,7 @@ extern crate proc_macro;
+ mod bevy_main;
+ mod derefs;
+ mod enum_variant_meta;
++mod page_functions;
+ 
+ use bevy_macro_utils::{derive_label, BevyManifest};
+ use proc_macro::TokenStream;
+@@ -210,3 +211,15 @@ pub fn derive_app_label(input: TokenStream) -> TokenStream {
+     dyn_eq_path.segments.push(format_ident!("DynEq").into());
+     derive_label(input, "AppLabel", &trait_path, &dyn_eq_path)
+ }
++
++/// Registers the functions of a `#[wasm_bindgen(js_namespace = self)]` extern block as page
++/// functions: ones the engine calls on the page's global, relayed there when the engine runs on
++/// a web worker (`bevy::web_worker`). The block is emitted unchanged, followed by a generated
++/// export listing the functions' JS names, which the workers read to install the relays.
++///
++/// The relays resolve with a promise, so a function returning a value must be `async` or return
++/// `js_sys::Promise`; other return types are rejected. Place it after any `#[cfg]` on the block.
++#[proc_macro_attribute]
++pub fn page_functions(_attr: TokenStream, item: TokenStream) -> TokenStream {
++    page_functions::page_functions(item)
++}
+diff --git a/crates/bevy_derive/src/page_functions.rs b/crates/bevy_derive/src/page_functions.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..45c36a5aa821fd94e448f87c1ad0df96938e6a53
+--- /dev/null
++++ b/crates/bevy_derive/src/page_functions.rs
+@@ -0,0 +1,95 @@
++use proc_macro::TokenStream;
++use quote::{format_ident, quote};
++use syn::{parse_macro_input, ForeignItem, ItemForeignMod, LitStr, ReturnType};
++
++pub fn page_functions(item: TokenStream) -> TokenStream {
++    let block = parse_macro_input!(item as ItemForeignMod);
++    // The relays resolve with a promise, so a sync declaration returning a value would get a
++    // `Promise` where it expects its value.
++    for item in &block.items {
++        if let ForeignItem::Fn(function) = item
++            && function.sig.asyncness.is_none()
++            && let ReturnType::Type(_, ty) = &function.sig.output
++            && !is_promise(ty)
++        {
++            return syn::Error::new_spanned(
++                ty,
++                "page functions are relayed asynchronously: declare the function `async` or return `js_sys::Promise`",
++            )
++            .to_compile_error()
++            .into();
++        }
++    }
++    let names: Vec<String> = block
++        .items
++        .iter()
++        .filter_map(|item| match item {
++            ForeignItem::Fn(function) => Some(
++                js_name(&function.attrs).unwrap_or_else(|| function.sig.ident.to_string()),
++            ),
++            _ => None,
++        })
++        .collect();
++
++    // One export per attributed block, named for the crate and the block so blocks never
++    // collide; the worker script finds them all by the prefix.
++    let crate_name = std::env::var("CARGO_CRATE_NAME").unwrap_or_else(|_| "unknown".into());
++    let hash = fnv1a(&format!("{crate_name}{}", quote!(#block)));
++    let export = format!("__bevy_page_functions_{crate_name}_{hash:08x}");
++    let export_ident = format_ident!("{export}");
++    let export_name = LitStr::new(&export, proc_macro2::Span::call_site());
++    let name_literals = names
++        .iter()
++        .map(|name| LitStr::new(name, proc_macro2::Span::call_site()));
++
++    quote! {
++        #block
++
++        #[doc(hidden)]
++        #[::wasm_bindgen::prelude::wasm_bindgen(js_name = #export_name)]
++        pub fn #export_ident() -> ::std::vec::Vec<::std::string::String> {
++            ::std::vec![#(::std::string::String::from(#name_literals)),*]
++        }
++    }
++    .into()
++}
++
++/// The `js_name` of a `#[wasm_bindgen(...)]` attribute, given as a string or an identifier.
++fn js_name(attrs: &[syn::Attribute]) -> Option<String> {
++    let mut found = None;
++    for attr in attrs {
++        let is_wasm_bindgen = attr
++            .path()
++            .segments
++            .last()
++            .is_some_and(|segment| segment.ident == "wasm_bindgen");
++        if !is_wasm_bindgen {
++            continue;
++        }
++        let _ = attr.parse_nested_meta(|meta| {
++            if meta.path.is_ident("js_name") {
++                let value = meta.value()?;
++                found = Some(if value.peek(LitStr) {
++                    value.parse::<LitStr>()?.value()
++                } else {
++                    value.parse::<syn::Ident>()?.to_string()
++                });
++            } else if meta.input.peek(syn::Token![=]) {
++                // Another `key = value` (`js_namespace = self`, say): consume the value.
++                meta.value()?.parse::<proc_macro2::TokenTree>()?;
++            }
++            Ok(())
++        });
++    }
++    found
++}
++
++fn is_promise(ty: &syn::Type) -> bool {
++    matches!(ty, syn::Type::Path(path) if path.path.segments.last().is_some_and(|s| s.ident == "Promise"))
++}
++
++fn fnv1a(s: &str) -> u32 {
++    s.bytes().fold(0x811c_9dc5u32, |hash, byte| {
++        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
++    })
++}
+diff --git a/crates/bevy_internal/Cargo.toml b/crates/bevy_internal/Cargo.toml
+index 34a328538635ce4444fabcd388a9bb6d6fe40849..c0259e115c8ef885f7e8caf236a1e9e8b36529fa 100644
+--- a/crates/bevy_internal/Cargo.toml
++++ b/crates/bevy_internal/Cargo.toml
+@@ -10,7 +10,16 @@ keywords = ["game", "engine", "gamedev", "graphics", "bevy"]
+ categories = ["game-engines", "graphics", "gui", "rendering"]
+ 
+ [features]
+-web-worker = ["bevy_ecs/web-worker", "bevy_tasks/web-worker", "bevy_winit/web-worker", "bevy_render?/web-worker"]
++web-worker = [
++  "bevy_ecs/web-worker",
++  "bevy_tasks/web-worker",
++  "bevy_winit/web-worker",
++  "bevy_render?/web-worker",
++  "dep:wasm-bindgen",
++  "dep:wasm-bindgen-futures",
++  "dep:js-sys",
++  "dep:web-sys",
++]
+ trace = [
+   "bevy_app/trace",
+   "bevy_asset?/trace",
+@@ -443,6 +452,16 @@ bevy_window = { path = "../bevy_window", optional = true, version = "0.16.1", de
+ ] }
+ bevy_winit = { path = "../bevy_winit", optional = true, version = "0.16.1", default-features = false }
+ 
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++wasm-bindgen = { version = "0.2", optional = true }
++wasm-bindgen-futures = { version = "0.4", optional = true }
++js-sys = { version = "0.3", optional = true }
++web-sys = { version = "0.3.67", optional = true, features = [
++  'HtmlCanvasElement',
++  'OffscreenCanvas',
++  'Worker',
++] }
++
+ [lints]
+ workspace = true
+ 
+diff --git a/crates/bevy_internal/src/lib.rs b/crates/bevy_internal/src/lib.rs
+index 65411ad0500938c73ef86b2c456dd80b657c9011..f40ebe969f64406fd0d118e40245075bfab8ee2e 100644
+--- a/crates/bevy_internal/src/lib.rs
++++ b/crates/bevy_internal/src/lib.rs
+@@ -72,5 +72,7 @@ pub use bevy_ui as ui;
+ pub use bevy_utils as utils;
+ #[cfg(feature = "bevy_window")]
+ pub use bevy_window as window;
++#[cfg(all(target_arch = "wasm32", feature = "web-worker", feature = "bevy_render", feature = "bevy_winit"))]
++pub mod web_worker;
+ #[cfg(feature = "bevy_winit")]
+ pub use bevy_winit as winit;
+diff --git a/crates/bevy_internal/src/web_worker.js b/crates/bevy_internal/src/web_worker.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..56e796b1c9f6fd6466dd2d563d5a8efb618b1890
+--- /dev/null
++++ b/crates/bevy_internal/src/web_worker.js
+@@ -0,0 +1,119 @@
++// The worker script of `bevy::web_worker`, and its page-side spawner. The same file runs on the
++// page, where the wasm-bindgen glue imports it, and as the script of every worker it spawns.
++//
++// A worker is told, in its init message, the url of the glue and the exports to call, in order,
++// once its wasm instance is up (over the shared module and memory the page passes). The page functions
++// the engine calls (extern blocks marked `#[page_functions]`, listed by the glue exports that
++// attribute generates) each become a function on the worker's global that posts the call to the
++// page and resolves with the page function's result. Console output is mirrored to the page
++// under the worker's tag. When the last export returns (or its promise resolves) the worker
++// posts `{ __bevy_ready: tag }`; if importing the glue or an export fails it posts
++// `{ __bevy_ready: tag, error }` instead.
++
++/**
++ * Page side: spawns a worker and posts it its init message.
++ * @param {{ glueUrl: string, calls: { entry: string, args: any[] }[], tag: string,
++ *           module: WebAssembly.Module, memory: WebAssembly.Memory, stackSize?: number,
++ *           transfer: Transferable[] }} init
++ * @returns {Worker}
++ */
++export function spawnWorker(init) {
++  const worker = new Worker(new URL(import.meta.url), { type: "module" });
++  worker.addEventListener("message", async ({ data }) => {
++    if (!data) return;
++    if (data.__bevy_log) {
++      console[data.__bevy_log](...data.args);
++      return;
++    }
++    if (data.__bevy_call !== undefined) {
++      const fn = globalThis[data.__bevy_call];
++      let value, error;
++      try {
++        if (typeof fn !== "function") throw new Error(`${data.__bevy_call} is not defined on the page`);
++        value = await fn(...data.args);
++      } catch (err) {
++        error = err?.message ?? String(err);
++        console.error(`[bevy] ${data.tag} worker: ${data.__bevy_call} failed`, err);
++      }
++      worker.postMessage({ __bevy_result: data.__bevy_id, value, error });
++    }
++  });
++  const { transfer = [], ...message } = init;
++  worker.postMessage({ __bevy_init: message }, transfer);
++  return worker;
++}
++
++// Worker side.
++if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope) {
++  const pending = new Map();
++  let nextId = 1;
++  self.addEventListener("message", ({ data }) => {
++    if (!data || data.__bevy_result === undefined) return;
++    const call = pending.get(data.__bevy_result);
++    if (!call) return;
++    pending.delete(data.__bevy_result);
++    if (data.error !== undefined) call.reject(new Error(String(data.error)));
++    else call.resolve(data.value);
++  });
++  self.addEventListener("message", async ({ data }) => {
++    const init = data?.__bevy_init;
++    if (!init) return;
++    const { glueUrl, calls, tag, module, memory, stackSize } = init;
++    forwardConsole(tag);
++    try {
++      const glue = await import(glueUrl);
++      await glue.default({ module_or_path: module, memory, thread_stack_size: stackSize });
++      for (const key of Object.keys(glue)) {
++        if (!key.startsWith("__bevy_page_functions_")) continue;
++        for (const name of glue[key]()) {
++          self[name] = (...args) =>
++            new Promise((resolve, reject) => {
++              const id = nextId++;
++              pending.set(id, { resolve, reject });
++              postMessage({ __bevy_call: name, __bevy_id: id, args, tag });
++            });
++        }
++      }
++      for (const { entry, args = [] } of calls) {
++        const entryFn = glue[entry];
++        if (typeof entryFn !== "function") throw new Error(`${entry} is not exported by ${glueUrl}`);
++        await entryFn(...args);
++      }
++      postMessage({ __bevy_ready: tag });
++    } catch (e) {
++      console.error(`[bevy] ${tag} worker failed to start`, e);
++      postMessage({ __bevy_ready: tag, error: String(e?.stack ?? e) });
++    }
++  });
++}
++
++// Mirrors this worker's console to the page. Arguments are passed through as-is where they can
++// be cloned, so styled (`%c`) lines render the same on the page.
++function forwardConsole(tag) {
++  for (const level of ["log", "info", "warn", "error", "debug"]) {
++    const original = console[level].bind(console);
++    console[level] = (...args) => {
++      original(...args);
++      try {
++        postMessage({ __bevy_log: level, tag, args: args.map(cloneable) });
++      } catch (_) {
++        /* not cloneable; the worker's own console still has it */
++      }
++    };
++  }
++  self.addEventListener("error", (e) => console.error(`[${tag} worker] uncaught: ${e.message}`));
++  self.addEventListener("unhandledrejection", (e) =>
++    console.error(`[${tag} worker] unhandled rejection: ${e.reason?.stack ?? e.reason}`)
++  );
++}
++
++function cloneable(value) {
++  if (value instanceof Error) return value.stack || value.message;
++  const t = typeof value;
++  if (t === "string" || t === "number" || t === "boolean" || t === "bigint" || value == null) return value;
++  try {
++    return JSON.stringify(value);
++  } catch (_) {
++    return String(value);
++  }
++}
+diff --git a/crates/bevy_internal/src/web_worker.rs b/crates/bevy_internal/src/web_worker.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..96eb1bd4e9ead04c1a6c7e8b9bd9f4cdb2004dd0
+--- /dev/null
++++ b/crates/bevy_internal/src/web_worker.rs
+@@ -0,0 +1,232 @@
++//! Running the engine on web workers, started with one call from the page.
++//!
++//! [`start`] takes the page's canvas and spawns the workers the engine runs on: the render
++//! worker, which owns the canvas as an `OffscreenCanvas`, the wgpu device and the render world
++//! ([`bevy_render::web_worker`]); the compute workers, which join the
++//! [`ComputeTaskPool`](bevy_tasks::ComputeTaskPool); and the engine worker, which runs the app
++//! world and winit's event loop, with input forwarded from the page. Every worker runs the same
++//! script, shipped with this module, which instantiates the wasm module over the page's shared
++//! memory and then calls this module's entry for its role. The app supplies one export, the
++//! engine worker's, which builds the app with
++//! [`RenderCreation::WebWorker`](bevy_render::settings::RenderCreation::WebWorker) and a compute
++//! pool of [`compute_threads`] threads and runs it; `App::run` then has `finish` and `cleanup`
++//! executed on the render worker before the app runs. Optionally the app supplies a render
++//! worker setup export, called there before the render world is created: the place to patch
++//! WebGPU before the device exists, or to create the wgpu resources itself and
++//! [provide](bevy_render::web_worker::provide_render_resources) them.
++//!
++//! Functions the engine reaches on the page (JS hooks looked up on `self`) are declared in
++//! `#[wasm_bindgen(js_namespace = self)]` extern blocks marked [`page_functions`]; each worker
++//! gets a same-named function that relays the call to the page's global and resolves with the
++//! result; a function returning a value must be `async` or return a `js_sys::Promise`, which the
++//! attribute checks. Worker console output is mirrored to the page. Once a worker's last entry
++//! has returned it posts `{ __bevy_ready: tag }` to the page (compute workers never return), or
++//! `{ __bevy_ready: tag, error }` if an entry failed. [`spawn_worker`] spawns further workers of
++//! the app's own on the same terms.
++
++use core::sync::atomic::{AtomicU32, Ordering};
++
++use bevy_platform::prelude::{String, Vec, format, vec};
++use js_sys::{Array, Object, Reflect};
++use wasm_bindgen::prelude::*;
++use web_sys::{HtmlCanvasElement, OffscreenCanvas, Worker};
++
++use bevy_render::settings::WgpuSettings;
++
++pub use bevy_derive::page_functions;
++pub use bevy_render::web_worker::{
++    init_on_render_worker, provide_render_resources, render_worker_main,
++};
++
++#[wasm_bindgen(module = "/src/web_worker.js")]
++extern "C" {
++    #[wasm_bindgen(js_name = spawnWorker, catch)]
++    fn spawn_worker_js(init: &Object) -> Result<Worker, JsValue>;
++}
++
++/// What every worker is spawned with.
++pub struct WebWorkerConfig {
++    /// The url of the wasm-bindgen glue module, for the workers to import.
++    pub glue_url: String,
++    /// The app's engine worker export.
++    pub engine_entry: String,
++    /// The engine export's argument.
++    pub engine_args: JsValue,
++    /// The app's render worker setup export, if any, called with the `OffscreenCanvas` before
++    /// the render world is created there.
++    pub render_setup: Option<String>,
++    /// How many compute workers to spawn.
++    pub compute_threads: u32,
++    /// The render worker's wasm stack size in bytes; `None` takes the module's default.
++    pub render_stack_size: Option<u32>,
++    /// The compute workers' wasm stack size in bytes; `None` takes the module's default.
++    pub compute_stack_size: Option<u32>,
++    /// The engine worker's wasm stack size in bytes; `None` takes the module's default.
++    pub engine_stack_size: Option<u32>,
++}
++
++/// A worker for [`spawn_worker`].
++pub struct WorkerSpec {
++    /// The app export the worker calls once its wasm instance is up.
++    pub entry: String,
++    /// The export's arguments.
++    pub args: Vec<JsValue>,
++    /// Names the worker in the page's console.
++    pub tag: String,
++    /// The worker's wasm stack size in bytes; `None` takes the module's default.
++    pub stack_size: Option<u32>,
++    /// Objects in `args` to transfer rather than clone.
++    pub transfer: Vec<JsValue>,
++}
++
++/// The workers [`start`] spawned. The page may add its own listeners; the engine's relay
++/// listeners are already installed.
++pub struct WebWorkers {
++    /// The render worker.
++    pub render: Worker,
++    /// The compute workers.
++    pub compute: Vec<Worker>,
++    /// The engine worker.
++    pub engine: Worker,
++}
++
++/// Page side: prepares `canvas` for the engine and spawns its workers.
++pub fn start(canvas: HtmlCanvasElement, config: &WebWorkerConfig) -> Result<WebWorkers, JsValue> {
++    let (worker_id, offscreen) = bevy_winit::prepare_worker(canvas)?;
++    let canvas_arg: JsValue = offscreen.clone().into();
++    let mut render_calls = Vec::new();
++    if let Some(setup) = &config.render_setup {
++        render_calls.push((setup.as_str(), vec![canvas_arg.clone()]));
++    }
++    render_calls.push((RENDER_ENTRY, vec![canvas_arg]));
++    let render = spawn(
++        &config.glue_url,
++        &render_calls,
++        "render",
++        config.render_stack_size,
++        &[offscreen.into()],
++    )?;
++    let compute = (0..config.compute_threads)
++        .map(|i| {
++            spawn(
++                &config.glue_url,
++                &[(COMPUTE_ENTRY, Vec::new())],
++                &format!("compute-{i}"),
++                config.compute_stack_size,
++                &[],
++            )
++        })
++        .collect::<Result<Vec<_>, _>>()?;
++    let engine = spawn(
++        &config.glue_url,
++        &[
++            (
++                ATTACH_ENTRY,
++                vec![worker_id.into(), config.compute_threads.into()],
++            ),
++            (config.engine_entry.as_str(), vec![config.engine_args.clone()]),
++        ],
++        "engine",
++        config.engine_stack_size,
++        &[],
++    )?;
++    Ok(WebWorkers {
++        render,
++        compute,
++        engine,
++    })
++}
++
++/// Page side: spawns one worker on the engine's terms (see the module docs).
++pub fn spawn_worker(glue_url: &str, spec: &WorkerSpec) -> Result<Worker, JsValue> {
++    spawn(
++        glue_url,
++        &[(spec.entry.as_str(), spec.args.clone())],
++        &spec.tag,
++        spec.stack_size,
++        &spec.transfer,
++    )
++}
++
++/// Spawns a worker that calls `calls` in order (each an export and its arguments) once its wasm
++/// instance is up.
++fn spawn(
++    glue_url: &str,
++    calls: &[(&str, Vec<JsValue>)],
++    tag: &str,
++    stack_size: Option<u32>,
++    transfer: &[JsValue],
++) -> Result<Worker, JsValue> {
++    let init = Object::new();
++    let set = |key: &str, value: &JsValue| Reflect::set(&init, &key.into(), value).map(|_| ());
++    set("glueUrl", &glue_url.into())?;
++    let calls_array = Array::new();
++    for (entry, args) in calls {
++        let call = Object::new();
++        Reflect::set(&call, &"entry".into(), &(*entry).into())?;
++        Reflect::set(&call, &"args".into(), &args.iter().collect::<Array>())?;
++        calls_array.push(&call);
++    }
++    set("calls", &calls_array)?;
++    set("tag", &tag.into())?;
++    set("module", &wasm_bindgen::module())?;
++    set("memory", &wasm_bindgen::memory())?;
++    if let Some(stack_size) = stack_size {
++        set("stackSize", &stack_size.into())?;
++    }
++    set("transfer", &transfer.iter().collect::<Array>())?;
++    spawn_worker_js(&init)
++}
++
++const RENDER_ENTRY: &str = "__bevy_render_worker_main";
++const COMPUTE_ENTRY: &str = "__bevy_compute_worker_main";
++const ATTACH_ENTRY: &str = "__bevy_attach_engine_worker";
++
++static COMPUTE_THREADS: AtomicU32 = AtomicU32::new(0);
++
++/// Engine worker side: how many compute workers [`start`] spawned, for sizing the app's
++/// [`ComputeTaskPool`](bevy_tasks::ComputeTaskPool).
++pub fn compute_threads() -> u32 {
++    COMPUTE_THREADS.load(Ordering::Relaxed)
++}
++
++// The worker entries, called by the worker script.
++
++#[doc(hidden)]
++#[wasm_bindgen(js_name = "__bevy_render_worker_main")]
++pub async fn render_worker_entry(canvas: OffscreenCanvas) -> Result<(), JsValue> {
++    render_worker_main(canvas, WgpuSettings::default()).await
++}
++
++#[doc(hidden)]
++#[wasm_bindgen(js_name = "__bevy_compute_worker_main")]
++pub fn compute_worker_entry() {
++    compute_worker_main();
++}
++
++#[doc(hidden)]
++#[wasm_bindgen(js_name = "__bevy_attach_engine_worker")]
++pub fn attach_engine_worker_entry(worker_id: u32, compute_threads: u32) -> Result<(), JsValue> {
++    COMPUTE_THREADS.store(compute_threads, Ordering::Relaxed);
++    attach_engine_worker(worker_id)
++}
++
++/// Engine worker side, before the app is built: attaches winit's event loop to the page's
++/// canvas.
++fn attach_engine_worker(worker_id: u32) -> Result<(), JsValue> {
++    // The real canvas is on the render worker and the surface comes from there, so the window
++    // handle winit needs is a placeholder.
++    bevy_winit::attach_worker(worker_id, OffscreenCanvas::new(1, 1)?)
++}
++
++/// Compute worker side: joins the engine's [`ComputeTaskPool`](bevy_tasks::ComputeTaskPool)
++/// once the engine worker has built it, and never returns.
++fn compute_worker_main() {
++    let pool = loop {
++        if let Some(pool) = bevy_tasks::ComputeTaskPool::try_get() {
++            break pool;
++        }
++        bevy_platform::thread::sleep(core::time::Duration::from_millis(5));
++    };
++    pool.run_worker();
++}
+diff --git a/crates/bevy_winit/src/lib.rs b/crates/bevy_winit/src/lib.rs
+index a9564796d7427de7697f858579ea0ccf10c5b215..02562e0d287c521b176990d720d6b4985c9dd9d1 100644
+--- a/crates/bevy_winit/src/lib.rs
++++ b/crates/bevy_winit/src/lib.rs
+@@ -32,6 +32,8 @@ use system::{changed_windows, check_keyboard_focus_lost, despawn_windows};
+ pub use system::{create_monitors, create_windows};
+ #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+ pub use winit::platform::web::CustomCursorExtWebSys;
++#[cfg(all(target_family = "wasm", target_os = "unknown", feature = "web-worker"))]
++pub use winit::platform::web::{attach_worker, prepare_worker};
+ pub use winit::{
+     event_loop::EventLoopProxy,
+     window::{CustomCursor as WinitCustomCursor, CustomCursorSource},

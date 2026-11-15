@@ -38,20 +38,29 @@ BUILD_FILES = ('CMakeLists.txt', 'cmake', 'include', 'libcef_dll', 'CREDITS.html
 def download(url, target):
     deadline = time.monotonic() + RETRY_BUDGET
     delay = 1
-    while True:
-        try:
-            with urllib.request.urlopen(url, timeout=60) as response, open(target, 'wb') as archive:
-                shutil.copyfileobj(response, archive, 1 << 20)
-            return
-        # URLError and TimeoutError are OSErrors; a body cut short while reading is an HTTPException.
-        except (OSError, http.client.HTTPException) as error:
-            if isinstance(error, urllib.error.HTTPError) and error.code not in RETRYABLE_HTTP:
-                raise
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise
-            time.sleep(min(delay, remaining))
-            delay = min(delay * 2, 30)
+    # Opened once, outside the retries: a target that cannot be written fails at once.
+    with open(target, 'wb') as archive:
+        while True:
+            archive.seek(0)
+            archive.truncate()
+            try:
+                with urllib.request.urlopen(url, timeout=60) as response:
+                    length = response.headers.get('Content-Length')
+                    shutil.copyfileobj(response, archive, 1 << 20)
+                # A read in pieces ends without an error when the connection closes early.
+                if length is not None and archive.tell() != int(length):
+                    raise http.client.IncompleteRead(b'', int(length) - archive.tell())
+                return
+            # URLError and TimeoutError are OSErrors; a body cut short is an HTTPException.
+            except (OSError, http.client.HTTPException) as error:
+                if isinstance(error, urllib.error.HTTPError) and error.code not in RETRYABLE_HTTP:
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                print(f'CEF download failed ({error!r}); the next try starts in {min(delay, remaining):.0f} s', flush=True)
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 30)
 
 
 def digests(path):
@@ -65,6 +74,9 @@ def digests(path):
 
 def install(system, machine, destination):
     target, digest = ARCHIVES[(system, machine.lower())]
+    if not hasattr(tarfile, 'tar_filter'):
+        raise RuntimeError('this Python has no extraction filter (tarfile.tar_filter): use Python 3.12 or newer, '
+                           'or a release of an older version that has the filter')
     name = f'cef_binary_{BUILD}_{target}_minimal.tar.bz2'
     destination = Path(destination).absolute()
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +87,8 @@ def install(system, machine, destination):
         download(f'{HOST}/{urllib.parse.quote(name)}', archive)
         sha256, sha1 = digests(archive)
         if sha256 != digest:
-            raise ValueError('CEF archive SHA-256 does not match the pin')
+            raise ValueError(f'CEF archive SHA-256 does not match the pin: {archive.stat().st_size} bytes, '
+                             f'{sha256}, pinned {digest}')
         with tarfile.open(archive, 'r:bz2') as bundle:
             bundle.extractall(work, filter='tar')
         extracted = work / name.removesuffix('.tar.bz2')

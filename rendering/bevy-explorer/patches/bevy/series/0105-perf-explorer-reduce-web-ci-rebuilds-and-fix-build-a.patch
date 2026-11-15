@@ -1,0 +1,32 @@
+From 2d913154738bd2b1364b3d5055783726b18febed
+Subject: perf(explorer): reduce web CI rebuilds and fix build and test warnings (#450)
+Origin: https://github.com/decentraland/dcl-one/commit/2d913154738bd2b1364b3d5055783726b18febed
+Date: 2026-11-09T16:02:05+01:00
+
+---
+diff --git a/crates/bevy_render/src/render_resource/pipeline_cache.rs b/crates/bevy_render/src/render_resource/pipeline_cache.rs
+index 94337dbcfb73c69636935bda968c1e93bc4847e3..e1149216eedb465f12a44f2865750cd2b18ea59f 100644
+--- a/crates/bevy_render/src/render_resource/pipeline_cache.rs
++++ b/crates/bevy_render/src/render_resource/pipeline_cache.rs
+@@ -739,7 +739,7 @@ impl PipelineCache {
+ 
+         #[cfg(any(target_arch = "wasm32", not(feature = "multi_threaded")))]
+         if let CachedPipelineState::Creating(..) = state {
+-            let taken = std::mem::replace(state, CachedPipelineState::Queued);
++            let taken = mem::replace(state, CachedPipelineState::Queued);
+             let CachedPipelineState::Creating(_, sync_task) = taken else {
+                 panic!("should be Creating");
+             };
+diff --git a/crates/bevy_tasks/src/usages.rs b/crates/bevy_tasks/src/usages.rs
+index 7e2cbb238cbe305c68481de7d72db67e8570a5e3..8ca79c8cc73884b3cc43fbf003cf517c47f669b7 100644
+--- a/crates/bevy_tasks/src/usages.rs
++++ b/crates/bevy_tasks/src/usages.rs
+@@ -83,7 +83,7 @@ impl AsyncComputeTaskPool {
+     /// [`TaskPool::spawn_local`].
+     pub fn spawn<T>(
+         &self,
+-        future: impl core::future::Future<Output = T> + Send + 'static,
++        future: impl Future<Output = T> + Send + 'static,
+     ) -> crate::Task<T>
+     where
+         T: Send + 'static,

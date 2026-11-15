@@ -1,0 +1,20 @@
+name       = "draco-oxide"
+upstream   = "https://github.com/reearth/draco-oxide"
+commit     = "84f5b26fb6c23c2ff52ce655d7ab150d949f2be3"
+ref        = "v0.1.0-alpha.9"
+origin     = "https://github.com/robtfm/draco-oxide"
+origin_rev = "5acfcf680d4bd17222d910b74ff8bf76a8161575"
+license    = "MIT OR Apache-2.0"
+paths      = [
+    "Cargo.toml",
+    "LICENSE_APACHE",
+    "LICENSE_MIT",
+    "README.md",
+    "draco-oxide/core",
+    "draco-oxide/decoder",
+    "draco-oxide/macros/draco-nd-vector",
+]
+exclude    = []
+base_tree  = "965fce3c5d5f54d1f3e737e6b4754b1dfc0225fe"
+tree       = "9f3beb48d05292e50c9f170b7b63482ffc2d76f5"
+nix_hash   = "sha256-UfcvIktUhzuCuEtjpBLP6GNRX036T3pWhbceA3t1HnE="

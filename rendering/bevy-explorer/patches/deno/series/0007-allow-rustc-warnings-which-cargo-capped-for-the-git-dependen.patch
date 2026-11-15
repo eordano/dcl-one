@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:24+00:00
+
+---
+diff --git a/ext/console/Cargo.toml b/ext/console/Cargo.toml
+index ef64398584e26678e9024896ed67557278e8f488..36ac2011c935d546690516648c8b0a5a060b26a1 100644
+--- a/ext/console/Cargo.toml
++++ b/ext/console/Cargo.toml
+@@ -15,3 +15,6 @@ path = "lib.rs"
+ 
+ [dependencies]
+ deno_core.workspace = true
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/fetch/Cargo.toml b/ext/fetch/Cargo.toml
+index 2ec1c25f0c699561ca6418d4880c42882fe31aea..9fc683ac4048eaeaf65f51b43cd43e289b867f4a 100644
+--- a/ext/fetch/Cargo.toml
++++ b/ext/fetch/Cargo.toml
+@@ -42,3 +42,6 @@ tower-service.workspace = true
+ 
+ [dev-dependencies]
+ fast-socks5.workspace = true
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/net/Cargo.toml b/ext/net/Cargo.toml
+index 02e7a168183609b227e75e0fd287970998103c2c..90b2ac3c85d01db3f596175462b3393bb9def129 100644
+--- a/ext/net/Cargo.toml
++++ b/ext/net/Cargo.toml
+@@ -24,3 +24,6 @@ socket2.workspace = true
+ tokio.workspace = true
+ trust-dns-proto = "0.23"
+ trust-dns-resolver = { version = "0.23", features = ["tokio-runtime", "serde-config"] }
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/tls/Cargo.toml b/ext/tls/Cargo.toml
+index 08a9802df53f196a931f75471dcbd7264d7ea1a3..ce940741dbce8141ba40a60b5ff2577fa8dd84d6 100644
+--- a/ext/tls/Cargo.toml
++++ b/ext/tls/Cargo.toml
+@@ -23,3 +23,6 @@ rustls-webpki.workspace = true
+ serde.workspace = true
+ tokio.workspace = true
+ webpki-roots.workspace = true
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/url/Cargo.toml b/ext/url/Cargo.toml
+index 7f86e14456d8dbec3804a2331a9600fd6de96f64..4b26ea405acb0e9e4343e0d4c2b933deda7caebf 100644
+--- a/ext/url/Cargo.toml
++++ b/ext/url/Cargo.toml
+@@ -25,3 +25,6 @@ deno_webidl.workspace = true
+ [[bench]]
+ name = "url_ops"
+ harness = false
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/web/Cargo.toml b/ext/web/Cargo.toml
+index 7fd12632d7668b853182020657991b3f85fbe32d..b9e39e451b4c695c9da1cbd2027f92c5d6d2ffd9 100644
+--- a/ext/web/Cargo.toml
++++ b/ext/web/Cargo.toml
+@@ -39,3 +39,6 @@ harness = false
+ [[bench]]
+ name = "timers_ops"
+ harness = false
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/webidl/Cargo.toml b/ext/webidl/Cargo.toml
+index 2f87dc2197a5cb94cad04d092651d8cd2415a492..375b899284efe2765a2e8f0fc6e41315cd0c7f88 100644
+--- a/ext/webidl/Cargo.toml
++++ b/ext/webidl/Cargo.toml
+@@ -22,3 +22,6 @@ deno_bench_util.workspace = true
+ [[bench]]
+ name = "dict"
+ harness = false
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/websocket/Cargo.toml b/ext/websocket/Cargo.toml
+index 3fc90254666c321483de1a97fb8994cbe995c76b..b644a34a1c90953e6668cd6fd1b9438adec5f76e 100644
+--- a/ext/websocket/Cargo.toml
++++ b/ext/websocket/Cargo.toml
+@@ -29,3 +29,6 @@ once_cell.workspace = true
+ rustls-tokio-stream.workspace = true
+ serde.workspace = true
+ tokio.workspace = true
++
++[lints.rust]
++warnings = "allow"
+diff --git a/ext/webstorage/Cargo.toml b/ext/webstorage/Cargo.toml
+index fbcd17edf9cc550205aecc16592477f11f5a4f1f..1451e03b8a8e5081c1b853eca1d43fc111936ded 100644
+--- a/ext/webstorage/Cargo.toml
++++ b/ext/webstorage/Cargo.toml
+@@ -17,3 +17,6 @@ path = "lib.rs"
+ deno_core.workspace = true
+ deno_web.workspace = true
+ rusqlite.workspace = true
++
++[lints.rust]
++warnings = "allow"
+diff --git a/runtime/permissions/Cargo.toml b/runtime/permissions/Cargo.toml
+index b43574896517374953a910a39336fc162a017a59..5a57068f219aa6d1fa5702dc599366b17e072789 100644
+--- a/runtime/permissions/Cargo.toml
++++ b/runtime/permissions/Cargo.toml
+@@ -25,3 +25,6 @@ which.workspace = true
+ 
+ [target.'cfg(windows)'.dependencies]
+ winapi = { workspace = true, features = ["commapi", "knownfolders", "mswsock", "objbase", "psapi", "shlobj", "tlhelp32", "winbase", "winerror", "winuser", "winsock2", "processenv", "wincon", "wincontypes"] }
++
++[lints.rust]
++warnings = "allow"

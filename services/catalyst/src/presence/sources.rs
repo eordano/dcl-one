@@ -119,14 +119,9 @@ pub async fn statistics(
 ) -> anyhow::Result<Statistics> {
     let snapshot = reader.snapshot();
     let tiles = stats::render::tiles(&snapshot);
-    let documents = if tiles.is_empty() {
-        Vec::new()
-    } else {
-        content
-            .fetch(&tiles.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>())
-            .await
-            .map_err(|_| anyhow::anyhow!("archive active content query failed"))?
-    };
+    let documents = stats::content::tile_documents(content, &tiles)
+        .await
+        .map_err(|_| anyhow::anyhow!("archive active content query failed"))?;
     let hot_scenes = stats::content::project_hot_scenes(&documents, &tiles, url)
         .map_err(|_| anyhow::anyhow!("archive hot scene projection failed"))?
         .into_iter()

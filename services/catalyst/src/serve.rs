@@ -195,25 +195,13 @@ pub async fn serve(
 
     // Fleet-wide jobs run in one process at a time through leases in the
     // database; an API replica (FLEET_JOBS_ENABLED=false) stands them down.
-    let jobs = if config.node.job_leases_enabled {
-        jobs::Jobs::with_leases(
-            pool.clone(),
-            jobs::LeaseSettings {
-                namespace: config.node.job_lease_namespace.clone(),
-                ..jobs::LeaseSettings::default()
-            },
-        )
-    } else {
+    if !config.node.job_leases_enabled {
         tracing::info!("JOB_LEASES_ENABLED=false: fleet jobs run unconditionally in this process");
-        jobs::Jobs::new()
-    };
+    }
     if !config.node.fleet_jobs_enabled {
         tracing::info!("FLEET_JOBS_ENABLED=false: fleet jobs stand down in this process");
     }
-    let jobs = Arc::new(
-        jobs.with_fleet_jobs(config.node.fleet_jobs_enabled)
-            .with_first_pass_now(config.node.jobs_first_pass_now),
-    );
+    let jobs = Arc::new(crate::settings::jobs_from_config(&config, &pool));
     // Every process mirrors the sync leader's state from the database into its
     // own SyncStatus; the leader (the process holding the `sync` lease) writes it.
     content::sync::status_mirror::spawn_mirror(&jobs, pool.clone(), sync_status.clone());

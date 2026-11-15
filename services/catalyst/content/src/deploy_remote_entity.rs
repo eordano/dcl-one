@@ -16,6 +16,7 @@ use super::batch_deployer::DeploymentReport;
 use super::sync_deployer::LiveSyncDeployer;
 use super::sync_types::{AuthChain, DeploymentContext, SyncError};
 use crate::auth::{is_canonical_cid, verify_hash};
+use crate::entity::{is_ipfs_v1, is_ipfs_v2};
 use crate::storage::Storage;
 
 const MAX_DOWNLOAD_RETRIES: u32 = 3;
@@ -370,9 +371,8 @@ enum CachedEntityVerification {
 }
 
 fn verify_cached_entity(bytes: &[u8], entity_id: &str) -> CachedEntityVerification {
-    let v0_shape = entity_id.len() == 46 && entity_id.starts_with("Qm");
-    let v1_shape = entity_id.len() == 59 && entity_id.starts_with("ba");
-    if !(v0_shape || v1_shape) || !is_canonical_cid(entity_id) {
+    let ipfs_shape = is_ipfs_v1(entity_id) || is_ipfs_v2(entity_id);
+    if !ipfs_shape || !is_canonical_cid(entity_id) {
         return CachedEntityVerification::Unverifiable;
     }
     if verify_hash(bytes, entity_id) {

@@ -6,8 +6,11 @@ rendering/bevy-explorer/source/** -text
 library/explorer-core/** -text
 library/ui/apps/hud/** -text
 library/vendor/rusty_enet/** -text -whitespace
-rendering/bevy-explorer/bevy/** -text -whitespace
+rendering/bevy-explorer/patches/** -text -whitespace
 rendering/bevy-explorer/source/vendor/basisu/** -text -whitespace
+rendering/bevy-explorer/vendor/bevy_dui/** -text -whitespace
+rendering/bevy-explorer/vendor/boimp/** -text -whitespace
+rendering/bevy-explorer/vendor/rpc-rust/** -text -whitespace
 
 # The Explorer end-to-end suite's visual scenes and their references (apps/bevy-explorer/e2e).
 apps/bevy-explorer/e2e/scenes/**/*.[gG][lL][bB] filter=lfs diff=lfs merge=lfs -text

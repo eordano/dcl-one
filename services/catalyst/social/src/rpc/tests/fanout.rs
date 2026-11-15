@@ -10,49 +10,7 @@ mod membership;
 mod raw_voice;
 
 /// Separate fixtures keep a fake media view from polling another test's rooms.
-pub(crate) struct OwnedDatabase {
-    pub(crate) pool: PgPool,
-    admin: PgPool,
-    name: String,
-}
-impl OwnedDatabase {
-    pub(crate) async fn new() -> Option<Self> {
-        let shared = scratch_pool().await?;
-        let options = shared.connect_options();
-        let admin = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect_with((*options).clone().database("postgres"))
-            .await
-            .unwrap();
-        let name = format!(
-            "catalyst_test_lib_{}_fanout_{}",
-            std::process::id(),
-            Uuid::new_v4().simple()
-        );
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(8)
-            .connect_with((*options).clone().database(&name))
-            .await
-            .unwrap();
-        crate::db::apply_schema(&pool).await.unwrap();
-        Some(Self { pool, admin, name })
-    }
-    pub(crate) async fn close(self) {
-        self.pool.close().await;
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DROP DATABASE \"{}\" WITH (FORCE)",
-            self.name
-        )))
-        .execute(&self.admin)
-        .await
-        .unwrap();
-        self.admin.close().await;
-    }
-}
+pub(crate) use crate::db::scratch::OwnedDatabase;
 
 struct Broker(std::process::Child);
 impl Drop for Broker {
@@ -112,7 +70,8 @@ fn started(community: Uuid, name: &str, image: Option<String>) -> CommunityVoice
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_replicas_route_mutations_and_preserve_large_community_snapshots() {
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = database.pool.clone();
@@ -292,12 +251,13 @@ async fn two_replicas_route_mutations_and_preserve_large_community_snapshots() {
     silent(&mut public).await;
     jobs.shutdown(Duration::from_secs(2)).await;
     drop_community(&pool, community).await;
-    database.close().await;
+    database.drop().await;
 }
 
 #[tokio::test]
 async fn notification_generation_survives_context_restart_and_expires_like_source_cache() {
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = database.pool.clone();
@@ -353,7 +313,7 @@ async fn notification_generation_survives_context_restart_and_expires_like_sourc
             .is_none()
     );
     drop_community(&pool, community).await;
-    database.close().await;
+    database.drop().await;
 }
 
 #[tokio::test]
@@ -411,7 +371,8 @@ async fn outbound_queue_and_disconnected_bus_are_bounded_best_effort() {
 
 #[tokio::test]
 async fn notification_and_spill_queries_use_bounded_index_paths() {
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = database.pool.clone();
@@ -450,12 +411,13 @@ async fn notification_and_spill_queries_use_bounded_index_paths() {
     );
     assert!(cache.join("\n").contains("event_payloads_expiry_idx"));
     tx.rollback().await.unwrap();
-    database.close().await;
+    database.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn healthy_real_broker_bursts_reach_the_exact_subscription_queue_bound() {
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let (_broker, url) = Broker::start();
@@ -550,7 +512,7 @@ async fn healthy_real_broker_bursts_reach_the_exact_subscription_queue_bound() {
     drop(taps);
     jobs.shutdown(Duration::from_secs(2)).await;
     drop((left, right));
-    database.close().await;
+    database.drop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -558,7 +520,8 @@ async fn real_broker_community_burst_keeps_sql_work_bounded_and_control_delivery
     use crate::comms::gatekeeper::bus::PublishOutcome;
     use crate::comms::protocol::bus::SOCIAL_EVENTS_SUBJECT;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let (_broker, url) = Broker::start();
@@ -649,5 +612,5 @@ async fn real_broker_community_burst_keeps_sql_work_bounded_and_control_delivery
     }
     jobs.shutdown(Duration::from_secs(2)).await;
     drop(right);
-    database.close().await;
+    database.drop().await;
 }

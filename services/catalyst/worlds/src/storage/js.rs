@@ -7,6 +7,8 @@
 use std::borrow::Cow;
 use std::ops::Deref;
 
+pub use crate::shared::js::{is_js_whitespace, js_trim, number_from_str, number_to_string};
+
 use super::js_json::{self, write_js_string};
 
 /// A `JSON.parse` result: numbers are doubles and an object keeps its own
@@ -395,109 +397,6 @@ impl JsValue {
             next = Some(value);
         }
     }
-}
-
-/// `Number.prototype.toString()`.
-pub fn number_to_string(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".to_string();
-    }
-    if n.is_infinite() {
-        return if n > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    if n == 0.0 {
-        return "0".to_string();
-    }
-    // ECMAScript's shortest decimal uses ties-to-even; Rust's formatter
-    // can choose the other equally short decimal for the same float.
-    dragonbox_ecma::Buffer::new().format_finite(n).to_string()
-}
-
-/// ECMAScript WhiteSpace and LineTerminator (what `trim` and `Number` strip).
-pub fn is_js_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\u{9}' | '\u{A}' | '\u{B}' | '\u{C}' | '\u{D}' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
-    )
-}
-
-/// `String.prototype.trim`.
-pub fn js_trim(s: &str) -> &str {
-    s.trim_matches(is_js_whitespace)
-}
-
-/// `Number(string)`: NaN for anything that is not a numeric literal.
-pub fn number_from_str(raw: &str) -> f64 {
-    let s = js_trim(raw);
-    if s.is_empty() {
-        return 0.0;
-    }
-    for (prefixes, radix) in [(["0x", "0X"], 16), (["0o", "0O"], 8), (["0b", "0B"], 2)] {
-        if let Some(digits) = prefixes.iter().find_map(|p| s.strip_prefix(p)) {
-            if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
-                return f64::NAN;
-            }
-            return digits.chars().fold(0.0, |acc, c| {
-                acc * radix as f64 + c.to_digit(radix).unwrap_or(0) as f64
-            });
-        }
-    }
-    match s {
-        "Infinity" | "+Infinity" => return f64::INFINITY,
-        "-Infinity" => return f64::NEG_INFINITY,
-        _ => {}
-    }
-    if !is_decimal_literal(s) {
-        return f64::NAN;
-    }
-    s.parse::<f64>().unwrap_or(f64::NAN)
-}
-
-/// `[+-]? (digits [. digits?] | . digits) ([eE] [+-]? digits)?`
-fn is_decimal_literal(s: &str) -> bool {
-    let b = s.as_bytes();
-    let mut i = 0;
-    if matches!(b.first(), Some(b'+' | b'-')) {
-        i += 1;
-    }
-    let int_start = i;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-    }
-    let int_digits = i - int_start;
-    let mut frac_digits = 0;
-    if i < b.len() && b[i] == b'.' {
-        i += 1;
-        let start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        frac_digits = i - start;
-    }
-    if int_digits + frac_digits == 0 {
-        return false;
-    }
-    if i < b.len() && matches!(b[i], b'e' | b'E') {
-        i += 1;
-        if matches!(b.get(i), Some(b'+' | b'-')) {
-            i += 1;
-        }
-        let start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == start {
-            return false;
-        }
-    }
-    i == b.len()
 }
 
 /// crypto-middleware's `safe()`: at most 64 UTF-16 code units, then `…`.
@@ -923,50 +822,6 @@ mod tests {
                 .to_js_string(),
             "1,,2,3,[object Object]"
         );
-    }
-
-    #[test]
-    fn number_to_string_matches_ecmascript() {
-        for (n, s) in [
-            (1_700_000_000_000.0, "1700000000000"),
-            (1_700_000_060_000.5, "1700000060000.5"),
-            (0.1, "0.1"),
-            (1e-6, "0.000001"),
-            (1e-7, "1e-7"),
-            (123e20, "1.23e+22"),
-            (1e21, "1e+21"),
-            (-2.5, "-2.5"),
-            (667_962_307_169_479.25, "667962307169479.2"),
-            (-667_962_307_169_479.25, "-667962307169479.2"),
-            (0.0, "0"),
-            (-0.0, "0"),
-            (f64::NAN, "NaN"),
-            (f64::INFINITY, "Infinity"),
-            (f64::NEG_INFINITY, "-Infinity"),
-        ] {
-            assert_eq!(number_to_string(n), s, "{n}");
-        }
-    }
-
-    #[test]
-    fn number_from_str_is_number_of_a_string() {
-        for (raw, n) in [
-            ("1700000000000", 1_700_000_000_000.0),
-            ("1.7e12", 1.7e12),
-            (" 1700000000000\n", 1_700_000_000_000.0),
-            ("+5", 5.0),
-            (".5", 0.5),
-            ("5.", 5.0),
-            ("0x10", 16.0),
-            ("0b11", 3.0),
-            ("   ", 0.0),
-        ] {
-            assert_eq!(number_from_str(raw), n, "{raw:?}");
-        }
-        for raw in ["abc", "1e", "-0x10", "1_000", ".", "inf", "NaN", "12px"] {
-            assert!(number_from_str(raw).is_nan(), "{raw:?}");
-        }
-        assert!(number_from_str("Infinity").is_infinite());
     }
 
     #[test]

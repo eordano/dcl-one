@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::email::{EmailSender, SendFailure};
 use super::first_wear::creator_profile_name;
-use super::store::details_flag;
+use super::store::{community_opt_out, details_flag, uuid_or_null};
 use super::templates;
 use crate::shared::now_utc;
 
@@ -177,15 +177,12 @@ static CLAIM_SQL: LazyLock<String> = LazyLock::new(|| {
             CASE
                 WHEN {} THEN 'ignore_all_email'
                 WHEN NOT {} THEN 'opted out of this type'
-                WHEN EXISTS (SELECT 1 FROM social.subscription_opt_outs o
-                    WHERE o.address = n.address AND o.scope = 'community'
-                      AND CASE WHEN pg_input_is_valid(o.scope_id, 'uuid') THEN o.scope_id::uuid END
-                        = CASE WHEN pg_input_is_valid(n.metadata->>'communityId', 'uuid') THEN (n.metadata->>'communityId')::uuid END)
-                    THEN 'opted out of this community'
+                WHEN EXISTS ({}) THEN 'opted out of this community'
             END
         "#,
         details_flag("->'ignore_all_email'", false),
         details_flag("->'message_type'->n.type->'email'", true),
+        community_opt_out("n.address", &uuid_or_null("n.metadata->>'communityId'")),
     )
 });
 

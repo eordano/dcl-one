@@ -58,7 +58,10 @@ impl BanList {
 
     fn normalize(wallet: &str) -> String {
         let trimmed = wallet.trim();
-        let with_prefix = if trimmed.len() >= 2 && trimmed[..2].eq_ignore_ascii_case("0x") {
+        let with_prefix = if trimmed
+            .get(..2)
+            .is_some_and(|p| p.eq_ignore_ascii_case("0x"))
+        {
             trimmed.to_string()
         } else {
             format!("0x{trimmed}")
@@ -903,6 +906,14 @@ mod tests {
         );
         assert!(bans.is_banned(" 0xabc \n"), "whitespace trimmed on query");
         assert!(!bans.is_banned("0x999"));
+    }
+
+    #[test]
+    fn a_ban_entry_starting_with_a_multibyte_character_is_kept_as_is() {
+        let mut bans = BanList::new();
+        bans.replace(["€abc"]);
+        assert!(bans.is_banned("0x€abc"));
+        assert!(!bans.is_banned("0xabc"));
     }
 
     #[test]

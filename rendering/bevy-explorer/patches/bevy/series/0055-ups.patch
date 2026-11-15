@@ -1,0 +1,18 @@
+From 6324c2ad3f6f08d29da8f7247a0e7f14de27d8db
+Subject: ups
+Origin: https://github.com/robtfm/bevy/commit/6324c2ad3f6f08d29da8f7247a0e7f14de27d8db
+Date: 2026-01-23T22:30:44Z
+
+---
+diff --git a/crates/bevy_render/src/render_resource/pipeline_cache.rs b/crates/bevy_render/src/render_resource/pipeline_cache.rs
+index bf75afab89eedabeefa38bb426bfa41451cd9c06..7ef4363d51488c3bd18296618ff2ae19ab2de677 100644
+--- a/crates/bevy_render/src/render_resource/pipeline_cache.rs
++++ b/crates/bevy_render/src/render_resource/pipeline_cache.rs
+@@ -84,6 +84,7 @@ pub enum CachedPipelineState {
+     /// The pipeline GPU object is queued for creation.
+     Queued,
+     /// The pipeline GPU object is being created.
++    #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
+     Creating(Task<Result<Pipeline, PipelineCacheError>>),
+     #[cfg(not(all(not(target_arch = "wasm32"), feature = "multi_threaded")))]
+     Creating(

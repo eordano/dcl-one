@@ -81,6 +81,9 @@ use crate::shared::writes::DataWrites;
 
 pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 300;
 pub const JOB_NAME: &str = "mana-price-poll";
+/// MANA's CoinGecko coin id: what the poller asks for and the price route
+/// answers under.
+pub const MANA_ID: &str = "decentraland";
 
 /// The raw values `main.rs` reads from `Config` (the old env names).
 #[derive(Clone)]

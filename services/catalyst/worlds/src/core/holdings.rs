@@ -11,7 +11,7 @@ use alloy_primitives::{Address as EvmAddress, U256, address};
 use alloy_sol_types::{SolCall, sol};
 use serde_json::Value;
 
-use crate::ens::{Call, call_params, is_revert};
+use crate::ens::{Call, call_params};
 use crate::http::Outbound;
 use crate::http::jsonrpc::{Rpc, RpcError, hex_of, request, result_of};
 use crate::shared::identity::Address;
@@ -136,7 +136,7 @@ struct Fault {
 impl Fault {
     fn of(what: &str, e: RpcError) -> Self {
         Self {
-            retry: !is_revert(&e),
+            retry: !e.is_revert(),
             message: format!("{what}: {e}"),
         }
     }

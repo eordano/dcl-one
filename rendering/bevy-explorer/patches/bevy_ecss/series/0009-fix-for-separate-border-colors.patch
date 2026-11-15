@@ -1,0 +1,19 @@
+From 1192869a8a56d3fe9e7812215b71fcdcd1093d99
+Subject: fix for separate border colors
+Origin: https://github.com/robtfm/bevy_ecss/commit/1192869a8a56d3fe9e7812215b71fcdcd1093d99
+Date: 2025-06-17T10:36:01+01:00
+
+---
+diff --git a/src/property/impls.rs b/src/property/impls.rs
+index f34a7beb426cc5f8f965e5cb7818673224427732..7bfc03a36ff01cc70e176da2b7bbad23296158a1 100644
+--- a/src/property/impls.rs
++++ b/src/property/impls.rs
+@@ -467,7 +467,7 @@ impl Property for BorderColorProperty {
+         _asset_server: &AssetServer,
+         commands: &mut Commands,
+     ) {
+-        commands.entity(components).insert(BorderColor(*cache));
++        commands.entity(components).insert(BorderColor::all(*cache));
+     }
+ }
+ 

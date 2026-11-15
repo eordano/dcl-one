@@ -56,6 +56,7 @@
 
 # sdk
 # UNASSIGNED /library/js-sdk-toolchain/
+# UNASSIGNED /library/hashing/
 # UNASSIGNED /.github/workflows/sdk.yml
 
 # database
@@ -109,6 +110,11 @@
 /apps/bevy-explorer/ @decentraland/client
 /.github/workflows/bevy-explorer-*.yml @decentraland/client
 /.github/actions/bevy-explorer-*/ @decentraland/client
+/tooling/bevy-*.py @decentraland/client
+/tooling/patched-sources.py @decentraland/client
+/tooling/vendor-provenance.py @decentraland/client
+/tooling/tests/test_bevy_*.py @decentraland/client
+/infra/packages/bevy-explorer.nix @decentraland/client
 
 # explorer-rust
 /rendering/bevy-explorer/source/crates/ @robtfm
@@ -120,9 +126,8 @@
 /rendering/bevy-explorer/source/local-harness/benchmark/ @robtfm
 /rendering/bevy-explorer/source/local-harness/presence/harness-util/ @robtfm
 /rendering/bevy-explorer/source/vendor/ @robtfm
-/rendering/bevy-explorer/bevy/ @robtfm
-/rendering/bevy-explorer/cargo-patches.toml @robtfm
-/rendering/bevy-explorer/forks.toml @robtfm
+/rendering/bevy-explorer/vendor/ @robtfm
+/rendering/bevy-explorer/patches/ @robtfm
 
 # uuav-native
 /library/uuav/ @decentraland/client

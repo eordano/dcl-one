@@ -628,19 +628,7 @@ async fn handle(
         Some(Route::CoreStatus) => Reply::json(200, render::core_status(&snapshot, (state.now)())),
         Some(Route::HotScenes) => {
             let tiles = render::tiles(&snapshot);
-            let scenes = if tiles.is_empty() {
-                Vec::new()
-            } else {
-                state
-                    .content
-                    .fetch(
-                        &tiles
-                            .iter()
-                            .map(|(tile, _)| tile.clone())
-                            .collect::<Vec<_>>(),
-                    )
-                    .await?
-            };
+            let scenes = content::tile_documents(state.content.as_ref(), &tiles).await?;
             Reply::json(
                 200,
                 content::hot_scenes(&scenes, &tiles, &state.settings.content_url)?,

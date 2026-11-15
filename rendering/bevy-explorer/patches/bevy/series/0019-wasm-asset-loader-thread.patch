@@ -1,0 +1,705 @@
+From 4c1ed7c3627d3d278bcab6f7410068acb43ebf9f
+Subject: wasm asset loader thread
+Origin: https://github.com/robtfm/bevy/commit/4c1ed7c3627d3d278bcab6f7410068acb43ebf9f
+Date: 2025-06-27T14:24:36+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 788b8226887e564e3dca04fdce7593d3a083b5ec..ca63c115557e264e5c7c6fd66ff36889696ad58c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -514,6 +514,9 @@ ghost_nodes = ["bevy_internal/ghost_nodes"]
+ # Uses `async-executor` as a task execution backend.
+ async_executor = ["std", "bevy_internal/async_executor"]
+ 
++# Allows passing in a thread for asset load processing
++wasm_threaded_asset_loader = ["bevy_internal/wasm_threaded_asset_loader"]
++
+ # Allows access to the `std` crate.
+ std = ["bevy_internal/std"]
+ 
+diff --git a/crates/bevy_asset/Cargo.toml b/crates/bevy_asset/Cargo.toml
+index 76d8a9c170c49bd6b4fc0fbd3de413be1fcd59ec..f3b7f67e68781efedb2e161d7eb310caf1bcd953 100644
+--- a/crates/bevy_asset/Cargo.toml
++++ b/crates/bevy_asset/Cargo.toml
+@@ -17,6 +17,7 @@ multi_threaded = ["bevy_tasks/multi_threaded"]
+ asset_processor = []
+ watch = []
+ trace = []
++wasm_threaded_loader = ["async-channel", "spin"]
+ 
+ [dependencies]
+ bevy_app = { path = "../bevy_app", version = "0.16.1" }
+@@ -51,6 +52,8 @@ thiserror = { version = "2", default-features = false }
+ derive_more = { version = "1", default-features = false, features = ["from"] }
+ uuid = { version = "1.13.1", features = ["v4"] }
+ tracing = { version = "0.1", default-features = false, features = ["std"] }
++async-channel = { version = "2", optional = true }
++spin = { version = "0.9.8", default-features = false, features = ["rwlock"], optional = true }
+ 
+ [target.'cfg(target_os = "android")'.dependencies]
+ bevy_window = { path = "../bevy_window", version = "0.16.1" }
+diff --git a/crates/bevy_asset/src/io/mod.rs b/crates/bevy_asset/src/io/mod.rs
+index aa7256bbd927bda535385e0d8c9c331cb6556494..9f2128016c4b79544252866817a72549c6425c8e 100644
+--- a/crates/bevy_asset/src/io/mod.rs
++++ b/crates/bevy_asset/src/io/mod.rs
+@@ -254,6 +254,14 @@ pub trait AssetReader: Send + Sync + 'static {
+             Ok(meta_bytes)
+         }
+     }
++
++    fn block_until_ready<'a>(
++        &'a self,
++        _path: &'a Path,
++    ) -> impl ConditionalSendFuture<Output = Result<(), AssetReaderError>> {
++        // default impl does nothing;
++        async { Ok(()) }
++    }
+ }
+ 
+ /// Equivalent to an [`AssetReader`] but using boxed futures, necessary eg. when using a `dyn AssetReader`,
+@@ -285,6 +293,11 @@ pub trait ErasedAssetReader: Send + Sync + 'static {
+         &'a self,
+         path: &'a Path,
+     ) -> BoxedFuture<'a, Result<Vec<u8>, AssetReaderError>>;
++
++    fn block_until_ready<'a>(
++        &'a self,
++        path: &'a Path,
++    ) -> BoxedFuture<'a, Result<(), AssetReaderError>>;
+ }
+ 
+ impl<T: AssetReader> ErasedAssetReader for T {
+@@ -324,6 +337,13 @@ impl<T: AssetReader> ErasedAssetReader for T {
+     ) -> BoxedFuture<'a, Result<Vec<u8>, AssetReaderError>> {
+         Box::pin(Self::read_meta_bytes(self, path))
+     }
++
++    fn block_until_ready<'a>(
++        &'a self,
++        path: &'a Path,
++    ) -> BoxedFuture<'a, Result<(), AssetReaderError>> {
++        Box::pin(Self::block_until_ready(self, path))
++    }
+ }
+ 
+ pub type Writer = dyn AsyncWrite + Unpin + Send + Sync;
+diff --git a/crates/bevy_asset/src/io/processor_gated.rs b/crates/bevy_asset/src/io/processor_gated.rs
+index da439f56f5e18978e38821739731126f965adb33..60f77f893522766a21de784e9b43d89ff9e776c5 100644
+--- a/crates/bevy_asset/src/io/processor_gated.rs
++++ b/crates/bevy_asset/src/io/processor_gated.rs
+@@ -115,6 +115,20 @@ impl AssetReader for ProcessorGatedReader {
+         let result = self.reader.is_directory(path).await?;
+         Ok(result)
+     }
++
++    async fn block_until_ready<'a>(&'a self, path: &'a Path) -> Result<(), AssetReaderError> {
++        let asset_path = AssetPath::from(path.to_path_buf()).with_source(self.source.clone());
++        match self
++            .processor_data
++            .wait_until_processed(asset_path.clone())
++            .await
++        {
++            ProcessStatus::Processed => Ok(()),
++            ProcessStatus::Failed | ProcessStatus::NonExistent => {
++                Err(AssetReaderError::NotFound(path.to_owned()))
++            }
++        }
++    }
+ }
+ 
+ /// An [`AsyncRead`] impl that will hold its asset's transaction lock until [`TransactionLockedReader`] is dropped.
+diff --git a/crates/bevy_asset/src/lib.rs b/crates/bevy_asset/src/lib.rs
+index 5d98d2b21ee9db5615290276a5d88625c585225a..78610194a363c884853c59f9c3cc4f6543835139 100644
+--- a/crates/bevy_asset/src/lib.rs
++++ b/crates/bevy_asset/src/lib.rs
+@@ -235,6 +235,15 @@ compile_error!(
+     Consider either disabling the \"file_watcher\" feature or enabling \"multi_threaded\""
+ );
+ 
++#[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32", not(target_feature = "atomics")))]
++compile_error!("wasm_threaded_loader feature requires target-feature=\"atomics\"");
++
++#[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++#[derive(Clone)]
++pub struct WasmLoaderHandle {
++    load_request_sender: async_channel::Sender<WasmThreadLoadAssetRequest>,
++}
++
+ /// Provides "asset" loading and processing functionality. An [`Asset`] is a "runtime value" that is loaded from an [`AssetSource`],
+ /// which can be something like a filesystem, a network, etc.
+ ///
+@@ -263,6 +272,8 @@ pub struct AssetPlugin {
+     /// Approved folders are [`AssetPlugin::file_path`] and the folder of each
+     /// [`AssetSource`](io::AssetSource). Subfolders within these folders are also valid.
+     pub unapproved_path_mode: UnapprovedPathMode,
++    #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++    pub wasm_loader_handle: Option<WasmLoaderHandle>,
+ }
+ 
+ /// Determines how to react to attempts to load assets not inside the approved folders.
+@@ -339,6 +350,8 @@ impl Default for AssetPlugin {
+             watch_for_changes_override: None,
+             meta_check: AssetMetaCheck::default(),
+             unapproved_path_mode: UnapprovedPathMode::default(),
++            #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++            wasm_loader_handle: None,
+         }
+     }
+ }
+@@ -380,6 +393,8 @@ impl Plugin for AssetPlugin {
+                         self.meta_check.clone(),
+                         watch,
+                         self.unapproved_path_mode.clone(),
++                        #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++                        self.wasm_loader_handle.clone(),
+                     ));
+                 }
+                 AssetMode::Processed => {
+@@ -411,6 +426,8 @@ impl Plugin for AssetPlugin {
+                             AssetMetaCheck::Always,
+                             watch,
+                             self.unapproved_path_mode.clone(),
++                            #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++                            self.wasm_loader_handle.clone(),
+                         ));
+                     }
+                 }
+diff --git a/crates/bevy_asset/src/loader.rs b/crates/bevy_asset/src/loader.rs
+index 8f4863b885c6807c90d26ff034fceb96e7d20fe3..4d59d30d6903e499c1c3afbc46dbf18504db28d6 100644
+--- a/crates/bevy_asset/src/loader.rs
++++ b/crates/bevy_asset/src/loader.rs
+@@ -532,7 +532,7 @@ impl<'a> LoadContext<'a> {
+     ) -> Result<ErasedLoadedAsset, LoadDirectError> {
+         let loaded_asset = self
+             .asset_server
+-            .load_with_meta_loader_and_reader(
++            .load_with_meta_loader_and_reader_internal(
+                 &path,
+                 meta,
+                 loader,
+@@ -551,6 +551,33 @@ impl<'a> LoadContext<'a> {
+         Ok(loaded_asset)
+     }
+ 
++    
++    pub(crate) async fn load_indirect_internal(
++        &mut self,
++        path: AssetPath<'static>,
++        meta: Box<dyn AssetMetaDyn>,
++        loader: alloc::sync::Arc<dyn ErasedAssetLoader>,
++    ) -> Result<(ErasedLoadedAsset, alloc::sync::Arc<dyn ErasedAssetLoader>), LoadDirectError> {
++        let (loaded_asset, meta, loader) = self
++            .asset_server
++            .load_with_meta_and_loader(
++                &path,
++                meta,
++                loader,
++                false,
++                self.populate_hashes,
++            )
++            .await
++            .map_err(|error| LoadDirectError::LoadError {
++                dependency: path.clone(),
++                error,
++            })?;
++        let info = meta.processed_info().as_ref();
++        let hash = info.map(|i| i.full_hash).unwrap_or_default();
++        self.loader_dependencies.insert(path, hash);
++        Ok((loaded_asset, loader))
++    }
++
+     /// Create a builder for loading nested assets in this context.
+     #[must_use]
+     pub fn loader(&mut self) -> NestedLoader<'a, '_, StaticTyped, Deferred> {
+diff --git a/crates/bevy_asset/src/loader_builders.rs b/crates/bevy_asset/src/loader_builders.rs
+index 13bea2b71dc2af9bfaf2e1bf2712bbe254225172..80ff50df5f2653127d2c78ac8606b7e7ead8cefc 100644
+--- a/crates/bevy_asset/src/loader_builders.rs
++++ b/crates/bevy_asset/src/loader_builders.rs
+@@ -10,21 +10,6 @@ use crate::{
+ use alloc::{borrow::ToOwned, boxed::Box, sync::Arc};
+ use core::any::TypeId;
+ 
+-// Utility type for handling the sources of reader references
+-enum ReaderRef<'a> {
+-    Borrowed(&'a mut dyn Reader),
+-    Boxed(Box<dyn Reader + 'a>),
+-}
+-
+-impl ReaderRef<'_> {
+-    pub fn as_mut(&mut self) -> &mut dyn Reader {
+-        match self {
+-            ReaderRef::Borrowed(r) => &mut **r,
+-            ReaderRef::Boxed(b) => &mut **b,
+-        }
+-    }
+-}
+-
+ /// A builder for loading nested assets inside a [`LoadContext`].
+ ///
+ /// # Loader state
+@@ -393,7 +378,7 @@ impl<'builder, 'reader, T> NestedLoader<'_, '_, T, Immediate<'builder, 'reader>>
+         if path.label().is_some() {
+             return Err(LoadDirectError::RequestedSubasset(path.clone()));
+         }
+-        let (mut meta, loader, mut reader) = if let Some(reader) = self.mode.reader {
++        let (mut meta, loader, maybe_reader) = if let Some(reader) = self.mode.reader {
+             let loader = if let Some(asset_type_id) = asset_type_id {
+                 self.load_context
+                     .asset_server
+@@ -414,28 +399,36 @@ impl<'builder, 'reader, T> NestedLoader<'_, '_, T, Immediate<'builder, 'reader>>
+                     })?
+             };
+             let meta = loader.default_meta();
+-            (meta, loader, ReaderRef::Borrowed(reader))
++            (meta, loader, Some(reader))
+         } else {
+-            let (meta, loader, reader) = self
++            let (meta, loader) = self
+                 .load_context
+                 .asset_server
+-                .get_meta_loader_and_reader(path, asset_type_id)
++                .get_meta_and_loader(path, asset_type_id)
+                 .await
+                 .map_err(|error| LoadDirectError::LoadError {
+                     dependency: path.clone(),
+                     error,
+                 })?;
+-            (meta, loader, ReaderRef::Boxed(reader))
++            (meta, loader, None)
+         };
+ 
+         if let Some(meta_transform) = self.meta_transform {
+             meta_transform(&mut *meta);
+         }
+ 
+-        let asset = self
+-            .load_context
+-            .load_direct_internal(path.clone(), meta.as_ref(), &*loader, reader.as_mut())
+-            .await?;
++        let (asset, loader) = if let Some(reader) = maybe_reader {
++            (
++                self.load_context
++                    .load_direct_internal(path.clone(), meta.as_ref(), &*loader, reader)
++                    .await?,
++                loader,
++            )
++        } else {
++            self.load_context
++                .load_indirect_internal(path.clone(), meta, loader)
++                .await?
++        };
+         Ok((loader, asset))
+     }
+ }
+diff --git a/crates/bevy_asset/src/processor/mod.rs b/crates/bevy_asset/src/processor/mod.rs
+index a239d66a9b59abae5e0fc416bafa36d7ff5b85d2..41868d87a6bfe8e232affd22fcaa6b387abc0a94 100644
+--- a/crates/bevy_asset/src/processor/mod.rs
++++ b/crates/bevy_asset/src/processor/mod.rs
+@@ -123,6 +123,8 @@ impl AssetProcessor {
+             AssetMetaCheck::Always,
+             false,
+             UnapprovedPathMode::default(),
++            #[cfg(all(target_arch="wasm32", feature="wasm_threaded_loader"))]
++            None,
+         );
+         Self { server, data }
+     }
+diff --git a/crates/bevy_asset/src/processor/process.rs b/crates/bevy_asset/src/processor/process.rs
+index b37265d0fb660f849dbf60fa11f6dd717e630b28..a7c3451e9fca250eeec83a8f05072a07aaf7af6f 100644
+--- a/crates/bevy_asset/src/processor/process.rs
++++ b/crates/bevy_asset/src/processor/process.rs
+@@ -311,7 +311,7 @@ impl<'a> ProcessContext<'a> {
+         let loader = server.get_asset_loader_with_type_name(loader_name).await?;
+         let mut reader = SliceReader::new(self.asset_bytes);
+         let loaded_asset = server
+-            .load_with_meta_loader_and_reader(self.path, &meta, &*loader, &mut reader, false, true)
++            .load_with_meta_loader_and_reader_internal(self.path, &meta, &*loader, &mut reader, false, true)
+             .await?;
+         for (path, full_hash) in &loaded_asset.loader_dependencies {
+             self.new_processed_info
+diff --git a/crates/bevy_asset/src/server/mod.rs b/crates/bevy_asset/src/server/mod.rs
+index ff5800474d8b7937d79e101c14652c75c57889e3..63bfe3774328facee991232eeb5d9fdc0c83faa6 100644
+--- a/crates/bevy_asset/src/server/mod.rs
++++ b/crates/bevy_asset/src/server/mod.rs
+@@ -34,11 +34,16 @@ use either::Either;
+ use futures_lite::{FutureExt, StreamExt};
+ use info::*;
+ use loaders::*;
+-use parking_lot::{RwLock, RwLockWriteGuard};
+ use std::path::{Path, PathBuf};
+ use thiserror::Error;
+ use tracing::{error, info};
+ 
++#[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++use spin::{RwLock, RwLockWriteGuard};
++
++#[cfg(not(all(feature = "wasm_threaded_loader", target_arch = "wasm32")))]
++use parking_lot::{RwLock, RwLockWriteGuard};
++
+ /// Loads and tracks the state of [`Asset`] values from a configured [`AssetReader`](crate::io::AssetReader).
+ /// This can be used to kick off new asset loads and retrieve their current load states.
+ ///
+@@ -69,6 +74,68 @@ pub(crate) struct AssetServerData {
+     mode: AssetServerMode,
+     meta_check: AssetMetaCheck,
+     unapproved_path_mode: UnapprovedPathMode,
++    #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++    wasm_loader_handle: Option<super::WasmLoaderHandle>,
++}
++
++#[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++pub(crate) struct WasmThreadLoadAssetRequest {
++    asset_server: AssetServer,
++    asset_path: AssetPath<'static>,
++    meta: Box<dyn AssetMetaDyn>,
++    loader: Arc<dyn ErasedAssetLoader>,
++    load_dependencies: bool,
++    populate_hashes: bool,
++    sender: async_channel::Sender<
++        Result<
++            (
++                ErasedLoadedAsset,
++                Box<dyn AssetMetaDyn>,
++                Arc<dyn ErasedAssetLoader>,
++            ),
++            AssetLoadError,
++        >,
++    >,
++}
++
++#[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++pub fn init_thread_loader() -> super::WasmLoaderHandle {
++    let (load_request_sender, load_request_receiver) = async_channel::unbounded();
++    wasm_bindgen_futures::spawn_local(thread_loader(load_request_receiver));
++    super::WasmLoaderHandle {
++        load_request_sender,
++    }
++}
++
++#[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++async fn thread_loader(rx: async_channel::Receiver<WasmThreadLoadAssetRequest>) {
++    while let Ok(thread_load_request) = rx.recv().await {
++        wasm_bindgen_futures::spawn_local(wasm_thread_handle_load_request(thread_load_request));
++    }
++}
++
++#[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++async fn wasm_thread_handle_load_request(request: WasmThreadLoadAssetRequest) {
++    let WasmThreadLoadAssetRequest {
++        asset_server,
++        asset_path,
++        meta,
++        loader,
++        load_dependencies,
++        populate_hashes,
++        sender,
++    } = request;
++
++    let result = asset_server
++        .load_with_meta_and_loader_internal(
++            &asset_path,
++            meta,
++            loader,
++            load_dependencies,
++            populate_hashes,
++        )
++        .await;
++    let _ = sender.send(result).await;
+ }
+ 
+ /// The "asset mode" the server is currently in.
+@@ -80,6 +147,10 @@ pub enum AssetServerMode {
+     Processed,
+ }
+ 
++std::thread_local! {
++    pub static IS_MAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }
++}
++
+ impl AssetServer {
+     /// Create a new instance of [`AssetServer`]. If `watch_for_changes` is true, the [`AssetReader`](crate::io::AssetReader) storage will watch for changes to
+     /// asset sources and hot-reload them.
+@@ -88,6 +159,8 @@ impl AssetServer {
+         mode: AssetServerMode,
+         watching_for_changes: bool,
+         unapproved_path_mode: UnapprovedPathMode,
++        #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++        wasm_loader_handle: Option<super::WasmLoaderHandle>,
+     ) -> Self {
+         Self::new_with_loaders(
+             sources,
+@@ -96,6 +169,8 @@ impl AssetServer {
+             AssetMetaCheck::Always,
+             watching_for_changes,
+             unapproved_path_mode,
++            #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++            wasm_loader_handle,
+         )
+     }
+ 
+@@ -107,6 +182,8 @@ impl AssetServer {
+         meta_check: AssetMetaCheck,
+         watching_for_changes: bool,
+         unapproved_path_mode: UnapprovedPathMode,
++        #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++        wasm_loader_handle: Option<super::WasmLoaderHandle>,
+     ) -> Self {
+         Self::new_with_loaders(
+             sources,
+@@ -115,6 +192,8 @@ impl AssetServer {
+             meta_check,
+             watching_for_changes,
+             unapproved_path_mode,
++            #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++            wasm_loader_handle,
+         )
+     }
+ 
+@@ -125,10 +204,15 @@ impl AssetServer {
+         meta_check: AssetMetaCheck,
+         watching_for_changes: bool,
+         unapproved_path_mode: UnapprovedPathMode,
++        #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++        wasm_loader_handle: Option<super::WasmLoaderHandle>,
+     ) -> Self {
+         let (asset_event_sender, asset_event_receiver) = crossbeam_channel::unbounded();
+         let mut infos = AssetInfos::default();
+         infos.watching_for_changes = watching_for_changes;
++
++        IS_MAIN.set(true);
++
+         Self {
+             data: Arc::new(AssetServerData {
+                 sources,
+@@ -139,6 +223,8 @@ impl AssetServer {
+                 loaders,
+                 infos: RwLock::new(infos),
+                 unapproved_path_mode,
++                #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++                wasm_loader_handle,
+             }),
+         }
+     }
+@@ -656,8 +742,8 @@ impl AssetServer {
+ 
+         let path = path.into_owned();
+         let path_clone = path.clone();
+-        let (mut meta, loader, mut reader) = self
+-            .get_meta_loader_and_reader(&path_clone, asset_type_id)
++        let (mut meta, loader) = self
++            .get_meta_and_loader(&path_clone, asset_type_id)
+             .await
+             .inspect_err(|e| {
+                 // if there was an input handle, a "load" operation has already started, so we must produce a "failure" event, if
+@@ -747,17 +833,10 @@ impl AssetServer {
+         };
+ 
+         match self
+-            .load_with_meta_loader_and_reader(
+-                &base_path,
+-                meta.as_ref(),
+-                &*loader,
+-                &mut *reader,
+-                true,
+-                false,
+-            )
++            .load_with_meta_and_loader(&base_path, meta, loader, true, false)
+             .await
+         {
+-            Ok(loaded_asset) => {
++            Ok((loaded_asset, _, _)) => {
+                 let final_handle = if let Some(label) = path.label_cow() {
+                     match loaded_asset.labeled_assets.get(&label) {
+                         Some(labeled_asset) => labeled_asset.handle.clone(),
+@@ -1310,18 +1389,11 @@ impl AssetServer {
+             .0
+     }
+ 
+-    pub(crate) async fn get_meta_loader_and_reader<'a>(
++    pub(crate) async fn get_meta_and_loader<'a>(
+         &'a self,
+-        asset_path: &'a AssetPath<'_>,
++        asset_path: &AssetPath<'_>,
+         asset_type_id: Option<TypeId>,
+-    ) -> Result<
+-        (
+-            Box<dyn AssetMetaDyn>,
+-            Arc<dyn ErasedAssetLoader>,
+-            Box<dyn Reader + 'a>,
+-        ),
+-        AssetLoadError,
+-    > {
++    ) -> Result<(Box<dyn AssetMetaDyn>, Arc<dyn ErasedAssetLoader>), AssetLoadError> {
+         let source = self.get_source(asset_path.source())?;
+         // NOTE: We grab the asset byte reader first to ensure this is transactional for AssetReaders like ProcessorGatedReader
+         // The asset byte reader will "lock" the processed asset, preventing writes for the duration of the lock.
+@@ -1331,7 +1403,7 @@ impl AssetServer {
+             AssetServerMode::Unprocessed => source.reader(),
+             AssetServerMode::Processed => source.processed_reader()?,
+         };
+-        let reader = asset_reader.read(asset_path.path()).await?;
++        asset_reader.block_until_ready(asset_path.path()).await?;
+         let read_meta = match &self.data.meta_check {
+             AssetMetaCheck::Always => true,
+             AssetMetaCheck::Paths(paths) => paths.contains(asset_path),
+@@ -1370,7 +1442,7 @@ impl AssetServer {
+                         }
+                     })?;
+ 
+-                    Ok((meta, loader, reader))
++                    Ok((meta, loader))
+                 }
+                 Err(AssetReaderError::NotFound(_)) => {
+                     // TODO: Handle error transformation
+@@ -1391,7 +1463,7 @@ impl AssetServer {
+                     let loader = loader.ok_or_else(error)?.get().await.map_err(|_| error())?;
+ 
+                     let meta = loader.default_meta();
+-                    Ok((meta, loader, reader))
++                    Ok((meta, loader))
+                 }
+                 Err(err) => Err(err.into()),
+             }
+@@ -1413,11 +1485,117 @@ impl AssetServer {
+             let loader = loader.ok_or_else(error)?.get().await.map_err(|_| error())?;
+ 
+             let meta = loader.default_meta();
+-            Ok((meta, loader, reader))
++            Ok((meta, loader))
+         }
+     }
+ 
+-    pub(crate) async fn load_with_meta_loader_and_reader(
++    #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
++    pub(crate) async fn load_with_meta_and_loader(
++        &self,
++        asset_path: &AssetPath<'_>,
++        meta: Box<dyn AssetMetaDyn>,
++        loader: Arc<dyn ErasedAssetLoader>,
++        load_dependencies: bool,
++        populate_hashes: bool,
++    ) -> Result<
++        (
++            ErasedLoadedAsset,
++            Box<dyn AssetMetaDyn>,
++            Arc<dyn ErasedAssetLoader>,
++        ),
++        AssetLoadError,
++    > {
++        if let Some(wasm_loader_handle) = self.data.wasm_loader_handle.as_ref() {
++            let (sender, receiver) = async_channel::bounded(1);
++            let asset_server = self.clone();
++            let asset_path = asset_path.clone().into_owned();
++            wasm_loader_handle
++                .load_request_sender
++                .send(WasmThreadLoadAssetRequest {
++                    asset_server,
++                    asset_path,
++                    meta,
++                    loader,
++                    load_dependencies,
++                    populate_hashes,
++                    sender,
++                })
++                .await
++                .unwrap();
++            receiver.recv().await.unwrap()
++        } else {
++            self.load_with_meta_and_loader_internal(
++                asset_path,
++                meta,
++                loader,
++                load_dependencies,
++                populate_hashes,
++            )
++            .await
++        }
++    }
++
++    #[cfg(not(all(feature = "wasm_threaded_loader", target_arch = "wasm32")))]
++    pub(crate) async fn load_with_meta_and_loader(
++        &self,
++        asset_path: &AssetPath<'_>,
++        meta: Box<dyn AssetMetaDyn>,
++        loader: Arc<dyn ErasedAssetLoader>,
++        load_dependencies: bool,
++        populate_hashes: bool,
++    ) -> Result<
++        (
++            ErasedLoadedAsset,
++            Box<dyn AssetMetaDyn>,
++            Arc<dyn ErasedAssetLoader>,
++        ),
++        AssetLoadError,
++    > {
++        self.load_with_meta_and_loader_internal(
++            asset_path,
++            meta,
++            loader,
++            load_dependencies,
++            populate_hashes,
++        )
++        .await
++    }
++
++    async fn load_with_meta_and_loader_internal(
++        &self,
++        asset_path: &AssetPath<'_>,
++        meta: Box<dyn AssetMetaDyn>,
++        loader: Arc<dyn ErasedAssetLoader>,
++        load_dependencies: bool,
++        populate_hashes: bool,
++    ) -> Result<
++        (
++            ErasedLoadedAsset,
++            Box<dyn AssetMetaDyn>,
++            Arc<dyn ErasedAssetLoader>,
++        ),
++        AssetLoadError,
++    > {
++        let source = self.get_source(asset_path.source())?;
++        let asset_reader = match self.data.mode {
++            AssetServerMode::Unprocessed => source.reader(),
++            AssetServerMode::Processed => source.processed_reader()?,
++        };
++        let mut reader = asset_reader.read(asset_path.path()).await?;
++
++        self.load_with_meta_loader_and_reader_internal(
++            asset_path,
++            meta.as_ref(),
++            &*loader,
++            &mut *reader,
++            load_dependencies,
++            populate_hashes,
++        )
++        .await
++        .map(|asset| (asset, meta, loader))
++    }
++
++    pub(crate) async fn load_with_meta_loader_and_reader_internal(
+         &self,
+         asset_path: &AssetPath<'_>,
+         meta: &dyn AssetMetaDyn,
+@@ -1937,6 +2115,8 @@ pub enum AssetLoadError {
+         label: String,
+         all_labels: Vec<String>,
+     },
++    #[error("An error occurred in the wasm asset loading thread")]
++    WasmThreadLoaderError,
+ }
+ 
+ /// An error that can occur during asset loading.
+diff --git a/crates/bevy_internal/Cargo.toml b/crates/bevy_internal/Cargo.toml
+index 4f231eb62a50fe4f35ef86f0baf0a40b9cd0b759..28e22a636c6b083cfd01f96a5be4a782200a07e8 100644
+--- a/crates/bevy_internal/Cargo.toml
++++ b/crates/bevy_internal/Cargo.toml
+@@ -341,6 +341,8 @@ async_executor = [
+   "bevy_transform/async_executor",
+ ]
+ 
++wasm_threaded_asset_loader = ["bevy_asset?/wasm_threaded_loader"]
++
+ # Enables use of browser APIs.
+ # Note this is currently only applicable on `wasm32` architectures.
+ web = [

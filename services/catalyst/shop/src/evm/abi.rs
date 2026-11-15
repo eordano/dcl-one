@@ -527,7 +527,7 @@ pub fn modelled_coupons(chain_id: u64) -> &'static [Address] {
     }
 }
 
-const DISCOUNT_TYPE_RATE: u64 = 1;
+const DISCOUNT_TYPE_RATE: u64 = crate::coupons::signature::DISCOUNT_TYPE_RATE as u64;
 const DISCOUNT_TYPE_FLAT: u64 = 2;
 const ONE_MILLION: u64 = 1_000_000;
 

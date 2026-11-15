@@ -49,6 +49,17 @@ impl RpcError {
                 | RpcError::Malformed(_)
         )
     }
+
+    /// Whether the node answered that the call itself reverted: geth's code
+    /// 3, the "execution reverted" of hosted providers, Nethermind's "VM
+    /// execution error".
+    pub fn is_revert(&self) -> bool {
+        matches!(self, RpcError::Response { code, message }
+        if *code == 3 || {
+            let m = message.to_ascii_lowercase();
+            m.contains("revert") || m.contains("vm execution error")
+        })
+    }
 }
 
 /// The request body of one call.
@@ -94,5 +105,42 @@ pub fn hex_of(result: Value) -> Result<String, RpcError> {
     match result {
         Value::String(s) => Ok(s),
         other => Err(RpcError::Malformed(format!("non-string result: {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reverts_are_told_from_other_provider_errors() {
+        let response = |code, message: &str| RpcError::Response {
+            code,
+            message: message.to_string(),
+        };
+        for revert in [
+            response(3, "execution reverted"),
+            response(-32000, "execution reverted"),
+            response(-32000, "Execution reverted: ERC721: invalid token ID"),
+            response(-32603, "VM Exception while processing transaction: revert"),
+            response(-32015, "VM execution error."),
+        ] {
+            assert!(revert.is_revert(), "{revert}");
+        }
+        for failure in [
+            response(-32000, "header not found"),
+            response(
+                -32000,
+                "missing trie node 1a2b (path ) state is not available",
+            ),
+            response(-32005, "limit exceeded"),
+            response(-32603, "request timed out"),
+            response(429, "Too Many Requests"),
+            RpcError::Status(502),
+            RpcError::Transport("connection reset".into()),
+            RpcError::Refused("private address".into()),
+        ] {
+            assert!(!failure.is_revert(), "{failure}");
+        }
     }
 }

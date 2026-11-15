@@ -2,10 +2,6 @@ use std::collections::HashMap;
 
 use super::types::*;
 
-pub(super) fn is_ipfs_v2_hash(hash: &str) -> bool {
-    hash.starts_with("bafy") || hash.starts_with("bafk")
-}
-
 pub(super) fn should_validate_face_thumbnail(
     entity: &Entity,
     files: &HashMap<String, bytes::Bytes>,
@@ -136,7 +132,43 @@ pub(super) fn count_urn_segments(urn: &str) -> usize {
     urn.split(':').count()
 }
 
-pub(super) fn is_relative_thumbnail_path(path: &str) -> bool {
+/// The scene `display.navmapThumbnail` rule shared by Content and Worlds deploys:
+/// a falsy value passes, anything else must be a relative path to a file the
+/// deployment includes (`has_file`). Returns the refusal message.
+pub fn navmap_thumbnail_error(
+    metadata: &serde_json::Value,
+    has_file: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let value = metadata.get("display")?.get("navmapThumbnail")?;
+    let thumbnail = match value {
+        serde_json::Value::Null => return None,
+        serde_json::Value::String(s) if s.is_empty() => return None,
+        serde_json::Value::Bool(false) => return None,
+        serde_json::Value::Number(n) if n.as_f64() == Some(0.0) => return None,
+        serde_json::Value::String(s) => s.as_str(),
+        other => {
+            return Some(format!(
+                "Scene thumbnail '{other}' must be a relative path to a \
+                 file included in the deployment."
+            ));
+        }
+    };
+    if !is_relative_thumbnail_path(thumbnail) {
+        return Some(format!(
+            "Scene thumbnail '{thumbnail}' must be a relative path to a \
+             file included in the deployment."
+        ));
+    }
+    if !has_file(thumbnail) {
+        return Some(format!(
+            "Scene thumbnail '{thumbnail}' must be a file included in \
+             the deployment."
+        ));
+    }
+    None
+}
+
+pub fn is_relative_thumbnail_path(path: &str) -> bool {
     if path.starts_with('/') || has_uri_scheme(path) {
         return false;
     }

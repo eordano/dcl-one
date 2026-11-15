@@ -1074,7 +1074,9 @@ async fn a_room_closed_out_of_band_reaches_its_audience_as_ended() {
     use crate::comms::interfaces::SocialDirectory;
     // The poll inspects every tracked key. Its fake media view must not close
     // generations created concurrently by other fixtures in the scratch DB.
-    let Some(database) = super::fanout::OwnedDatabase::new().await else {
+    let Some(database) =
+        super::fanout::OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let rig = Rig::with_pool(false, database.pool.clone()).await;
@@ -1119,7 +1121,7 @@ async fn a_room_closed_out_of_band_reaches_its_audience_as_ended() {
     let seen = voice_updates(&mut to_member);
     assert_eq!(seen.len(), 2, "STARTED and one ENDED: {seen:?}");
     rig.drop().await;
-    database.close().await;
+    database.drop().await;
 }
 
 /// Participation admits public guests, rejects bans even without a membership

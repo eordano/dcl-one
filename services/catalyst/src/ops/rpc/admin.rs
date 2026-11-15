@@ -210,42 +210,29 @@ fn is_blocked_upstream_host_with(url: &str, allow_private: bool) -> bool {
 /// service name (`http://geth:8545`) or any other internal DNS name has to
 /// stay reachable, so only the host's own stack, the reserved IP ranges and
 /// the cloud metadata endpoint are refused.
+///
+/// The host is read by the same URL parser the HTTP client uses, so every
+/// spelling it normalizes to an address (`127.1`, `2130706433`,
+/// `0x7f.0.0.1`, `[::127.0.0.1]`) is judged as that address. An address
+/// literal is judged by the readers' own IP deny-list
+/// (`dcl_http::is_blocked_ip`), so the opt-in widens names, never literal
+/// addresses. A URL the parser refuses is refused.
 pub fn blocks_local_upstream_only(url: &str) -> bool {
-    let after = url.split("://").nth(1).unwrap_or(url);
-    let hostport = after.split(['/', '?', '#']).next().unwrap_or("");
-    let host = hostport.rsplit('@').next().unwrap_or(hostport);
-    let host = if host.starts_with('[') {
-        host.split(']')
-            .next()
-            .unwrap_or(host)
-            .trim_start_matches('[')
-    } else {
-        host.split(':').next().unwrap_or(host)
-    };
-    let host = host.trim().to_ascii_lowercase();
-    if host.is_empty()
-        || host == "localhost"
-        || host.ends_with(".localhost")
-        || host == "metadata.google.internal"
-    {
+    let Ok(parsed) = url::Url::parse(url) else {
         return true;
-    }
-    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
-        return ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified();
-    }
-    if let Ok(ip) = host.parse::<std::net::Ipv6Addr>() {
-        if let Some(v4) = ip.to_ipv4_mapped() {
-            return v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified();
+    };
+    match parsed.host() {
+        None => true,
+        Some(url::Host::Domain(name)) => {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            name.is_empty()
+                || name == "localhost"
+                || name.ends_with(".localhost")
+                || name == "metadata.google.internal"
         }
-        let seg = ip.segments();
-        let is_ula = (seg[0] & 0xfe00) == 0xfc00;
-        let is_ll = (seg[0] & 0xffc0) == 0xfe80;
-        return ip.is_loopback() || ip.is_unspecified() || is_ula || is_ll;
+        Some(url::Host::Ipv4(ip)) => crate::http::is_blocked_ip(ip.into()),
+        Some(url::Host::Ipv6(ip)) => crate::http::is_blocked_ip(ip.into()),
     }
-    false
 }
 
 /// The host of an upstream URL for logs and the audit row (a gateway key
@@ -422,6 +409,72 @@ mod tests {
             "https://rpc.example.com",
             true
         ));
+    }
+
+    #[test]
+    fn opted_in_upstream_guard_reads_the_host_as_the_http_client_does() {
+        for url in [
+            "http://2130706433:8545/",
+            "http://127.1:8545/",
+            "http://0x7f.0.0.1:8545/",
+            "http://0x7f.1:8545/",
+            "http://0177.0.0.1:8545/",
+            "http://167772165:8545/",
+            "http://0xa9fea9fe/",
+            "http://[::127.0.0.1]:8545/",
+            "http://[::ffff:7f00:1]:8545/",
+            "http://[64:ff9b::7f00:1]:8545/",
+            "http://[::ffff:10.0.0.5]:8545/",
+            "http://localhost.:8545/",
+            "http://metadata.google.internal./",
+            "http://LOCALHOST:8545/",
+            "http://user@127.0.0.1:8545/",
+            "http://",
+        ] {
+            assert!(
+                is_blocked_upstream_host_with(url, true),
+                "{url} must stay refused even with the opt-in"
+            );
+        }
+        for url in [
+            "http://geth:8545",
+            "http://8.8.8.8/",
+            "http://[2001:db8::1]/",
+        ] {
+            assert!(
+                !is_blocked_upstream_host_with(url, true),
+                "{url} must be reachable for a self-hosted deployment"
+            );
+        }
+    }
+
+    #[test]
+    fn opted_in_upstream_guard_refuses_every_non_public_address_literal() {
+        for url in [
+            "http://0.1.2.3:8545/",
+            "http://100.64.0.1:8545/",
+            "http://192.0.2.1:8545/",
+            "http://198.18.0.1:8545/",
+            "http://255.255.255.255:8545/",
+            "http://224.0.0.1:8545/",
+            "http://240.0.0.1:8545/",
+            "http://[fec0::1]:8545/",
+            "http://[ff02::1]:8545/",
+            "http://[64:ff9b:1::a00:5]:8545/",
+            "http://[2002:a00:5::1]:8545/",
+            "http://[2002:7f00:1::]:8545/",
+        ] {
+            assert!(
+                is_blocked_upstream_host_with(url, true),
+                "{url} must stay refused even with the opt-in"
+            );
+        }
+        for url in ["http://[2002:808:808::1]:8545/", "http://[::808:808]:8545/"] {
+            assert!(
+                !is_blocked_upstream_host_with(url, true),
+                "{url} wraps a public IPv4 address and must be reachable"
+            );
+        }
     }
 
     #[tokio::test]

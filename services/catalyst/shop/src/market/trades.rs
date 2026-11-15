@@ -83,10 +83,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// The whole-list answer at a constrained link: the old poller's budget.
 const LIST_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub const ASSET_TYPE_ERC20: i32 = 1;
-pub const ASSET_TYPE_USD_PEGGED_MANA: i32 = 2;
-pub const ASSET_TYPE_ERC721: i32 = 3;
-pub const ASSET_TYPE_COLLECTION_ITEM: i32 = 4;
+use crate::types::{
+    ASSET_TYPE_COLLECTION_ITEM, ASSET_TYPE_ERC20, ASSET_TYPE_ERC721, ASSET_TYPE_USD_PEGGED_MANA,
+};
 
 #[derive(Debug, Clone)]
 pub struct UpstreamTradeHead {

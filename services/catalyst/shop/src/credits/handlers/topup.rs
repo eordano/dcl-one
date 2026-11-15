@@ -53,14 +53,8 @@ pub struct ManaTopupBody {
 }
 
 fn validate_tx_hash(raw: &str) -> Result<String, ApiError> {
-    let s = raw.trim();
-    let hex = s.strip_prefix("0x").unwrap_or("");
-    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(ApiError::bad_request(
-            "invalid txHash: expected 0x + 64 hex chars",
-        ));
-    }
-    Ok(s.to_lowercase())
+    crate::types::normalize_tx_hash(raw)
+        .ok_or_else(|| ApiError::bad_request("invalid txHash: expected 0x + 64 hex chars"))
 }
 
 /// The grant idempotency-key prefix of a MANA top-up; the transaction hash follows.

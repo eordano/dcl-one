@@ -1,0 +1,12 @@
+name       = "deno_core"
+upstream   = "https://github.com/denoland/deno_core"
+commit     = "f637e50fe900d6b60ffcfd20aa601c838cc2c175"
+ref        = "0.307.0"
+origin     = "https://github.com/robtfm/deno_core"
+origin_rev = "9b59a4e33f4729799409c20f85a80764f1d447e5"
+license    = "MIT"
+paths      = ["."]
+exclude    = []
+base_tree  = "6852aef8ecdf297fd767ed679953c47605acb934"
+tree       = "68d45ed18d7234becaa7e80a4870759999d9bf31"
+nix_hash   = "sha256-NVoNmzICEIBHeTcia8rqw76Vf5EbF18qpA8tFhb/MuQ="

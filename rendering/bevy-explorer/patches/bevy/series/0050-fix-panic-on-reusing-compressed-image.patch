@@ -1,0 +1,18 @@
+From ae3873722911a775debb839d4ddde41d56a1e9df
+Subject: fix panic on reusing compressed image
+Origin: https://github.com/robtfm/bevy/commit/ae3873722911a775debb839d4ddde41d56a1e9df
+Date: 2026-01-17T17:05:55Z
+
+---
+diff --git a/crates/bevy_render/src/texture/gpu_image.rs b/crates/bevy_render/src/texture/gpu_image.rs
+index f0248f703efb17e8cf2688aaa94e4abc33dfa994..bf0bddda2da1a3af4a875e49b8bbe5c8fb18c3f6 100644
+--- a/crates/bevy_render/src/texture/gpu_image.rs
++++ b/crates/bevy_render/src/texture/gpu_image.rs
+@@ -70,6 +70,7 @@ impl RenderAsset for GpuImage {
+         let had_data = image.data.is_some();
+         let texture = if let Some(prev) = previous_gpu_asset
+             && prev.texture_descriptor == image.texture_descriptor
++            && image.texture_descriptor.format.block_dimensions() == (1, 1)
+         {
+             if let Some(ref data) = image.data {
+                 // queue copy

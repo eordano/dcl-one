@@ -199,14 +199,11 @@ pub struct VerifyBody {
 }
 
 fn validate_tx_hash(raw: &str) -> Result<String, ApiError> {
-    let s = raw.trim();
-    let hex = s.strip_prefix("0x").unwrap_or("");
-    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(ApiError::InvalidTransaction(format!(
+    crate::types::normalize_tx_hash(raw).ok_or_else(|| {
+        ApiError::InvalidTransaction(format!(
             "invalid txHash {raw:?}: expected 0x + 64 hex chars"
-        )));
-    }
-    Ok(s.to_lowercase())
+        ))
+    })
 }
 
 pub async fn verify(

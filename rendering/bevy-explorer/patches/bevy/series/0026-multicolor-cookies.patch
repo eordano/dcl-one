@@ -1,0 +1,46 @@
+From e7af19ec139ac105dc131ab67c0a6b870fd4b732
+Subject: multicolor cookies
+Origin: https://github.com/robtfm/bevy/commit/e7af19ec139ac105dc131ab67c0a6b870fd4b732
+Date: 2025-08-04T15:40:38+01:00
+
+---
+diff --git a/crates/bevy_pbr/src/render/pbr_lighting.wgsl b/crates/bevy_pbr/src/render/pbr_lighting.wgsl
+index 17cae13b920f20f5fbbd87985f4053296c87f450..c284ee9697297a58d55598db4a1be9d416288439 100644
+--- a/crates/bevy_pbr/src/render/pbr_lighting.wgsl
++++ b/crates/bevy_pbr/src/render/pbr_lighting.wgsl
+@@ -622,7 +622,7 @@ fn point_light(
+     color = diffuse + specular_light;
+ #endif  // STANDARD_MATERIAL_CLEARCOAT
+ 
+-    var texture_sample = 1f;
++    var texture_sample = vec3<f32>(1f);
+ 
+ #ifdef LIGHT_TEXTURES
+     if enable_texture && (*light).decal_index != 0xFFFFFFFFu {
+@@ -636,7 +636,7 @@ fn point_light(
+             view_bindings::clustered_decal_sampler,
+             decal_uv,
+             0.0
+-        ).r;
++        ).rgb;
+     }
+ #endif
+ 
+@@ -669,7 +669,7 @@ fn spot_light(
+     let attenuation = saturate(cd * (*light).light_custom_data.z + (*light).light_custom_data.w);
+     let spot_attenuation = attenuation * attenuation;
+ 
+-    var texture_sample = 1f;
++    var texture_sample = vec3<f32>(1.0);
+ 
+ #ifdef LIGHT_TEXTURES
+     if (*light).decal_index != 0xFFFFFFFFu {
+@@ -684,7 +684,7 @@ fn spot_light(
+                 view_bindings::clustered_decal_sampler,
+                 decal_uv,
+                 0.0
+-            ).r;
++            ).rgb;
+         }
+     }
+ #endif

@@ -97,6 +97,21 @@ impl SignedFetchError {
             Self::CatalystUnavailable(d) => (503, format!("Catalyst unavailable: {d}")),
         }
     }
+
+    /// Whether the chain was refused for its metadata before any signature
+    /// check: a scene-signed request where the route refuses one, or a legacy
+    /// payload whose `signer` key is not canonical. Routes that answer these
+    /// differently from an authentication failure ask here instead of
+    /// matching the detail text.
+    pub fn is_metadata_refusal(&self) -> bool {
+        match self {
+            Self::MalformedChain { detail } => {
+                detail.starts_with("invalid metadata content")
+                    || detail.contains("non-canonical metadata")
+            }
+            _ => false,
+        }
+    }
 }
 
 impl From<ChainShapeError> for SignedFetchError {
@@ -604,6 +619,7 @@ mod tests {
                         .await
                         .expect_err("a scene-signed request must not be served");
                 assert_eq!(err.http_status_and_message().0, 400, "v6={v6}: {err}");
+                assert!(err.is_metadata_refusal(), "v6={v6}: {err}");
                 assert!(
                     optional_signer(&headers, "patch", PATH, PayloadPolicy::V6ThenLegacy, None)
                         .await
@@ -620,6 +636,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.http_status_and_message().0, 401);
+        assert!(!err.is_metadata_refusal());
         let err = require_signer(
             &headers,
             "get",
@@ -848,10 +865,9 @@ mod tests {
                 r#"{"type":"ECDSA_SIGNED_ENTITY","payload":"x","signature":"0x00"}"#,
             ),
         );
-        assert!(matches!(
-            extract_auth_chain(&headers).unwrap_err(),
-            SignedFetchError::MalformedChain { .. }
-        ));
+        let err = extract_auth_chain(&headers).unwrap_err();
+        assert!(matches!(err, SignedFetchError::MalformedChain { .. }));
+        assert!(!err.is_metadata_refusal(), "{err}");
     }
 
     fn ms_from_now(offset_ms: i64) -> String {
@@ -949,12 +965,11 @@ mod tests {
                 .await
                 .is_ok()
         );
-        assert!(matches!(
-            require_signer(&headers, "post", PATH, PayloadPolicy::V6ThenLegacy, None)
-                .await
-                .unwrap_err(),
-            SignedFetchError::MalformedChain { .. }
-        ));
+        let err = require_signer(&headers, "post", PATH, PayloadPolicy::V6ThenLegacy, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SignedFetchError::MalformedChain { .. }));
+        assert!(err.is_metadata_refusal(), "{err}");
     }
 
     #[tokio::test]

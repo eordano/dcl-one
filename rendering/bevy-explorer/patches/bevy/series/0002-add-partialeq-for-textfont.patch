@@ -1,0 +1,32 @@
+From 7e359247365310ac7fc4a871457bcab161a918a5
+Subject: add partialEq for TextFont
+Origin: https://github.com/robtfm/bevy/commit/7e359247365310ac7fc4a871457bcab161a918a5
+Date: 2025-06-09T17:17:01+01:00
+
+---
+diff --git a/crates/bevy_text/src/text.rs b/crates/bevy_text/src/text.rs
+index faa5d93dc9ceee71ddc482f63e160f8dbe2be0b4..4feaa755edef1fee9cc44bd586764e4517215c8b 100644
+--- a/crates/bevy_text/src/text.rs
++++ b/crates/bevy_text/src/text.rs
+@@ -281,8 +281,8 @@ impl From<JustifyText> for cosmic_text::Align {
+ 
+ /// `TextFont` determines the style of a text span within a [`ComputedTextBlock`], specifically
+ /// the font face, the font size, and the color.
+-#[derive(Component, Clone, Debug, Reflect)]
+-#[reflect(Component, Default, Debug, Clone)]
++#[derive(Component, Clone, Debug, Reflect, PartialEq)]
++#[reflect(Component, Default, Debug, Clone, PartialEq)]
+ pub struct TextFont {
+     /// The specific font face to use, as a `Handle` to a [`Font`] asset.
+     ///
+@@ -359,8 +359,8 @@ impl Default for TextFont {
+ /// Specifies the height of each line of text for `Text` and `Text2d`
+ ///
+ /// Default is 1.2x the font size
+-#[derive(Debug, Clone, Copy, Reflect)]
+-#[reflect(Debug, Clone)]
++#[derive(Debug, Clone, Copy, Reflect, PartialEq)]
++#[reflect(Debug, Clone, PartialEq)]
+ pub enum LineHeight {
+     /// Set line height to a specific number of pixels
+     Px(f32),

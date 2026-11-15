@@ -1,0 +1,28 @@
+From b4152ef499f8db65023d55a46adc528551a9d725
+Subject: fix placeholder color/font not being respected on update
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/b4152ef499f8db65023d55a46adc528551a9d725
+Date: 2026-03-25T18:15:14+00:00
+
+update_placeholder_style was always overwriting with the base input
+color/font, ignoring TextInputPlaceholder's text_color and text_font
+fields. Now falls back to base values only when they are None, matching
+the create observer behavior.
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index bd3fbc204bf030413dd0a4578b8654ada32acfad..60edd8bb7f7f3663526cdf06ffda09f24f225dcb 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1559,8 +1559,11 @@ fn update_placeholder_style(
+             continue;
+         };
+ 
+-        font.clone_from(&base_font.0);
+-        color.clone_from(&base_color.0);
++        font.clone_from(placeholder.text_font.as_ref().unwrap_or(&base_font.0));
++        *color = placeholder
++            .text_color
++            .clone()
++            .unwrap_or_else(|| placeholder_color(&base_color.0));
+         text.0 = placeholder.value.clone();
+ 
+         // mark so other systems update correctly

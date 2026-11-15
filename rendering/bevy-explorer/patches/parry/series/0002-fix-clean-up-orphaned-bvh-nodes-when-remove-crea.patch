@@ -1,0 +1,32 @@
+From 8705700f2f176681c86a96be9083129690a46774
+Subject: fix: clean up orphaned BVH nodes when remove creates a partial root
+Origin: https://github.com/robtfm/parry/commit/8705700f2f176681c86a96be9083129690a46774
+Date: 2026-03-24T23:51:49+00:00
+
+When multiple removes occur without an intervening refit, orphaned wide
+nodes accumulate in the nodes vector. If the root is then reduced to a
+single leaf (partial root), those orphaned nodes remain, causing
+optimize_incremental to operate on a corrupt tree and eventually crash.
+
+Truncate nodes and parents to 1 after creating a partial root, since
+only node[0] is reachable in that state.
+---
+diff --git a/src/partitioning/bvh/bvh_tree.rs b/src/partitioning/bvh/bvh_tree.rs
+index 24c478c06a1afc6e2e498ab0a571a912d1fbbf2d..beba5149fba31b1797dfade20a3e64b5d80fe46e 100644
+--- a/src/partitioning/bvh/bvh_tree.rs
++++ b/src/partitioning/bvh/bvh_tree.rs
+@@ -2386,6 +2386,14 @@ impl Bvh {
+ 
+                     // Now we can just clear the right leaf.
+                     self.nodes[0].right = BvhNode::zeros();
++
++                    // Clean up orphaned nodes. With a partial root, only node[0] is
++                    // reachable. Previous removes may have left orphaned wide nodes
++                    // that were waiting for refit to compact them. If we don't truncate
++                    // here, the tree appears as a single-leaf tree with unreachable
++                    // nodes, which corrupts optimize_incremental.
++                    self.nodes.truncate(1);
++                    self.parents.truncate(1);
+                 } else {
+                     // The sibling isn’t a leaf. It becomes the new root at index 0.
+                     self.nodes[0] = self.nodes[self.nodes[sibling].children as usize];

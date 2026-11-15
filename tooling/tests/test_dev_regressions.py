@@ -418,27 +418,55 @@ class InventoryTests(unittest.TestCase):
     def test_the_shards_of_the_actual_test_script_run_every_binary_once(self):
         script = (ROOT / "tooling/catalyst-test.sh").read_text()
         select = script[script.index('shard="${CATALYST_TEST_SHARD:-1/1}"'):script.index('cores=')]
-        names = [f"/target/debug/deps/{name}" for name in "gfedcba"]
+        # "B" sorts before "a" in byte order and after it in a language locale.
+        keys = [(f"tests/{name}.rs", "test") for name in "gfeDcBa"] + [("src/lib.rs", "lib"), ("src/main.rs", "bin")]
 
-        def run(value):
+        def run(value, hashes, keys=keys, locale="C"):
+            # One line per test binary, as the build step writes it: source file, kind, executable.
+            rows = [f"{source}\t{kind}\t/target/debug/deps/{hashed}\n" for (source, kind), hashed in zip(keys, hashes)]
             with tempfile.TemporaryDirectory() as logs:
-                Path(logs, "binaries").write_text("".join(name + "\n" for name in names))
-                env = {**os.environ, "logs": logs}
+                Path(logs, "binaries").write_text("".join(rows))
+                env = {**os.environ, "logs": logs, "LC_ALL": locale}
                 env.pop("CATALYST_TEST_SHARD", None)
                 if value is not None:
                     env["CATALYST_TEST_SHARD"] = value
                 result = subprocess.run(["bash", "-euo", "pipefail", "-c", select], env=env,
                                         capture_output=True, text=True)
-                return result.returncode, Path(logs, "shard").read_text().split() if result.returncode == 0 else []
+                return (result.returncode, Path(logs, "shard").read_text().split() if result.returncode == 0 else [],
+                        result.stderr)
 
-        self.assertEqual(run(None), (0, sorted(names)))
+        # Two machines give one binary two hashes; the lib and the bin of one crate share a name.
+        here = [f"catalyst-{index:02x}" if source.startswith("src/") else f"{source[6]}-{index:02x}"
+                for index, (source, _) in enumerate(keys)]
+        there = [name[:-2] + f"{255 - index:02x}" for index, name in enumerate(here)]
+        in_byte_order = [hashed for _, hashed in sorted(zip(keys, here))]
+        self.assertEqual(run(None, here)[:2], (0, [f"/target/debug/deps/{name}" for name in in_byte_order]))
+        # The other locale must give plain sort another order here, or this test cannot see a list that follows it.
+        language = "en_US.UTF-8"
+        lines = "tests/B.rs\ntests/a.rs\n"
+        sorted_there = subprocess.run(["sort"], input=lines, env={**os.environ, "LC_ALL": language},
+                                      capture_output=True, text=True).stdout
+        other_order = sorted_there != lines
         for total in (1, 2, 3, 4, 7, 9):
-            shards = [run(f"{index}/{total}") for index in range(1, total + 1)]
-            self.assertEqual([code for code, _ in shards], [0] * total)
-            self.assertEqual(sorted(name for _, shard in shards for name in shard), sorted(names))
+            shards = [run(f"{index}/{total}", here) for index in range(1, total + 1)]
+            self.assertEqual([code for code, _, _ in shards], [0] * total)
+            self.assertEqual(sorted(name for _, shard, _ in shards for name in shard),
+                             sorted(f"/target/debug/deps/{name}" for name in here))
+            # A shard on another machine, with other hashes and another locale, takes the same targets.
+            for index, (_, shard, _) in enumerate(shards if other_order else [], 1):
+                other = run(f"{index}/{total}", there, locale=language)[1]
+                self.assertEqual([here[there.index(name.rsplit("/", 1)[1])] for name in other],
+                                 [name.rsplit("/", 1)[1] for name in shard])
+        code, _, error = run("1/3", here + ["catalyst-ff"], keys=keys + [("src/lib.rs", "lib")])
+        self.assertEqual(code, 1)
+        self.assertIn("one source file and kind: src/lib.rs\tlib", error)
+        # A tab inside the path of a binary stays in the list.
+        self.assertEqual(run(None, ["a\tb"], keys=[("tests/a.rs", "test")])[1], ["/target/debug/deps/a", "b"])
         for bad in ("3", "0/3", "4/3", "1/0", "a/b", "1/3/3", "/3", "2/3x", " 2/3", "02/03", "-1/3"):
             with self.subTest(bad=bad):
-                self.assertEqual(run(bad)[0], 1)
+                self.assertEqual(run(bad, here)[0], 1)
+        if not other_order:
+            self.skipTest(f"sort does not follow {language} on this machine: the other locale was not checked")
 
     def test_actual_test_script_rejects_filters_skipped_binaries_and_early_exit(self):
         script = (ROOT / "tooling/catalyst-test.sh").read_text()
@@ -454,7 +482,11 @@ class InventoryTests(unittest.TestCase):
                     script.replace('[[ "$shard" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] && ', ''),
                     script.replace('< "$logs/others"', '< <(head -n 1 "$logs/others")'),
                     script.replace('run "$socket_jobs" < "$logs/sockets"\n', ''),
-                    script.replace('print(artifact["executable"])', 'print(artifact["executable"]) if "comms" not in artifact["executable"] else None'),
+                    script.replace('artifact["executable"], sep="\\t")', 'artifact["executable"], sep="\\t") if "comms" not in artifact["executable"] else None'),
+                    script.replace('LC_ALL=C sort "$logs/binaries" | cut -f3-', 'sort -k3 "$logs/binaries" | cut -f3-'),
+                    script.replace('LC_ALL=C sort "$logs/binaries" | cut -f3-', 'sort "$logs/binaries" | cut -f3-'),
+                    script.replace('[ -z "$same" ] || ', ''),
+                    script.replace('same=$(cut -f1,2 "$logs/binaries" | LC_ALL=C sort | LC_ALL=C uniq -d)\n', 'same=\n'),
                     script.replace('cargo test --locked "$@" --doc\n', ''),
                     script.replace("cores=", "exit 0\ncores=")]:
             with self.subTest(bad=bad[-100:]), self.assertRaisesRegex(ValueError, "catalyst-test.sh"):

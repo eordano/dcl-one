@@ -19,7 +19,7 @@ let
     "org.opencontainers.image.revision" = revision;
     "org.opencontainers.image.licenses" = "AGPL-3.0";
   };
-  image = name: package: config: pkgs.dockerTools.buildLayeredImage {
+  layered = build: name: package: config: build {
     inherit name;
     tag = "nix";
     contents = [ package pkgs.cacert accounts ];
@@ -36,6 +36,10 @@ let
       Labels = labels;
     } // config;
   };
+  # The published archive, and the same layers written to stdout for `docker load`: a pull
+  # request's smoke test has no archive to compress, copy back or upload.
+  image = layered pkgs.dockerTools.buildLayeredImage;
+  stream = layered pkgs.dockerTools.streamLayeredImage;
   sitesConfig = package: {
     Entrypoint = [ "${lib.getExe package}" ];
     Env = [
@@ -45,17 +49,7 @@ let
     ];
     ExposedPorts."5212/tcp" = { };
   };
-in {
-  image-gateway = image "foundation-gateway" gateway {
-    Entrypoint = [ "${lib.getExe gateway}" ];
-    Env = [
-      "HOME=/data" "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-      "PATH=${lib.makeBinPath [ pkgs.python3 pkgs.nginx ]}"
-    ];
-    ExposedPorts."8080/tcp" = { };
-    StopSignal = "SIGQUIT";
-  };
-  image-apis = image "foundation-apis" catalyst {
+  apis = build: build "foundation-apis" catalyst {
     Entrypoint = [ "${lib.getExe catalyst}" ];
     Cmd = [ "serve" ];
     Env = [
@@ -66,16 +60,32 @@ in {
     ];
     ExposedPorts."5210/tcp" = { };
   };
-  image-sites = image "foundation-sites" sites (sitesConfig sites);
+  web = build: build "foundation-sites" sites (sitesConfig sites);
   # The same Sites image built for dcl-one's Polygon CreditsManager (`sitesPolygonCredits` above),
   # labelled with the settlement it carries.
-  image-sites-polygon-credits = image "foundation-sites-polygon-credits" sitesPolygonCredits
+  webPolygonCredits = build: build "foundation-sites-polygon-credits" sitesPolygonCredits
     (sitesConfig sitesPolygonCredits // {
       Labels = labels // {
         "org.decentraland.shop.settlement-chain-id" = toString sitesPolygonCredits.shopSettlement.chainId;
         "org.decentraland.shop.credits-manager" = sitesPolygonCredits.shopSettlement.creditsManager;
       };
     });
+in {
+  image-gateway = image "foundation-gateway" gateway {
+    Entrypoint = [ "${lib.getExe gateway}" ];
+    Env = [
+      "HOME=/data" "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+      "PATH=${lib.makeBinPath [ pkgs.python3 pkgs.nginx ]}"
+    ];
+    ExposedPorts."8080/tcp" = { };
+    StopSignal = "SIGQUIT";
+  };
+  image-apis = apis image;
+  image-sites = web image;
+  image-sites-polygon-credits = webPolygonCredits image;
+  image-apis-stream = apis stream;
+  image-sites-stream = web stream;
+  image-sites-polygon-credits-stream = webPolygonCredits stream;
   # Its compiled app, saved with the plain one in the `sites-app` image cache (tooling/image-cache.py).
   sites-app-polygon-credits = sitesPolygonCredits.app;
 }

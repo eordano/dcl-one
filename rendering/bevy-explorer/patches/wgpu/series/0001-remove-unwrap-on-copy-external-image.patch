@@ -1,0 +1,26 @@
+From e25f3d4b0d7f478ea12105984270a25bbeeb0a64
+Subject: remove unwrap on copy external image
+Origin: https://github.com/robtfm/wgpu/commit/e25f3d4b0d7f478ea12105984270a25bbeeb0a64
+Date: 2025-10-27T13:30:20+00:00
+
+---
+diff --git a/wgpu/src/backend/webgpu.rs b/wgpu/src/backend/webgpu.rs
+index dfb272b2df41a3746d9c3147da8352e6d3a41a1f..f29b3e88c989be5b17ec6fd87770655198e62483 100644
+--- a/wgpu/src/backend/webgpu.rs
++++ b/wgpu/src/backend/webgpu.rs
+@@ -2558,13 +2558,12 @@ impl dispatch::QueueInterface for WebQueue {
+         dest: crate::CopyExternalImageDestInfo<&crate::api::Texture>,
+         size: crate::Extent3d,
+     ) {
+-        self.inner
++        let _ = self.inner
+             .copy_external_image_to_texture_with_gpu_extent_3d_dict(
+                 &map_external_texture_copy_view(source),
+                 &map_tagged_texture_copy_view(dest),
+                 &map_extent_3d(size),
+-            )
+-            .unwrap();
++            );
+     }
+ 
+     fn submit(

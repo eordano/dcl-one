@@ -1,7 +1,28 @@
 //! Settings shared by the HTTP server and the indexing worker.
-use crate::{config::Config, land_authz, shop};
+use crate::{config::Config, jobs, land_authz, shop};
 use anyhow::Context;
 use std::time::Duration;
+
+/// The job runner `serve` and `index` both build: leased in
+/// `JOB_LEASE_NAMESPACE` unless `JOB_LEASES_ENABLED=false`, standing fleet
+/// jobs down on an API replica (`FLEET_JOBS_ENABLED=false`). One builder
+/// keeps the two processes, which contend for the same leases, on the same
+/// lease settings.
+pub(crate) fn jobs_from_config(config: &Config, pool: &sqlx::PgPool) -> jobs::Jobs {
+    let jobs = if config.node.job_leases_enabled {
+        jobs::Jobs::with_leases(
+            pool.clone(),
+            jobs::LeaseSettings {
+                namespace: config.node.job_lease_namespace.clone(),
+                ..jobs::LeaseSettings::default()
+            },
+        )
+    } else {
+        jobs::Jobs::new()
+    };
+    jobs.with_fleet_jobs(config.node.fleet_jobs_enabled)
+        .with_first_pass_now(config.node.jobs_first_pass_now)
+}
 
 pub(crate) fn market_settings(
     config: &Config,

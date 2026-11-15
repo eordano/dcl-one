@@ -640,15 +640,17 @@ pub fn fix_urn(urn: &str) -> String {
     urn.replace("mainnet", "ethereum")
 }
 
-/// A `contract-item` id split at its dash: the wire's item id when the item
-/// part is decimal (an unbounded blockchain id), else `None`.
+/// A `contract-item` id split at its dash, the contract lowercased: `None`
+/// unless the contract is `0x` plus 40 hex digits and the item part is a
+/// plain decimal uint256 (`types::parse_decimal`: 1 to 78 digits, at most
+/// `U256::MAX`). Every `<contract>-<itemId>` parameter is read through here.
 pub fn split_item_wire_id(wire: &str) -> Option<(String, String)> {
     let (contract, item) = wire.trim().split_once('-')?;
     let contract = contract.to_ascii_lowercase();
     let is_addr = contract
         .strip_prefix("0x")
         .is_some_and(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()));
-    let is_item = !item.is_empty() && item.len() <= 78 && item.bytes().all(|b| b.is_ascii_digit());
+    let is_item = crate::types::parse_decimal(item).is_ok();
     (is_addr && is_item).then(|| (contract, item.to_string()))
 }
 
@@ -866,6 +868,17 @@ mod tests {
         assert_eq!(
             split_item_wire_id("0xc5aaaa47d4ed16932d9970352afbd5e0df5a4925-abc"),
             None
+        );
+        // 78 digits, but past U256::MAX: no item can have that id.
+        let contract = "0xc5aaaa47d4ed16932d9970352afbd5e0df5a4925";
+        assert_eq!(
+            split_item_wire_id(&format!("{contract}-{}", "9".repeat(78))),
+            None
+        );
+        let max = alloy_primitives::U256::MAX.to_string();
+        assert_eq!(
+            split_item_wire_id(&format!("{contract}-{max}")),
+            Some((contract.into(), max))
         );
         assert_eq!(
             fix_urn("urn:decentraland:mainnet:collections-v1:x:y"),

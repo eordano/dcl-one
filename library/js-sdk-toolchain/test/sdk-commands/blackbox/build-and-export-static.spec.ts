@@ -1,5 +1,5 @@
 import { initComponents } from '../../../packages/@dcl/sdk-commands/src/components'
-import { Entity } from '../../../packages/@dcl/sdk-commands/node_modules/@dcl/schemas'
+import { Entity } from '@dcl/schemas'
 import { runSdkCommand } from '../../../packages/@dcl/sdk-commands/src/run-command'
 import { rmSync } from 'fs'
 import path from 'path'

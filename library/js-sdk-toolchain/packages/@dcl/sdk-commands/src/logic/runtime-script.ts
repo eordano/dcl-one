@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 import type { IEngine, Entity, EntityState } from '@dcl/ecs'
-import type { ActionRef } from '@dcl/inspector/node_modules/@dcl/asset-packs'
-import { getActionEvents } from '@dcl/inspector/node_modules/@dcl/asset-packs/dist/events'
+import type { ActionRef } from '@dcl/asset-packs'
+import { getActionEvents } from '@dcl/asset-packs/dist/events'
 
 declare global {
   // eslint-disable-next-line no-var

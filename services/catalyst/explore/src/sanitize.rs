@@ -1,5 +1,7 @@
 //! Read-side sanitizer for user-authored descriptions: a clicked `<link>` target reaches an unrestricted `Application.OpenURL` on the viewer's machine, so only http(s) links to public hosts are kept; all other markup is stripped.
 
+use crate::shared::js::is_js_whitespace;
+
 pub const INTERNAL_HOST_SUFFIXES: [&str; 8] = [
     ".localhost",
     ".local",
@@ -487,20 +489,6 @@ fn strip_prefix_ignore_ascii_case<'a>(s: &'a str, prefix: &str) -> Option<&'a st
     let head = s.get(..prefix.len())?;
     head.eq_ignore_ascii_case(prefix)
         .then(|| &s[prefix.len()..])
-}
-
-pub fn is_js_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{000B}' | '\u{000C}' | '\r' | ' ' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
-    )
 }
 
 #[cfg(test)]

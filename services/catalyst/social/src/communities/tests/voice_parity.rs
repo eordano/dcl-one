@@ -142,28 +142,15 @@ async fn configured_comms_presence_drives_detail_lists_requests_and_active_handl
 /// without altering another test's tables or assuming the process has no rooms.
 #[tokio::test]
 async fn active_handler_preserves_empty_error_and_all_settled_source_contracts() {
-    let Some(url) = crate::db::scratch::url().await else {
+    let Some(database) =
+        crate::db::scratch::OwnedDatabase::new("voice", crate::db::scratch::Schema::Full, 3).await
+    else {
         return;
     };
-    let options: sqlx::postgres::PgConnectOptions = url.parse().unwrap();
-    let admin = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect_with(options.clone().database("postgres"))
-        .await
-        .unwrap();
+    let pool = database.pool.clone();
+    let options: sqlx::postgres::PgConnectOptions = database.url.parse().unwrap();
     let suffix = Uuid::new_v4().simple().to_string();
-    let database = format!("catalyst_voice_{}_{suffix}", std::process::id());
     let role = format!("voice_{suffix}");
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(3)
-        .connect_with(options.clone().database(&database))
-        .await
-        .unwrap();
-    crate::db::apply_schema(&pool).await.unwrap();
     // The CI database uses SCRAM authentication; local trust must not hide
     // a fixture role without a usable credential. Generated for this test only.
     let password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -184,12 +171,7 @@ async fn active_handler_preserves_empty_error_and_all_settled_source_contracts()
     }
     let limited = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
-        .connect_with(
-            options
-                .database(&database)
-                .username(&role)
-                .password(&password),
-        )
+        .connect_with(options.username(&role).password(&password))
         .await
         .unwrap();
     let storage_dir = std::env::temp_dir().join(format!("catalyst-voice-{suffix}"));
@@ -299,18 +281,14 @@ async fn active_handler_preserves_empty_error_and_all_settled_source_contracts()
     // contract. A direct HTTP500 from that provider is a separate source case.
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, source("empty")["body"]);
-    pool.close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE {database} WITH (FORCE)"
-    )))
-    .execute(&admin)
-    .await
-    .unwrap();
+    database.drop().await;
+    // The role outlives its database; drop it from the shared scratch one.
+    let shared = crate::db::scratch::pool(1).await.unwrap();
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP ROLE {role}")))
-        .execute(&admin)
+        .execute(&shared)
         .await
         .unwrap();
-    admin.close().await;
+    shared.close().await;
     let _ = std::fs::remove_dir_all(storage_dir);
 }
 

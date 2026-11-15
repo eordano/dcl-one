@@ -1,0 +1,28 @@
+From 5e6153ff20d0851ced553e21740ce3f0d4e93855
+Subject: fix separate border colors merge
+Origin: https://github.com/robtfm/bevy/commit/5e6153ff20d0851ced553e21740ce3f0d4e93855
+Date: 2025-06-17T10:32:43+01:00
+
+---
+diff --git a/crates/bevy_ui/src/render/ui.wgsl b/crates/bevy_ui/src/render/ui.wgsl
+index 3915900e4e300c634f7600296f6ef5e079de7529..85491757c289d86261dd4e869ace35bff08549c6 100644
+--- a/crates/bevy_ui/src/render/ui.wgsl
++++ b/crates/bevy_ui/src/render/ui.wgsl
+@@ -170,7 +170,7 @@ fn draw(in: VertexOutput, texture_color: vec4<f32>) -> vec4<f32> {
+     let border_distance = max(external_distance, -internal_distance);
+ 
+     // check if this node should apply color for the nearest border
+-    let nearest_border = select(0.0, 1.0, nearest_border_active(point, size, border, flags));
++    let nearest_border = select(0.0, 1.0, nearest_border_active(in.point, in.size, in.border, in.flags));
+ 
+ #ifdef ANTI_ALIAS
+     // At external edges with no border, `border_distance` is equal to zero. 
+@@ -206,7 +206,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+     let texture_color = textureSample(sprite_texture, sprite_sampler, in.uv);
+ 
+     if enabled(in.flags, BORDER_ANY) {
+-        return draw(in, texture_color, in.flags);
++        return draw(in, texture_color);
+     } else {
+         return draw_background(in, texture_color);
+     }

@@ -1,0 +1,52 @@
+From 2ada8ca88d3e9db8c601064b4bba91be1d61690c
+Subject: remove debug output
+Origin: https://github.com/robtfm/bevy/commit/2ada8ca88d3e9db8c601064b4bba91be1d61690c
+Date: 2026-01-17T10:09:09Z
+
+---
+diff --git a/crates/bevy_render/src/render_asset.rs b/crates/bevy_render/src/render_asset.rs
+index f65090db0e55add9ac6abf191522f84a751f4ba7..3cdc6ddce5393ebf3e7359300041dffa08736275 100644
+--- a/crates/bevy_render/src/render_asset.rs
++++ b/crates/bevy_render/src/render_asset.rs
+@@ -16,7 +16,7 @@ use bevy_platform::collections::{HashMap, HashSet};
+ use core::marker::PhantomData;
+ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ use thiserror::Error;
+-use tracing::{debug, error, warn};
++use tracing::{debug, error};
+ 
+ #[derive(Debug, Error)]
+ pub enum PrepareAssetError<E: Send + Sync + 'static> {
+@@ -436,9 +436,6 @@ pub fn prepare_assets<A: RenderAsset>(
+ 
+         match A::prepare_asset(extracted_asset, id, &mut param, render_assets.get(id)) {
+             Ok(prepared_asset) => {
+-                if render_assets.get(id).is_some() {
+-                    warn!("accept {id} ({})", std::any::type_name::<A>());
+-                }
+                 render_assets.insert(id, prepared_asset);
+                 bpf.write_bytes(maybe_bytes, transfer_priority);
+                 wrote_asset_count += 1;
+@@ -465,12 +462,9 @@ pub fn prepare_assets<A: RenderAsset>(
+         // any users will not see the old asset after a new asset is extracted,
+         // even if the new asset is not yet ready or we are out of bytes to write.
+         render_assets.set_stale(id);
+-        warn!("set_stale {id} ({})", std::any::type_name::<A>());
+-
+         let (transfer_priority, maybe_bytes) = A::transfer_priority(&extracted_asset);
+ 
+         if bpf.exhausted(transfer_priority) {
+-            warn!("throttle {id} ({})", std::any::type_name::<A>());
+             prepare_next_frame.assets.push((id, extracted_asset));
+             continue;
+         }
+@@ -482,9 +476,6 @@ pub fn prepare_assets<A: RenderAsset>(
+                 wrote_asset_count += 1;
+             }
+             Err(PrepareAssetError::RetryNextUpdate(extracted_asset)) => {
+-                if render_assets.get(id).is_some() {
+-                    warn!("block {id} ({})", std::any::type_name::<A>());
+-                }
+                 prepare_next_frame.assets.push((id, extracted_asset));
+             }
+             Err(PrepareAssetError::AsBindGroupError(e)) => {

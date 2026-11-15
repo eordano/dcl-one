@@ -451,12 +451,13 @@ pub async fn authorize_moderator(
     }
 }
 
+/// The client address recorded with a connection: the forwarding headers the
+/// server pins to the socket peer unless it is a trusted proxy
+/// ([`client_ip`](crate::shared::client_ip::client_ip)), the same address the
+/// handlers rate-limit on. A client-set header such as `CF-Connecting-IP` is
+/// never read.
 pub fn get_request_ip(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("cf-connecting-ip")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    Some(crate::shared::client_ip::client_ip(headers)).filter(|ip| !ip.is_empty())
 }
 
 pub fn device_identifier(metadata: &Value) -> Option<String> {
@@ -1083,7 +1084,6 @@ mod tests {
                 .reason,
             "spam"
         );
-        assert_eq!(get_request_ip(&HeaderMap::new()), None);
         assert_eq!(
             device_identifier(&serde_json::json!({"deviceIdentifier": "d1"})).as_deref(),
             Some("d1")
@@ -1092,5 +1092,15 @@ mod tests {
             device_identifier(&serde_json::json!({"deviceIdentifier": ""})),
             None
         );
+    }
+
+    #[test]
+    fn request_ip_comes_from_the_pinned_forwarding_headers() {
+        assert_eq!(get_request_ip(&HeaderMap::new()), None);
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", "203.0.113.9".parse().unwrap());
+        assert_eq!(get_request_ip(&headers), None);
+        headers.insert("x-real-ip", "198.51.100.7".parse().unwrap());
+        assert_eq!(get_request_ip(&headers).as_deref(), Some("198.51.100.7"));
     }
 }

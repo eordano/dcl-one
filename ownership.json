@@ -143,6 +143,7 @@
       "owners": [],
       "paths": [
         "/library/js-sdk-toolchain/",
+        "/library/hashing/",
         "/.github/workflows/sdk.yml"
       ]
     },
@@ -256,7 +257,7 @@
     },
     {
       "id": "explorer-client",
-      "description": "Explorer source, its HUD UI and page core, local app builds and component workflows",
+      "description": "Explorer source, its HUD UI and page core, local app builds, component workflows, the tools that rebuild and prove its sources and select its CI, and its Nix package",
       "owners": [
         "@decentraland/client"
       ],
@@ -266,12 +267,17 @@
         "/library/explorer-core/",
         "/apps/bevy-explorer/",
         "/.github/workflows/bevy-explorer-*.yml",
-        "/.github/actions/bevy-explorer-*/"
+        "/.github/actions/bevy-explorer-*/",
+        "/tooling/bevy-*.py",
+        "/tooling/patched-sources.py",
+        "/tooling/vendor-provenance.py",
+        "/tooling/tests/test_bevy_*.py",
+        "/infra/packages/bevy-explorer.nix"
       ]
     },
     {
       "id": "explorer-rust",
-      "description": "Explorer Rust source, its workspace manifest, build script and Cargo configuration, the Rust harness crates, the vendored Rust crates including Bevy, and the generated fork pins",
+      "description": "Explorer Rust source, its workspace manifest, build script and Cargo configuration, the Rust harness crates, the vendored Rust crates, and the upstream references and patch series of Bevy and the forked crates",
       "owners": [
         "@robtfm"
       ],
@@ -285,9 +291,8 @@
         "/rendering/bevy-explorer/source/local-harness/benchmark/",
         "/rendering/bevy-explorer/source/local-harness/presence/harness-util/",
         "/rendering/bevy-explorer/source/vendor/",
-        "/rendering/bevy-explorer/bevy/",
-        "/rendering/bevy-explorer/cargo-patches.toml",
-        "/rendering/bevy-explorer/forks.toml"
+        "/rendering/bevy-explorer/vendor/",
+        "/rendering/bevy-explorer/patches/"
       ]
     },
     {

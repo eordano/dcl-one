@@ -332,6 +332,43 @@ async fn bounded_admin_body(
     Ok(bytes)
 }
 
+/// Runs one admin call under [`ADMIN_REQUEST_TIMEOUT`]; an elapsed deadline is
+/// a request failure.
+async fn within_admin_deadline<T>(
+    call: impl Future<Output = Result<T, RoomServiceError>>,
+) -> Result<T, RoomServiceError> {
+    tokio::time::timeout(ADMIN_REQUEST_TIMEOUT, call)
+        .await
+        .map_err(|_| RoomServiceError::Request)?
+}
+
+/// Sends one Twirp POST with the bearer token, a JSON body and the per-request
+/// deadline. The caller classifies the status, because RoomService and Ingress
+/// map failures differently.
+async fn twirp_post(
+    http: &reqwest::Client,
+    url: String,
+    token: &str,
+    body: &serde_json::Value,
+) -> Result<reqwest::Response, RoomServiceError> {
+    http.post(url)
+        .bearer_auth(token)
+        .timeout(ADMIN_REQUEST_TIMEOUT)
+        .json(body)
+        .send()
+        .await
+        .map_err(|_| RoomServiceError::Request)
+}
+
+/// Reads a bounded response body as JSON.
+async fn twirp_json(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<serde_json::Value, RoomServiceError> {
+    serde_json::from_slice(&bounded_admin_body(response, limit).await?)
+        .map_err(|_| RoomServiceError::InvalidResponse)
+}
+
 // Protobuf JSON may omit repeated fields for empty lists. A present null or
 // wrong type, or a non-object envelope, is unknown rather than terminal empty.
 fn inventory<'a>(
@@ -709,22 +746,12 @@ impl<'a> RoomServiceClient<'a> {
         limit: usize,
     ) -> Result<serde_json::Value, RoomServiceError> {
         let strict_removal = method == "RemoveParticipant" && body.get("revokeTokenTs").is_some();
-        tokio::time::timeout(ADMIN_REQUEST_TIMEOUT, async {
+        within_admin_deadline(async {
             let token = room_admin_token(&self.api_key, &self.api_secret, room)?;
-            let resp = self
-                .http
-                .post(self.endpoint(method))
-                .bearer_auth(&token)
-                .timeout(ADMIN_REQUEST_TIMEOUT)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|_| RoomServiceError::Request)?;
+            let resp = twirp_post(self.http, self.endpoint(method), &token, &body).await?;
             let status = resp.status();
             if strict_removal && !status.is_success() {
-                let bytes = bounded_admin_body(resp, limit).await?;
-                let error: serde_json::Value = serde_json::from_slice(&bytes)
-                    .map_err(|_| RoomServiceError::InvalidResponse)?;
+                let error = twirp_json(resp, limit).await?;
                 return Err(
                     match (
                         status.as_u16(),
@@ -753,11 +780,9 @@ impl<'a> RoomServiceClient<'a> {
                 }
                 return Err(RoomServiceError::Status(status.as_u16()));
             }
-            serde_json::from_slice(&bounded_admin_body(resp, limit).await?)
-                .map_err(|_| RoomServiceError::InvalidResponse)
+            twirp_json(resp, limit).await
         })
         .await
-        .map_err(|_| RoomServiceError::Request)?
     }
 
     /// Complete, SID-preserving reads for occupancy only. Caller includes permit
@@ -1199,17 +1224,9 @@ impl<'a> IngressClient<'a> {
         method: &str,
         body: serde_json::Value,
     ) -> Result<serde_json::Value, RoomServiceError> {
-        tokio::time::timeout(ADMIN_REQUEST_TIMEOUT, async {
+        within_admin_deadline(async {
             let token = ingress_admin_token(&self.api_key, &self.api_secret)?;
-            let resp = self
-                .http
-                .post(self.endpoint(method))
-                .bearer_auth(&token)
-                .timeout(ADMIN_REQUEST_TIMEOUT)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|_| RoomServiceError::Request)?;
+            let resp = twirp_post(self.http, self.endpoint(method), &token, &body).await?;
             let status = resp.status();
             if !status.is_success() {
                 let bytes = admin_body(resp).await?;
@@ -1219,11 +1236,9 @@ impl<'a> IngressClient<'a> {
                 }
                 return Err(RoomServiceError::Status(status.as_u16()));
             }
-            serde_json::from_slice(&admin_body(resp).await?)
-                .map_err(|_| RoomServiceError::InvalidResponse)
+            twirp_json(resp, ADMIN_RESPONSE_BYTES).await
         })
         .await
-        .map_err(|_| RoomServiceError::Request)?
     }
 
     pub async fn list_ingress(&self, room: &str) -> Result<Vec<IngressInfo>, RoomServiceError> {

@@ -1,0 +1,363 @@
+From 840592f493398b0107ff795a21bac8f8d793988b
+Subject: bevy_ecs: parallel iteration and the multi-threaded executor on the web under web-worker
+Origin: https://github.com/robtfm/bevy/commit/840592f493398b0107ff795a21bac8f8d793988b
+Date: 2026-09-22T23:04:15+01:00
+
+Every "is this target multi-threaded" gate in bevy_ecs was written as
+"not wasm32". With the multi-threaded TaskPool available on the web under
+`bevy_tasks/web-worker`, add the same feature here and widen those gates
+to "not wasm32, or web-worker": the schedule executor
+defaults to MultiThreaded and query and event parallel iteration batch
+over the ComputeTaskPool, as on native.
+
+`bevy_render/web-worker` and `bevy_winit/web-worker` now enable
+`bevy_ecs/web-worker` too, so the feature means the same thing whichever
+crate turns it on.
+---
+diff --git a/crates/bevy_ecs/Cargo.toml b/crates/bevy_ecs/Cargo.toml
+index 07e227de1a4e83ffa559f4e8a03a92b7b366b5bc..6f239149795acb8f0d2cb1a1a83eb6bcc2f378d4 100644
+--- a/crates/bevy_ecs/Cargo.toml
++++ b/crates/bevy_ecs/Cargo.toml
+@@ -19,6 +19,10 @@ default = ["std", "bevy_reflect", "async_executor", "backtrace"]
+ ## multiple threads whenever possible.
+ multi_threaded = ["bevy_tasks/multi_threaded", "dep:arrayvec"]
+ 
++## The app runs on a web worker over shared memory: the multi-threaded executor and
++## parallel iteration are used there as on native.
++web-worker = ["bevy_tasks/web-worker"]
++
+ ## Adds serialization support through `serde`.
+ serialize = [
+   "dep:serde",
+diff --git a/crates/bevy_ecs/src/event/iterators.rs b/crates/bevy_ecs/src/event/iterators.rs
+index f9ee74b8b08d92fbf5251bc26567c997074e51ef..f8956a878ca68cf8041beb3a8fc38115b0367f2a 100644
+--- a/crates/bevy_ecs/src/event/iterators.rs
++++ b/crates/bevy_ecs/src/event/iterators.rs
+@@ -144,7 +144,7 @@ pub struct EventParIter<'a, E: Event> {
+     reader: &'a mut EventCursor<E>,
+     slices: [&'a [EventInstance<E>]; 2],
+     batching_strategy: BatchingStrategy,
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "web-worker"))]
+     unread: usize,
+ }
+ 
+@@ -170,7 +170,7 @@ impl<'a, E: Event> EventParIter<'a, E> {
+             reader,
+             slices: [a, b],
+             batching_strategy: BatchingStrategy::default(),
+-            #[cfg(not(target_arch = "wasm32"))]
++            #[cfg(any(not(target_arch = "wasm32"), feature = "web-worker"))]
+             unread: unread_count,
+         }
+     }
+@@ -208,16 +208,16 @@ impl<'a, E: Event> EventParIter<'a, E> {
+     ///
+     /// [`ComputeTaskPool`]: bevy_tasks::ComputeTaskPool
+     #[cfg_attr(
+-        target_arch = "wasm32",
++        all(target_arch = "wasm32", not(feature = "web-worker")),
+         expect(unused_mut, reason = "not mutated on this target")
+     )]
+     pub fn for_each_with_id<FN: Fn(&'a E, EventId<E>) + Send + Sync + Clone>(mut self, func: FN) {
+-        #[cfg(target_arch = "wasm32")]
++        #[cfg(all(target_arch = "wasm32", not(feature = "web-worker")))]
+         {
+             self.into_iter().for_each(|(e, i)| func(e, i));
+         }
+ 
+-        #[cfg(not(target_arch = "wasm32"))]
++        #[cfg(any(not(target_arch = "wasm32"), feature = "web-worker"))]
+         {
+             let pool = bevy_tasks::ComputeTaskPool::get();
+             let thread_count = pool.thread_num();
+diff --git a/crates/bevy_ecs/src/event/mut_iterators.rs b/crates/bevy_ecs/src/event/mut_iterators.rs
+index 3cb531ce78829becf23c087134d1150ebd83f2c8..d38e32824b3ec1c82a0602c4cb6ceadce7137b7f 100644
+--- a/crates/bevy_ecs/src/event/mut_iterators.rs
++++ b/crates/bevy_ecs/src/event/mut_iterators.rs
+@@ -147,7 +147,7 @@ pub struct EventMutParIter<'a, E: Event> {
+     mutator: &'a mut EventCursor<E>,
+     slices: [&'a mut [EventInstance<E>]; 2],
+     batching_strategy: BatchingStrategy,
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(any(not(target_arch = "wasm32"), feature = "web-worker"))]
+     unread: usize,
+ }
+ 
+@@ -171,7 +171,7 @@ impl<'a, E: Event> EventMutParIter<'a, E> {
+             mutator,
+             slices: [a, b],
+             batching_strategy: BatchingStrategy::default(),
+-            #[cfg(not(target_arch = "wasm32"))]
++            #[cfg(any(not(target_arch = "wasm32"), feature = "web-worker"))]
+             unread: unread_count,
+         }
+     }
+@@ -209,19 +209,19 @@ impl<'a, E: Event> EventMutParIter<'a, E> {
+     ///
+     /// [`ComputeTaskPool`]: bevy_tasks::ComputeTaskPool
+     #[cfg_attr(
+-        target_arch = "wasm32",
++        all(target_arch = "wasm32", not(feature = "web-worker")),
+         expect(unused_mut, reason = "not mutated on this target")
+     )]
+     pub fn for_each_with_id<FN: Fn(&'a mut E, EventId<E>) + Send + Sync + Clone>(
+         mut self,
+         func: FN,
+     ) {
+-        #[cfg(target_arch = "wasm32")]
++        #[cfg(all(target_arch = "wasm32", not(feature = "web-worker")))]
+         {
+             self.into_iter().for_each(|(e, i)| func(e, i));
+         }
+ 
+-        #[cfg(not(target_arch = "wasm32"))]
++        #[cfg(any(not(target_arch = "wasm32"), feature = "web-worker"))]
+         {
+             let pool = bevy_tasks::ComputeTaskPool::get();
+             let thread_count = pool.thread_num();
+diff --git a/crates/bevy_ecs/src/query/par_iter.rs b/crates/bevy_ecs/src/query/par_iter.rs
+index 6683238aa36ee91775aa3845a99a9fdacdbc1368..854160ad22f164de7064ccf8394b6ac6a7f8a084 100644
+--- a/crates/bevy_ecs/src/query/par_iter.rs
++++ b/crates/bevy_ecs/src/query/par_iter.rs
+@@ -83,7 +83,10 @@ impl<'w, 's, D: QueryData, F: QueryFilter> QueryParIter<'w, 's, D, F> {
+             func(&mut init, item);
+             init
+         };
+-        #[cfg(any(target_arch = "wasm32", not(feature = "multi_threaded")))]
++        #[cfg(not(all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        )))]
+         {
+             let init = init();
+             // SAFETY:
+@@ -99,7 +102,10 @@ impl<'w, 's, D: QueryData, F: QueryFilter> QueryParIter<'w, 's, D, F> {
+                     .fold(init, func);
+             }
+         }
+-        #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++        #[cfg(all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        ))]
+         {
+             let thread_count = bevy_tasks::ComputeTaskPool::get().thread_num();
+             if thread_count <= 1 {
+@@ -129,7 +135,10 @@ impl<'w, 's, D: QueryData, F: QueryFilter> QueryParIter<'w, 's, D, F> {
+         }
+     }
+ 
+-    #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++    #[cfg(all(
++        feature = "multi_threaded",
++        any(not(target_arch = "wasm32"), feature = "web-worker")
++    ))]
+     fn get_batch_size(&self, thread_count: usize) -> usize {
+         let max_items = || {
+             let id_iter = self.state.matched_storage_ids.iter();
+@@ -253,7 +262,10 @@ impl<'w, 's, D: ReadOnlyQueryData, F: QueryFilter, E: EntityEquivalent + Sync>
+             func(&mut init, item);
+             init
+         };
+-        #[cfg(any(target_arch = "wasm32", not(feature = "multi_threaded")))]
++        #[cfg(not(all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        )))]
+         {
+             let init = init();
+             // SAFETY:
+@@ -269,7 +281,10 @@ impl<'w, 's, D: ReadOnlyQueryData, F: QueryFilter, E: EntityEquivalent + Sync>
+                     .fold(init, func);
+             }
+         }
+-        #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++        #[cfg(all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        ))]
+         {
+             let thread_count = bevy_tasks::ComputeTaskPool::get().thread_num();
+             if thread_count <= 1 {
+@@ -300,7 +315,10 @@ impl<'w, 's, D: ReadOnlyQueryData, F: QueryFilter, E: EntityEquivalent + Sync>
+         }
+     }
+ 
+-    #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++    #[cfg(all(
++        feature = "multi_threaded",
++        any(not(target_arch = "wasm32"), feature = "web-worker")
++    ))]
+     fn get_batch_size(&self, thread_count: usize) -> usize {
+         self.batching_strategy
+             .calc_batch_size(|| self.entity_list.len(), thread_count)
+@@ -408,7 +426,10 @@ impl<'w, 's, D: QueryData, F: QueryFilter, E: EntityEquivalent + Sync>
+             func(&mut init, item);
+             init
+         };
+-        #[cfg(any(target_arch = "wasm32", not(feature = "multi_threaded")))]
++        #[cfg(not(all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        )))]
+         {
+             let init = init();
+             // SAFETY:
+@@ -424,7 +445,10 @@ impl<'w, 's, D: QueryData, F: QueryFilter, E: EntityEquivalent + Sync>
+                     .fold(init, func);
+             }
+         }
+-        #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++        #[cfg(all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        ))]
+         {
+             let thread_count = bevy_tasks::ComputeTaskPool::get().thread_num();
+             if thread_count <= 1 {
+@@ -455,7 +479,10 @@ impl<'w, 's, D: QueryData, F: QueryFilter, E: EntityEquivalent + Sync>
+         }
+     }
+ 
+-    #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++    #[cfg(all(
++        feature = "multi_threaded",
++        any(not(target_arch = "wasm32"), feature = "web-worker")
++    ))]
+     fn get_batch_size(&self, thread_count: usize) -> usize {
+         self.batching_strategy
+             .calc_batch_size(|| self.entity_list.len(), thread_count)
+diff --git a/crates/bevy_ecs/src/query/state.rs b/crates/bevy_ecs/src/query/state.rs
+index e9a00f4646e1ff6d19243584b2c3361c42d1ebd1..f14f1d5a998ea64b8e7cb5b648298c806e806812 100644
+--- a/crates/bevy_ecs/src/query/state.rs
++++ b/crates/bevy_ecs/src/query/state.rs
+@@ -10,7 +10,10 @@ use crate::{
+     world::{unsafe_world_cell::UnsafeWorldCell, World, WorldId},
+ };
+ 
+-#[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++#[cfg(all(
++    feature = "multi_threaded",
++    any(not(target_arch = "wasm32"), feature = "web-worker")
++))]
+ use crate::entity::UniqueEntityEquivalentSlice;
+ 
+ use alloc::vec::Vec;
+@@ -1487,7 +1490,10 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
+     /// with a mismatched [`WorldId`] is unsound.
+     ///
+     /// [`ComputeTaskPool`]: bevy_tasks::ComputeTaskPool
+-    #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++    #[cfg(all(
++        feature = "multi_threaded",
++        any(not(target_arch = "wasm32"), feature = "web-worker")
++    ))]
+     pub(crate) unsafe fn par_fold_init_unchecked_manual<'w, T, FN, INIT>(
+         &self,
+         init_accum: INIT,
+@@ -1601,7 +1607,10 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
+     /// with a mismatched [`WorldId`] is unsound.
+     ///
+     /// [`ComputeTaskPool`]: bevy_tasks::ComputeTaskPool
+-    #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++    #[cfg(all(
++        feature = "multi_threaded",
++        any(not(target_arch = "wasm32"), feature = "web-worker")
++    ))]
+     pub(crate) unsafe fn par_many_unique_fold_init_unchecked_manual<'w, T, FN, INIT, E>(
+         &self,
+         init_accum: INIT,
+@@ -1664,7 +1673,10 @@ impl<D: ReadOnlyQueryData, F: QueryFilter> QueryState<D, F> {
+     /// with a mismatched [`WorldId`] is unsound.
+     ///
+     /// [`ComputeTaskPool`]: bevy_tasks::ComputeTaskPool
+-    #[cfg(all(not(target_arch = "wasm32"), feature = "multi_threaded"))]
++    #[cfg(all(
++        feature = "multi_threaded",
++        any(not(target_arch = "wasm32"), feature = "web-worker")
++    ))]
+     pub(crate) unsafe fn par_many_fold_init_unchecked_manual<'w, T, FN, INIT, E>(
+         &self,
+         init_accum: INIT,
+diff --git a/crates/bevy_ecs/src/schedule/executor/mod.rs b/crates/bevy_ecs/src/schedule/executor/mod.rs
+index 0a78b5805da2a7278844b99f1ebaca6a0166f727..af3c30755d7782d2a7b541fc839d2cfd00ff96ae 100644
+--- a/crates/bevy_ecs/src/schedule/executor/mod.rs
++++ b/crates/bevy_ecs/src/schedule/executor/mod.rs
+@@ -41,7 +41,7 @@ pub(super) trait SystemExecutor: Send + Sync {
+ /// Specifies how a [`Schedule`](super::Schedule) will be run.
+ ///
+ /// The default depends on the target platform:
+-///  - [`SingleThreaded`](ExecutorKind::SingleThreaded) on Wasm.
++///  - [`SingleThreaded`](ExecutorKind::SingleThreaded) on Wasm without the `web-worker` feature.
+ ///  - [`MultiThreaded`](ExecutorKind::MultiThreaded) everywhere else.
+ #[derive(PartialEq, Eq, Default, Debug, Copy, Clone)]
+ pub enum ExecutorKind {
+@@ -49,14 +49,26 @@ pub enum ExecutorKind {
+     ///
+     /// Useful if you're dealing with a single-threaded environment, saving your threads for
+     /// other things, or just trying minimize overhead.
+-    #[cfg_attr(any(target_arch = "wasm32", not(feature = "multi_threaded")), default)]
++    #[cfg_attr(
++        not(all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        )),
++        default
++    )]
+     SingleThreaded,
+     /// Like [`SingleThreaded`](ExecutorKind::SingleThreaded) but calls [`apply_deferred`](crate::system::System::apply_deferred)
+     /// immediately after running each system.
+     Simple,
+     /// Runs the schedule using a thread pool. Non-conflicting systems can run in parallel.
+     #[cfg(feature = "std")]
+-    #[cfg_attr(all(not(target_arch = "wasm32"), feature = "multi_threaded"), default)]
++    #[cfg_attr(
++        all(
++            feature = "multi_threaded",
++            any(not(target_arch = "wasm32"), feature = "web-worker")
++        ),
++        default
++    )]
+     MultiThreaded,
+ }
+ 
+diff --git a/crates/bevy_internal/Cargo.toml b/crates/bevy_internal/Cargo.toml
+index 6859ed7275a7b71c5e97e3c0cd3aa8e6ce70dfac..34a328538635ce4444fabcd388a9bb6d6fe40849 100644
+--- a/crates/bevy_internal/Cargo.toml
++++ b/crates/bevy_internal/Cargo.toml
+@@ -10,7 +10,7 @@ keywords = ["game", "engine", "gamedev", "graphics", "bevy"]
+ categories = ["game-engines", "graphics", "gui", "rendering"]
+ 
+ [features]
+-web-worker = ["bevy_tasks/web-worker", "bevy_winit/web-worker", "bevy_render?/web-worker"]
++web-worker = ["bevy_ecs/web-worker", "bevy_tasks/web-worker", "bevy_winit/web-worker", "bevy_render?/web-worker"]
+ trace = [
+   "bevy_app/trace",
+   "bevy_asset?/trace",
+diff --git a/crates/bevy_render/Cargo.toml b/crates/bevy_render/Cargo.toml
+index d8e22b355fa9bdfda19dc5623099b4fce847c697..cbf081ea86121491d39aac9f163a5cfca44ed835 100644
+--- a/crates/bevy_render/Cargo.toml
++++ b/crates/bevy_render/Cargo.toml
+@@ -32,7 +32,7 @@ multi_threaded = ["bevy_tasks/multi_threaded"]
+ 
+ # Run the render world on a web worker separate from the app world (requires the
+ # `atomics` target feature). Pairs with `bevy_winit/web-worker`.
+-web-worker = []
++web-worker = ["bevy_ecs/web-worker"]
+ 
+ shader_format_glsl = ["naga/glsl-in", "naga/wgsl-out", "naga_oil/glsl"]
+ shader_format_spirv = ["wgpu/spirv", "naga/spv-in", "naga/spv-out"]
+diff --git a/crates/bevy_winit/Cargo.toml b/crates/bevy_winit/Cargo.toml
+index 015ee58706613cd8163e431e21bc24c2fef633c5..5057aa7846498236a822bc7fac3e5083946079ee 100644
+--- a/crates/bevy_winit/Cargo.toml
++++ b/crates/bevy_winit/Cargo.toml
+@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
+ keywords = ["bevy"]
+ 
+ [features]
+-web-worker = ["winit/web-worker"]
++web-worker = ["bevy_ecs/web-worker", "winit/web-worker"]
+ default = ["x11"]
+ trace = []
+ wayland = ["winit/wayland", "winit/wayland-csd-adwaita"]

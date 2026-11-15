@@ -1,0 +1,21 @@
+From e278e7573c7c426470c3037f461d3fa9ef7b8c99
+Subject: default guess image format
+Origin: https://github.com/robtfm/bevy/commit/e278e7573c7c426470c3037f461d3fa9ef7b8c99
+Date: 2025-06-17T09:53:10+01:00
+
+---
+diff --git a/crates/bevy_image/src/image_loader.rs b/crates/bevy_image/src/image_loader.rs
+index 2d600fe4416111ed6e49c85cb529337c9ae3cc68..4e4816b9b0a60765fcd6e695679f79f77ea3d36c 100644
+--- a/crates/bevy_image/src/image_loader.rs
++++ b/crates/bevy_image/src/image_loader.rs
+@@ -83,9 +83,9 @@ impl ImageLoader {
+ 
+ #[derive(Serialize, Deserialize, Default, Debug, Clone)]
+ pub enum ImageFormatSetting {
+-    #[default]
+     FromExtension,
+     Format(ImageFormat),
++    #[default]
+     Guess,
+ }
+ 

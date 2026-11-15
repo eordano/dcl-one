@@ -1,0 +1,51 @@
+From 393f123de9c55581a76248f9fa98e66b0b1b48be
+Subject: macos: fix Cmd+Shift+Z redo being shadowed by Cmd+Z undo
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/393f123de9c55581a76248f9fa98e66b0b1b48be
+Date: 2026-06-02T00:50:24+01:00
+
+The keyboard matcher picks the first binding whose required modifiers are
+all held. Undo (KeyZ + [Super]) was listed before Redo (KeyZ + [Super,
+Shift]), and Undo's modifiers are a subset of Redo's, so Cmd+Shift+Z
+always resolved to Undo and Redo could never fire.
+
+Order the Redo bindings before Undo, matching the existing Submit-before-
+NewLine convention.
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 43cce127d38086700eb61ce23958a56d5178ced6..7795c0ff0f6bb05e8394d02d23eb654e7210e156 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -401,15 +401,9 @@ impl TextInputNavigationBindings {
+                 TextInputAction::Paste,
+                 TextInputBinding::new(KeyV, [SuperRight]),
+             ),
+-            (
+-                TextInputAction::Undo,
+-                TextInputBinding::new(KeyZ, [SuperLeft]),
+-            ),
+-            (
+-                TextInputAction::Undo,
+-                TextInputBinding::new(KeyZ, [SuperRight]),
+-            ),
+-            // Redo on macOS is typically Cmd+Shift+Z
++            // Redo (Cmd+Shift+Z) must come before Undo (Cmd+Z): the matcher
++            // picks the first binding whose modifiers are all held, and Undo's
++            // modifiers are a subset of Redo's.
+             (
+                 TextInputAction::Redo,
+                 TextInputBinding::new(KeyZ, [SuperLeft, ShiftLeft]),
+@@ -426,6 +420,14 @@ impl TextInputNavigationBindings {
+                 TextInputAction::Redo,
+                 TextInputBinding::new(KeyZ, [SuperRight, ShiftRight]),
+             ),
++            (
++                TextInputAction::Undo,
++                TextInputBinding::new(KeyZ, [SuperLeft]),
++            ),
++            (
++                TextInputAction::Undo,
++                TextInputBinding::new(KeyZ, [SuperRight]),
++            ),
+         ])
+     }
+ }

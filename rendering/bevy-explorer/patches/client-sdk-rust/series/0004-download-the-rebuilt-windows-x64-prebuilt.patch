@@ -1,0 +1,30 @@
+From 7f9ed8515625f5149dc074d13bd50e451a442a59
+Subject: Download the rebuilt Windows x64 prebuilt
+Origin: https://github.com/robtfm/client-sdk-rust/commit/7f9ed8515625f5149dc074d13bd50e451a442a59
+Date: 2026-10-25T23:41:13+00:00
+
+The webrtc-a545de4-prefixed Windows x64 archive had lost every symbol of
+its NASM-built members: llvm-objcopy 21 writes those COFF objects back
+with an empty symbol table. webrtc-a545de4-prefixed-2 carries the same
+five other archives and a Windows x64 archive rebuilt member by member,
+with the assembly objects renamed through their string tables instead.
+The extraction directory changes with it so a cached target never serves
+the old archive.
+---
+diff --git a/webrtc-sys/build/src/lib.rs b/webrtc-sys/build/src/lib.rs
+index 75a5fe1bf998d489ecd9583ecfea6f0c3791c694..35f30181cd77600a357fb706d05927b0aee6ba7b 100644
+--- a/webrtc-sys/build/src/lib.rs
++++ b/webrtc-sys/build/src/lib.rs
+@@ -28,10 +28,10 @@ use regex::Regex;
+ use reqwest::StatusCode;
+ 
+ pub const SCRATH_PATH: &str = "livekit_webrtc";
+-pub const WEBRTC_TAG: &str = "webrtc-a545de4-prefixed";
++pub const WEBRTC_TAG: &str = "webrtc-a545de4-prefixed-2";
+ /// Directory the prebuilts are extracted under: short, so the abseil headers below it
+ /// stay inside the Windows MAX_PATH limit from a typical cargo target directory.
+-const WEBRTC_DIR: &str = "a545de4p";
++const WEBRTC_DIR: &str = "a545de4p2";
+ pub const IGNORE_DEFINES: [&str; 2] = ["CR_CLANG_REVISION", "CR_XCODE_VERSION"];
+ 
+ pub fn target_os() -> String {

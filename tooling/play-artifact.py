@@ -14,8 +14,11 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = 'rendering/bevy-explorer/source/'
-# The vendored Bevy the engine compiles (rendering/bevy-explorer/docs/guidelines/bevy-fork.md).
-BEVY = 'rendering/bevy-explorer/bevy/'
+# The upstream references and patch series of Bevy and the forked crates the engine compiles.
+# They decide the rebuilt trees, which are not tracked.
+PATCHES = 'rendering/bevy-explorer/patches/'
+# The crates the engine compiles from tracked bytes.
+VENDOR = 'rendering/bevy-explorer/vendor/'
 PROTO = 'library/protocol/proto/'
 HUD = SOURCE + 'react-web/src/'
 # The ts-rs bindings both HUD hosts compile (scripts/gen-ts-bindings.sh writes them; tracked).
@@ -35,7 +38,7 @@ INPUTS = ('apps/bevy-explorer/build-web.py',
           'apps/bevy-explorer/install-web-tools.py',
           'apps/bevy-explorer/install-linux-deps.py', 'apps/bevy-explorer/install-tools.sh',
           '.github/actions/bevy-explorer-tools/action.yml', 'flake.lock', 'infra/packages/default.nix', 'infra/packages/tools.nix',
-          'tooling/play-artifact.py', 'tooling/hud_shared_inputs.py',
+          'tooling/play-artifact.py', 'tooling/hud_shared_inputs.py', 'tooling/patched-sources.py',
           '.github/workflows/bevy-explorer-ci.yml')
 TOOLCHAINS = ('rust-toolchain', 'rust-toolchain.toml')
 # Compiled into the engine (option_env!): a value change must miss the engine cache like a source
@@ -79,7 +82,10 @@ def input_files(root=ROOT, revision=None, engine_only=False):
                 SOURCE + 'deploy/web/package.json', SOURCE + 'deploy/web/package-lock.json')):
             # Web npm metadata still invalidates the assembled artifact, not WASM.
             return False
-        return (path.startswith((SOURCE, BEVY, PROTO, '.cargo/')) or path in shared or path in INPUTS
+        return (path.startswith((SOURCE, PATCHES, VENDOR, PROTO, '.cargo/')) or path in shared or path in INPUTS
+                # bevy-ci.py selects the web lane for these paths and drops markdown.
+                or (not engine_only and ((path.startswith('library/hashing/') and not path.endswith('.md'))
+                                        or path == 'tooling/check-local-hashing.mjs'))
                 or path in TOOLCHAINS)
     if revision:
         tree = subprocess.check_output(['git', 'ls-tree', '-rz', revision], cwd=root, text=True)
@@ -116,10 +122,15 @@ def input_files(root=ROOT, revision=None, engine_only=False):
             tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root, text=True).split('\0')
         else:
             # Nix's filtered contract has no .git and contains only tracked inputs.
-            tracked = [p.relative_to(root).as_posix() for base in (SOURCE, BEVY, PROTO, '.cargo')
+            tracked = [p.relative_to(root).as_posix() for base in (SOURCE, PATCHES, VENDOR, PROTO, '.cargo')
                        for p in ([root / base] if (root / base).is_file() else (root / base).rglob('*'))
                        if p.is_file()]
             tracked += list(INPUTS) + list(shared)
+            if not engine_only:
+                tracked += [p.relative_to(root).as_posix() for p in (root / 'library/hashing').rglob('*')
+                            if p.is_file()]
+                if (root / 'tooling/check-local-hashing.mjs').is_file():
+                    tracked.append('tooling/check-local-hashing.mjs')
             tracked += [name for name in TOOLCHAINS if (root / name).is_file()]
         hashes = {}
         for path in sorted(set(filter(selected, tracked))):

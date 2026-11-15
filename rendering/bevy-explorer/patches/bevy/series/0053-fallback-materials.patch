@@ -1,0 +1,805 @@
+From 4b84ebd6458722b31817cf3cdb5c4302e9656875
+Subject: fallback materials
+Origin: https://github.com/robtfm/bevy/commit/4b84ebd6458722b31817cf3cdb5c4302e9656875
+Date: 2026-01-22T18:18:24Z
+
+---
+diff --git a/crates/bevy_pbr/src/decal/forward.rs b/crates/bevy_pbr/src/decal/forward.rs
+index 49a2a0e3aae59f2c1a898050231d6346bc9bcb9e..6d7829f2c18b096b7fd5c379792c8b96611d2b00 100644
+--- a/crates/bevy_pbr/src/decal/forward.rs
++++ b/crates/bevy_pbr/src/decal/forward.rs
+@@ -1,3 +1,5 @@
++use std::marker::PhantomData;
++
+ use crate::{
+     ExtendedMaterial, Material, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
+     MaterialPlugin, StandardMaterial,
+@@ -79,7 +81,7 @@ pub struct ForwardDecal;
+ ///
+ /// [`StandardMaterial`] comes with out of the box support for forward decals.
+ #[expect(type_alias_bounds, reason = "Type alias generics not yet stable")]
+-pub type ForwardDecalMaterial<B: Material> = ExtendedMaterial<B, ForwardDecalMaterialExt>;
++pub type ForwardDecalMaterial<B: Material> = ExtendedMaterial<ForwardDecalMaterialExt<B>>;
+ 
+ /// Material extension for a [`ForwardDecal`].
+ ///
+@@ -90,7 +92,7 @@ pub type ForwardDecalMaterial<B: Material> = ExtendedMaterial<B, ForwardDecalMat
+ /// the forward decal code behind an ifdef.
+ #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
+ #[uniform(200, ForwardDecalMaterialExtUniform)]
+-pub struct ForwardDecalMaterialExt {
++pub struct ForwardDecalMaterialExt<B: Material> {
+     /// Controls the distance threshold for decal blending with surfaces.
+     ///
+     /// This parameter determines how far away a surface can be before the decal no longer blends
+@@ -101,6 +103,7 @@ pub struct ForwardDecalMaterialExt {
+     ///
+     /// Units are in meters.
+     pub depth_fade_factor: f32,
++    pub _p: PhantomData<fn() -> B>,
+ }
+ 
+ #[derive(Clone, Default, ShaderType)]
+@@ -108,7 +111,7 @@ pub struct ForwardDecalMaterialExtUniform {
+     pub inv_depth_fade_factor: f32,
+ }
+ 
+-impl AsBindGroupShaderType<ForwardDecalMaterialExtUniform> for ForwardDecalMaterialExt {
++impl<B: Material> AsBindGroupShaderType<ForwardDecalMaterialExtUniform> for ForwardDecalMaterialExt<B> {
+     fn as_bind_group_shader_type(
+         &self,
+         _images: &RenderAssets<GpuImage>,
+@@ -119,7 +122,9 @@ impl AsBindGroupShaderType<ForwardDecalMaterialExtUniform> for ForwardDecalMater
+     }
+ }
+ 
+-impl MaterialExtension for ForwardDecalMaterialExt {
++impl<B: Material> MaterialExtension for ForwardDecalMaterialExt<B> {
++    type Base = B;
++
+     fn alpha_mode(_: AlphaMode) -> Option<AlphaMode> {
+         Some(AlphaMode::Blend)
+     }
+@@ -146,10 +151,11 @@ impl MaterialExtension for ForwardDecalMaterialExt {
+     }
+ }
+ 
+-impl Default for ForwardDecalMaterialExt {
++impl<B: Material> Default for ForwardDecalMaterialExt<B> {
+     fn default() -> Self {
+         Self {
+             depth_fade_factor: 8.0,
++            _p: Default::default(),
+         }
+     }
+ }
+diff --git a/crates/bevy_pbr/src/extended_material.rs b/crates/bevy_pbr/src/extended_material.rs
+index 05e12ed2385be1ac504d94109eb2789d477991df..51ff2badf66da9e5597a7b07558956540c0f5849 100644
+--- a/crates/bevy_pbr/src/extended_material.rs
++++ b/crates/bevy_pbr/src/extended_material.rs
+@@ -34,6 +34,8 @@ pub struct MaterialExtensionKey<E: MaterialExtension> {
+ ///
+ /// A user type implementing the trait should be used as the `E` generic param in an `ExtendedMaterial` struct.
+ pub trait MaterialExtension: Asset + AsBindGroup + Clone + Sized {
++    type Base: Material;
++
+     /// Returns this material's vertex shader. If [`ShaderRef::Default`] is returned, the base material mesh vertex shader
+     /// will be used.
+     fn vertex_shader() -> ShaderRef {
+@@ -112,6 +114,15 @@ pub trait MaterialExtension: Asset + AsBindGroup + Clone + Sized {
+     ) -> Result<(), SpecializedMeshPipelineError> {
+         Ok(())
+     }
++
++    #[expect(
++        unused_variables,
++        reason = "The parameters here are intentionally unused by the default implementation; however, putting underscores here will result in the underscores being copied by rust-analyzer's tab completion."
++    )]
++    #[inline]
++    fn fallback_asset(&self, base: &Self::Base) -> Option<ExtendedMaterial<Self>> {
++        None
++    }
+ }
+ 
+ /// A material that extends a base [`Material`] with additional shaders and data.
+@@ -132,19 +143,19 @@ pub trait MaterialExtension: Asset + AsBindGroup + Clone + Sized {
+ #[derive(Asset, Clone, Debug, Reflect)]
+ #[reflect(type_path = false)]
+ #[reflect(Clone)]
+-pub struct ExtendedMaterial<B: Material, E: MaterialExtension> {
+-    pub base: B,
++pub struct ExtendedMaterial<E: MaterialExtension> {
++    pub base: E::Base,
+     pub extension: E,
+ }
+ 
+-impl<B, E> Default for ExtendedMaterial<B, E>
++impl<E> Default for ExtendedMaterial<E>
+ where
+-    B: Material + Default,
++    E::Base: Material + Default,
+     E: MaterialExtension + Default,
+ {
+     fn default() -> Self {
+         Self {
+-            base: B::default(),
++            base: E::Base::default(),
+             extension: E::default(),
+         }
+     }
+@@ -152,17 +163,17 @@ where
+ 
+ // We don't use the `TypePath` derive here due to a bug where `#[reflect(type_path = false)]`
+ // causes the `TypePath` derive to not generate an implementation.
+-impl_type_path!((in bevy_pbr::extended_material) ExtendedMaterial<B: Material, E: MaterialExtension>);
++impl_type_path!((in bevy_pbr::extended_material) ExtendedMaterial<E: MaterialExtension>);
+ 
+-impl<B: Material, E: MaterialExtension> AsBindGroup for ExtendedMaterial<B, E> {
+-    type Data = (<B as AsBindGroup>::Data, <E as AsBindGroup>::Data);
+-    type Param = (<B as AsBindGroup>::Param, <E as AsBindGroup>::Param);
++impl<E: MaterialExtension> AsBindGroup for ExtendedMaterial<E> {
++    type Data = (<E::Base as AsBindGroup>::Data, <E as AsBindGroup>::Data);
++    type Param = (<E::Base as AsBindGroup>::Param, <E as AsBindGroup>::Param);
+ 
+     fn bindless_slot_count() -> Option<BindlessSlabResourceLimit> {
+         // We only enable bindless if both the base material and its extension
+         // are bindless. If we do enable bindless, we choose the smaller of the
+         // two slab size limits.
+-        match (B::bindless_slot_count()?, E::bindless_slot_count()?) {
++        match (E::Base::bindless_slot_count()?, E::bindless_slot_count()?) {
+             (BindlessSlabResourceLimit::Auto, BindlessSlabResourceLimit::Auto) => {
+                 Some(BindlessSlabResourceLimit::Auto)
+             }
+@@ -192,7 +203,7 @@ impl<B: Material, E: MaterialExtension> AsBindGroup for ExtendedMaterial<B, E> {
+         let UnpreparedBindGroup {
+             mut bindings,
+             data: base_data,
+-        } = B::unprepared_bind_group(
++        } = E::Base::unprepared_bind_group(
+             &self.base,
+             layout,
+             render_device,
+@@ -231,7 +242,7 @@ impl<B: Material, E: MaterialExtension> AsBindGroup for ExtendedMaterial<B, E> {
+         // complain.
+         let mut entries = vec![];
+         let mut seen_bindings = HashSet::<_>::with_hasher(FixedHasher);
+-        for entry in B::bind_group_layout_entries(render_device, force_non_bindless)
++        for entry in E::Base::bind_group_layout_entries(render_device, force_non_bindless)
+             .into_iter()
+             .chain(E::bind_group_layout_entries(render_device, force_non_bindless).into_iter())
+         {
+@@ -244,7 +255,7 @@ impl<B: Material, E: MaterialExtension> AsBindGroup for ExtendedMaterial<B, E> {
+ 
+     fn bindless_descriptor() -> Option<BindlessDescriptor> {
+         // We're going to combine the two bindless descriptors.
+-        let base_bindless_descriptor = B::bindless_descriptor()?;
++        let base_bindless_descriptor = E::Base::bindless_descriptor()?;
+         let extended_bindless_descriptor = E::bindless_descriptor()?;
+ 
+         // Combining the buffers and index tables is straightforward.
+@@ -286,23 +297,23 @@ impl<B: Material, E: MaterialExtension> AsBindGroup for ExtendedMaterial<B, E> {
+     }
+ }
+ 
+-impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
++impl<E: MaterialExtension> Material for ExtendedMaterial<E> {
+     fn vertex_shader() -> ShaderRef {
+         match E::vertex_shader() {
+-            ShaderRef::Default => B::vertex_shader(),
++            ShaderRef::Default => E::Base::vertex_shader(),
+             specified => specified,
+         }
+     }
+ 
+     fn fragment_shader() -> ShaderRef {
+         match E::fragment_shader() {
+-            ShaderRef::Default => B::fragment_shader(),
++            ShaderRef::Default => E::Base::fragment_shader(),
+             specified => specified,
+         }
+     }
+ 
+     fn alpha_mode(&self) -> AlphaMode {
+-        let base_mode = B::alpha_mode(&self.base);
++        let base_mode = E::Base::alpha_mode(&self.base);
+         match E::alpha_mode(base_mode) {
+             Some(specified) => specified,
+             None => base_mode,
+@@ -310,49 +321,53 @@ impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
+     }
+ 
+     fn opaque_render_method(&self) -> crate::OpaqueRendererMethod {
+-        B::opaque_render_method(&self.base)
++        E::Base::opaque_render_method(&self.base)
+     }
+ 
+     fn depth_bias(&self) -> f32 {
+-        B::depth_bias(&self.base)
++        E::Base::depth_bias(&self.base)
+     }
+ 
+     fn reads_view_transmission_texture(&self) -> bool {
+-        B::reads_view_transmission_texture(&self.base)
++        E::Base::reads_view_transmission_texture(&self.base)
+     }
+ 
+     fn prepass_vertex_shader() -> ShaderRef {
+         match E::prepass_vertex_shader() {
+-            ShaderRef::Default => B::prepass_vertex_shader(),
++            ShaderRef::Default => E::Base::prepass_vertex_shader(),
+             specified => specified,
+         }
+     }
+ 
+     fn prepass_fragment_shader() -> ShaderRef {
+         match E::prepass_fragment_shader() {
+-            ShaderRef::Default => B::prepass_fragment_shader(),
++            ShaderRef::Default => E::Base::prepass_fragment_shader(),
+             specified => specified,
+         }
+     }
+ 
+     fn deferred_vertex_shader() -> ShaderRef {
+         match E::deferred_vertex_shader() {
+-            ShaderRef::Default => B::deferred_vertex_shader(),
++            ShaderRef::Default => E::Base::deferred_vertex_shader(),
+             specified => specified,
+         }
+     }
+ 
+     fn deferred_fragment_shader() -> ShaderRef {
+         match E::deferred_fragment_shader() {
+-            ShaderRef::Default => B::deferred_fragment_shader(),
++            ShaderRef::Default => E::Base::deferred_fragment_shader(),
+             specified => specified,
+         }
+     }
+ 
++    fn fallback_asset(&self) -> Option<Self> {
++        E::fallback_asset(&self.extension, &self.base)
++    }
++
+     #[cfg(feature = "meshlet")]
+     fn meshlet_mesh_fragment_shader() -> ShaderRef {
+         match E::meshlet_mesh_fragment_shader() {
+-            ShaderRef::Default => B::meshlet_mesh_fragment_shader(),
++            ShaderRef::Default => E::Base::meshlet_mesh_fragment_shader(),
+             specified => specified,
+         }
+     }
+@@ -360,7 +375,7 @@ impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
+     #[cfg(feature = "meshlet")]
+     fn meshlet_mesh_prepass_fragment_shader() -> ShaderRef {
+         match E::meshlet_mesh_prepass_fragment_shader() {
+-            ShaderRef::Default => B::meshlet_mesh_prepass_fragment_shader(),
++            ShaderRef::Default => E::Base::meshlet_mesh_prepass_fragment_shader(),
+             specified => specified,
+         }
+     }
+@@ -368,7 +383,7 @@ impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
+     #[cfg(feature = "meshlet")]
+     fn meshlet_mesh_deferred_fragment_shader() -> ShaderRef {
+         match E::meshlet_mesh_deferred_fragment_shader() {
+-            ShaderRef::Default => B::meshlet_mesh_deferred_fragment_shader(),
++            ShaderRef::Default => E::Base::meshlet_mesh_deferred_fragment_shader(),
+             specified => specified,
+         }
+     }
+@@ -388,7 +403,7 @@ impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
+             bindless,
+             ..
+         } = pipeline.clone();
+-        let base_pipeline = MaterialPipeline::<B> {
++        let base_pipeline = MaterialPipeline::<E::Base> {
+             mesh_pipeline,
+             material_layout,
+             vertex_shader,
+@@ -396,11 +411,11 @@ impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
+             bindless,
+             marker: Default::default(),
+         };
+-        let base_key = MaterialPipelineKey::<B> {
++        let base_key = MaterialPipelineKey::<E::Base> {
+             mesh_key: key.mesh_key,
+             bind_group_data: key.bind_group_data.0,
+         };
+-        B::specialize(&base_pipeline, descriptor, layout, base_key)?;
++        E::Base::specialize(&base_pipeline, descriptor, layout, base_key)?;
+ 
+         // Call the extended material's specialize function afterwards
+         let MaterialPipeline::<Self> {
+diff --git a/crates/bevy_pbr/src/material.rs b/crates/bevy_pbr/src/material.rs
+index 0e43c15c675c55260b090650dba921ebe6d3a3d0..fd6b271ef53dfab00423beefaecfcf5be5ce3851 100644
+--- a/crates/bevy_pbr/src/material.rs
++++ b/crates/bevy_pbr/src/material.rs
+@@ -8,9 +8,7 @@ use crate::meshlet::{
+ };
+ use crate::*;
+ use bevy_asset::prelude::AssetChanged;
+-use bevy_asset::{
+-    Asset, AssetEvents, AssetId, AssetServer, RenderAssetTransferPriority, UntypedAssetId,
+-};
++use bevy_asset::{Asset, AssetEvents, AssetId, AssetServer, UntypedAssetId};
+ use bevy_core_pipeline::deferred::{AlphaMask3dDeferred, Opaque3dDeferred};
+ use bevy_core_pipeline::prepass::{AlphaMask3dPrepass, Opaque3dPrepass};
+ use bevy_core_pipeline::{
+@@ -234,7 +232,7 @@ pub trait Material: Asset + AsBindGroup + Clone + Sized {
+         ShaderRef::Default
+     }
+ 
+-    fn fallback_material(&self) -> Option<Self> {
++    fn fallback_asset(&self) -> Option<Self> {
+         None
+     }
+ 
+@@ -1564,6 +1562,10 @@ impl<M: Material> RenderAsset for PreparedMaterial<M> {
+         }
+     }
+ 
++    fn fallback_asset(source: &Self::SourceAsset) -> Option<Self::SourceAsset> {
++        M::fallback_asset(source)
++    }
++
+     fn unload_asset(
+         source_asset: AssetId<Self::SourceAsset>,
+         (_, _, _, bind_group_allocator, render_material_bindings, ..): &mut SystemParamItem<
+diff --git a/crates/bevy_render/src/mesh/mod.rs b/crates/bevy_render/src/mesh/mod.rs
+index 629b10cd27b3f0f8c1e5a9afd2ccd4d627e1a68a..5c0c490047ee0307785a2a9751598d9dec77e8b6 100644
+--- a/crates/bevy_render/src/mesh/mod.rs
++++ b/crates/bevy_render/src/mesh/mod.rs
+@@ -194,7 +194,7 @@ impl RenderAsset for RenderMesh {
+ 
+         let vertex_count = mesh.count_vertices();
+         let index_bytes = mesh.get_index_buffer_bytes().map(<[_]>::len).unwrap_or(0);
+-        (mesh.transfer_priority, Some(vertex_size * vertex_count + index_bytes))
++        (/*mesh.transfer_priority*/ RenderAssetTransferPriority::Immediate, Some(vertex_size * vertex_count + index_bytes))
+     }
+ 
+     fn take_gpu_copy(source: &mut Self::SourceAsset, _: Option<&Self>) -> Option<Self::SourceAsset> {
+diff --git a/crates/bevy_render/src/render_asset.rs b/crates/bevy_render/src/render_asset.rs
+index 3cdc6ddce5393ebf3e7359300041dffa08736275..2ad789e5821e1e030ae4151ae16350b58fa0c846 100644
+--- a/crates/bevy_render/src/render_asset.rs
++++ b/crates/bevy_render/src/render_asset.rs
+@@ -79,6 +79,15 @@ pub trait RenderAsset: Send + Sync + 'static + Sized {
+         maybe_previous: Option<&Self>,
+     ) -> Result<Self, PrepareAssetError<Self::SourceAsset>>;
+ 
++    #[inline]
++    #[expect(
++        unused_variables,
++        reason = "The parameters here are intentionally unused by the default implementation; however, putting underscores here will result in the underscores being copied by rust-analyzer's tab completion."
++    )]
++    fn fallback_asset(source: &Self::SourceAsset) -> Option<Self::SourceAsset> {
++        None
++    }
++
+     /// Called whenever the [`RenderAsset::SourceAsset`] has been removed.
+     ///
+     /// You can implement this method if you need to access ECS data (via
+@@ -256,10 +265,10 @@ impl<A: RenderAsset> RenderAssets<A> {
+         self.0.remove(&id.into()).map(|(asset, _)| asset)
+     }
+ 
+-    pub fn set_stale(&mut self, id: impl Into<AssetId<A::SourceAsset>>) -> Option<&mut A> {
++    pub fn set_stale(&mut self, id: impl Into<AssetId<A::SourceAsset>>) -> Option<&A> {
+         self.0.get_mut(&id.into()).map(|(asset, stale)| {
+             *stale = true;
+-            asset
++            &*asset
+         })
+     }
+ 
+@@ -434,13 +443,21 @@ pub fn prepare_assets<A: RenderAsset>(
+             continue;
+         }
+ 
+-        match A::prepare_asset(extracted_asset, id, &mut param, render_assets.get(id)) {
++        let prev_asset = render_assets.get(id);
++        match A::prepare_asset(extracted_asset, id, &mut param, prev_asset) {
+             Ok(prepared_asset) => {
+                 render_assets.insert(id, prepared_asset);
+                 bpf.write_bytes(maybe_bytes, transfer_priority);
+                 wrote_asset_count += 1;
+             }
+             Err(PrepareAssetError::RetryNextUpdate(extracted_asset)) => {
++                if prev_asset.is_none()
++                    && let Some(fallback_asset) = A::fallback_asset(&extracted_asset)
++                    && let Ok(prepared_fallback) = A::prepare_asset(fallback_asset, id, &mut param, None)
++                {
++                    render_assets.insert(id, prepared_fallback);
++                    render_assets.set_stale(id);
++                }
+                 prepare_next_frame.assets.push((id, extracted_asset));
+             }
+             Err(PrepareAssetError::AsBindGroupError(e)) => {
+@@ -461,7 +478,7 @@ pub fn prepare_assets<A: RenderAsset>(
+         // we remove previous here to ensure that if we are updating the asset then
+         // any users will not see the old asset after a new asset is extracted,
+         // even if the new asset is not yet ready or we are out of bytes to write.
+-        render_assets.set_stale(id);
++        let prev_asset = render_assets.set_stale(id);
+         let (transfer_priority, maybe_bytes) = A::transfer_priority(&extracted_asset);
+ 
+         if bpf.exhausted(transfer_priority) {
+@@ -469,13 +486,20 @@ pub fn prepare_assets<A: RenderAsset>(
+             continue;
+         }
+ 
+-        match A::prepare_asset(extracted_asset, id, &mut param, render_assets.get(id)) {
++        match A::prepare_asset(extracted_asset, id, &mut param, prev_asset) {
+             Ok(prepared_asset) => {
+                 render_assets.insert(id, prepared_asset);
+                 bpf.write_bytes(maybe_bytes, transfer_priority);
+                 wrote_asset_count += 1;
+             }
+             Err(PrepareAssetError::RetryNextUpdate(extracted_asset)) => {
++                if prev_asset.is_none()
++                    && let Some(fallback_asset) = A::fallback_asset(&extracted_asset)
++                    && let Ok(prepared_fallback) = A::prepare_asset(fallback_asset, id, &mut param, None)
++                {
++                    render_assets.insert(id, prepared_fallback);
++                    render_assets.set_stale(id);
++                }
+                 prepare_next_frame.assets.push((id, extracted_asset));
+             }
+             Err(PrepareAssetError::AsBindGroupError(e)) => {
+@@ -627,7 +651,9 @@ impl RenderAssetBytesPerFrameLimiter {
+             if let Some(bytes) = bytes {
+                 bytes_written.requested.fetch_add(bytes, Ordering::Relaxed);
+             }
+-            bytes_written.requested_count.fetch_add(1, Ordering::Relaxed);
++            bytes_written
++                .requested_count
++                .fetch_add(1, Ordering::Relaxed);
+         } else {
+             self.bytes_written.write().expect("can't write bpf").insert(
+                 priority,
+diff --git a/examples/3d/clustered_decals.rs b/examples/3d/clustered_decals.rs
+index f8592d28c0a85b5bf288cfd331166f06ced25454..0d5785bc6ce7c7865c7809f20ff6cd7e54f078a7 100644
+--- a/examples/3d/clustered_decals.rs
++++ b/examples/3d/clustered_decals.rs
+@@ -2,6 +2,7 @@
+ 
+ use std::f32::consts::{FRAC_PI_3, PI};
+ use std::fmt::{self, Formatter};
++use std::marker::PhantomData;
+ use std::process;
+ 
+ use bevy::{
+@@ -111,10 +112,14 @@ struct HelpText;
+ 
+ /// A shader extension that demonstrates how to use the `tag` field to customize
+ /// the appearance of your decals.
+-#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+-struct CustomDecalExtension {}
++#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
++struct CustomDecalExtension<B: Material> {
++    _p: PhantomData<fn() -> B>
++}
++
++impl<B: Material> MaterialExtension for CustomDecalExtension<B> {
++    type Base = B;
+ 
+-impl MaterialExtension for CustomDecalExtension {
+     fn fragment_shader() -> ShaderRef {
+         SHADER_ASSET_PATH.into()
+     }
+@@ -131,7 +136,7 @@ fn main() {
+             ..default()
+         }))
+         .add_plugins(MaterialPlugin::<
+-            ExtendedMaterial<StandardMaterial, CustomDecalExtension>,
++            ExtendedMaterial<CustomDecalExtension<StandardMaterial>>,
+         >::default())
+         .init_resource::<AppStatus>()
+         .add_event::<WidgetClickEvent<Selection>>()
+@@ -161,7 +166,7 @@ fn setup(
+     render_device: Res<RenderDevice>,
+     render_adapter: Res<RenderAdapter>,
+     mut meshes: ResMut<Assets<Mesh>>,
+-    mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, CustomDecalExtension>>>,
++    mut materials: ResMut<Assets<ExtendedMaterial<CustomDecalExtension<StandardMaterial>>>>,
+ ) {
+     // Error out if the clustered decals feature isn't enabled
+     if !cfg!(feature = "pbr_clustered_decals") {
+@@ -187,7 +192,7 @@ fn setup(
+ fn spawn_cube(
+     commands: &mut Commands,
+     meshes: &mut Assets<Mesh>,
+-    materials: &mut Assets<ExtendedMaterial<StandardMaterial, CustomDecalExtension>>,
++    materials: &mut Assets<ExtendedMaterial<CustomDecalExtension<StandardMaterial>>>,
+ ) {
+     // Rotate the cube a bit just to make it more interesting.
+     let mut transform = Transform::IDENTITY;
+@@ -200,7 +205,7 @@ fn spawn_cube(
+                 base_color: SILVER.into(),
+                 ..default()
+             },
+-            extension: CustomDecalExtension {},
++            extension: CustomDecalExtension::default(),
+         })),
+         transform,
+     ));
+diff --git a/examples/3d/decal.rs b/examples/3d/decal.rs
+index 7fd45cd53cee67c53b5bfed862c82ffb3507a296..38c70e4a2bb0dae995158b8ef30272d95f40624c 100644
+--- a/examples/3d/decal.rs
++++ b/examples/3d/decal.rs
+@@ -37,6 +37,7 @@ fn setup(
+             },
+             extension: ForwardDecalMaterialExt {
+                 depth_fade_factor: 1.0,
++                ..Default::default()    
+             },
+         })),
+         Transform::from_scale(Vec3::splat(4.0)),
+diff --git a/examples/3d/fallback.rs b/examples/3d/fallback.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc5a13dbfa8de907e314c7741dfcd8b998bb7d71
+--- /dev/null
++++ b/examples/3d/fallback.rs
+@@ -0,0 +1,106 @@
++//! A simple 3D scene with light shining over a cube sitting on a plane.
++
++use bevy::{
++    pbr::{ExtendedMaterial, MaterialExtension},
++    prelude::*,
++};
++use bevy_render::{render_asset::RenderAssetBytesPerFrame, render_resource::AsBindGroup};
++
++fn main() {
++    App::new()
++        .insert_resource(RenderAssetBytesPerFrame::new(1))
++        .add_plugins(DefaultPlugins)
++        .add_plugins(MaterialPlugin::<StandardMaterialWithFallback>::default())
++        .add_systems(Update, spawn)
++        .add_systems(Update, log_events)
++        .run();
++}
++
++/// set up a simple 3D scene
++fn spawn(
++    input: Res<ButtonInput<KeyCode>>,
++    mut commands: Commands,
++    mut meshes: ResMut<Assets<Mesh>>,
++    mut materials: ResMut<
++        Assets<StandardMaterial>>,
++    mut fallback_materials: ResMut<
++        Assets<StandardMaterialWithFallback>,
++    >,
++    asset_server: Res<AssetServer>,
++) {
++    if !input.just_pressed(KeyCode::Space) {
++        return;
++    }
++
++    let small_image = asset_server.load("Burning_Ship_0002_20210818_small.png");
++    let small_material = StandardMaterial {
++        base_color: Color::srgba(1.0, 1.0, 1.0, 0.75),
++        base_color_texture: Some(small_image),
++        alpha_mode: AlphaMode::Blend,
++        ..Default::default()
++    };
++
++    let big_image = asset_server.load("Burning_Ship_0002_20210818_big.png");
++    let big_material = ExtendedMaterial::<FallbackMaterial<StandardMaterial>> {
++        base: StandardMaterial {
++            base_color_texture: Some(big_image),
++            ..Default::default()
++        },
++        extension: FallbackMaterial {
++            fallback: Some(small_material),
++        },
++    };
++    let big_material = fallback_materials.add(big_material);
++
++    println!("big = {}", big_material.id());
++
++    // circular base
++    commands.spawn((
++        Mesh3d(meshes.add(Circle::new(4.0))),
++        MeshMaterial3d(materials.add(Color::WHITE)),
++        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
++    ));
++    // cube
++    commands.spawn((
++        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
++        MeshMaterial3d(big_material),
++        Transform::from_xyz(0.0, 0.5, 0.0),
++    ));
++    // light
++    commands.spawn((
++        PointLight {
++            shadows_enabled: true,
++            ..default()
++        },
++        Transform::from_xyz(4.0, 8.0, 4.0),
++    ));
++    // camera
++    commands.spawn((
++        Camera3d::default(),
++        Transform::from_xyz(-0.8333, 1.5, 3.0).looking_at(Vec3::ZERO, Vec3::Y),
++    ));
++}
++
++fn log_events(mut evs: EventReader<AssetEvent<StandardMaterial>>) {
++    for ev in evs.read() {
++        error!("{ev:?}");
++    }
++}
++
++#[derive(Clone, AsBindGroup, Asset, TypePath)]
++struct FallbackMaterial<B: Material> {
++    fallback: Option<B>,
++}
++
++impl<B: Material + Clone> MaterialExtension for FallbackMaterial<B> {
++    type Base = B;
++
++    fn fallback_asset(&self, _base: &B) -> Option<ExtendedMaterial<Self>> {
++        Some(ExtendedMaterial::<Self> {
++            base: self.fallback.clone()?,
++            extension: FallbackMaterial { fallback: None },
++        })
++    }
++}
++
++type StandardMaterialWithFallback = ExtendedMaterial<FallbackMaterial<StandardMaterial>>;
+\ No newline at end of file
+diff --git a/examples/3d/irradiance_volumes.rs b/examples/3d/irradiance_volumes.rs
+index 31529c421986d6fb1983000751b7117d93671ee1..b15e2a54180bea8c264b177ea6dfeab9cea0b9a5 100644
+--- a/examples/3d/irradiance_volumes.rs
++++ b/examples/3d/irradiance_volumes.rs
+@@ -128,7 +128,7 @@ struct VoxelCube;
+ #[derive(Component)]
+ struct VoxelCubeParent;
+ 
+-type VoxelVisualizationMaterial = ExtendedMaterial<StandardMaterial, VoxelVisualizationExtension>;
++type VoxelVisualizationMaterial = ExtendedMaterial<VoxelVisualizationExtension>;
+ 
+ #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+ struct VoxelVisualizationExtension {
+@@ -629,6 +629,7 @@ fn toggle_voxel_visibility(
+ }
+ 
+ impl MaterialExtension for VoxelVisualizationExtension {
++    type Base = StandardMaterial;
+     fn fragment_shader() -> ShaderRef {
+         SHADER_ASSET_PATH.into()
+     }
+diff --git a/examples/3d/ssr.rs b/examples/3d/ssr.rs
+index 9d0026fbbcf98596588453ab3cb04810e80a5a47..4203057b764862e8ffc51aae1a32f34d6abcbdc6 100644
+--- a/examples/3d/ssr.rs
++++ b/examples/3d/ssr.rs
+@@ -1,6 +1,6 @@
+ //! Demonstrates screen space reflections in deferred rendering.
+ 
+-use std::ops::Range;
++use std::{marker::PhantomData, ops::Range};
+ 
+ use bevy::{
+     color::palettes::css::{BLACK, WHITE},
+@@ -38,7 +38,7 @@ static SWITCH_TO_CUBE_HELP_TEXT: &str = "Press Enter to switch to the cube model
+ 
+ /// A custom [`ExtendedMaterial`] that creates animated water ripples.
+ #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+-struct Water {
++struct Water<B: Material> {
+     /// The normal map image.
+     ///
+     /// Note that, like all normal maps, this must not be loaded as sRGB.
+@@ -49,6 +49,8 @@ struct Water {
+     // Parameters to the water shader.
+     #[uniform(102)]
+     settings: WaterSettings,
++
++    _p: PhantomData<fn() -> B>,
+ }
+ 
+ /// Parameters to the water shader.
+@@ -104,7 +106,7 @@ fn main() {
+             }),
+             ..default()
+         }))
+-        .add_plugins(MaterialPlugin::<ExtendedMaterial<StandardMaterial, Water>>::default())
++        .add_plugins(MaterialPlugin::<ExtendedMaterial<Water<StandardMaterial>>>::default())
+         .add_systems(Startup, setup)
+         .add_systems(Update, rotate_model)
+         .add_systems(Update, move_camera)
+@@ -117,7 +119,7 @@ fn setup(
+     mut commands: Commands,
+     mut meshes: ResMut<Assets<Mesh>>,
+     mut standard_materials: ResMut<Assets<StandardMaterial>>,
+-    mut water_materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, Water>>>,
++    mut water_materials: ResMut<Assets<ExtendedMaterial<Water<StandardMaterial>>>>,
+     asset_server: Res<AssetServer>,
+     app_settings: Res<AppSettings>,
+ ) {
+@@ -176,7 +178,7 @@ fn spawn_water(
+     commands: &mut Commands,
+     asset_server: &AssetServer,
+     meshes: &mut Assets<Mesh>,
+-    water_materials: &mut Assets<ExtendedMaterial<StandardMaterial, Water>>,
++    water_materials: &mut Assets<ExtendedMaterial<Water<StandardMaterial>>>,
+ ) {
+     commands.spawn((
+         Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.0)))),
+@@ -210,6 +212,7 @@ fn spawn_water(
+                     octave_scales: vec4(1.0, 2.1, 7.9, 14.9) * 5.0,
+                     octave_strengths: vec4(0.16, 0.18, 0.093, 0.044),
+                 },
++                _p: PhantomData::default(),
+             },
+         })),
+         Transform::from_scale(Vec3::splat(100.0)),
+@@ -278,7 +281,8 @@ fn create_text(app_settings: &AppSettings) -> Text {
+     .into()
+ }
+ 
+-impl MaterialExtension for Water {
++impl<B: Material> MaterialExtension for Water<B> {
++    type Base = B;
+     fn deferred_fragment_shader() -> ShaderRef {
+         SHADER_ASSET_PATH.into()
+     }
+diff --git a/examples/shader/extended_material.rs b/examples/shader/extended_material.rs
+index 3c5102db8ae582a47c95e0f1a09f7854db7e6260..e4db60edb58d2feb360cc64e7a1b539ae4ef187c 100644
+--- a/examples/shader/extended_material.rs
++++ b/examples/shader/extended_material.rs
+@@ -14,7 +14,7 @@ fn main() {
+     App::new()
+         .add_plugins(DefaultPlugins)
+         .add_plugins(MaterialPlugin::<
+-            ExtendedMaterial<StandardMaterial, MyExtension>,
++            ExtendedMaterial<MyExtension>,
+         >::default())
+         .add_systems(Startup, setup)
+         .add_systems(Update, rotate_things)
+@@ -24,7 +24,7 @@ fn main() {
+ fn setup(
+     mut commands: Commands,
+     mut meshes: ResMut<Assets<Mesh>>,
+-    mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, MyExtension>>>,
++    mut materials: ResMut<Assets<ExtendedMaterial<MyExtension>>>,
+ ) {
+     // sphere
+     commands.spawn((
+@@ -78,6 +78,8 @@ struct MyExtension {
+ }
+ 
+ impl MaterialExtension for MyExtension {
++    type Base = StandardMaterial;
++
+     fn fragment_shader() -> ShaderRef {
+         SHADER_ASSET_PATH.into()
+     }
+diff --git a/examples/shader/extended_material_bindless.rs b/examples/shader/extended_material_bindless.rs
+index 562522fa437ff8f774d369a536f3783170a2ab3c..b9a259c697b04f24698e8564298ac708ba467797 100644
+--- a/examples/shader/extended_material_bindless.rs
++++ b/examples/shader/extended_material_bindless.rs
+@@ -79,6 +79,8 @@ struct ExampleBindlessExtensionUniform {
+ }
+ 
+ impl MaterialExtension for ExampleBindlessExtension {
++    type Base = StandardMaterial;
++
+     fn fragment_shader() -> ShaderRef {
+         SHADER_ASSET_PATH.into()
+     }
+@@ -99,7 +101,7 @@ fn main() {
+     App::new()
+         .add_plugins(DefaultPlugins)
+         .add_plugins(MaterialPlugin::<
+-            ExtendedMaterial<StandardMaterial, ExampleBindlessExtension>,
++            ExtendedMaterial<ExampleBindlessExtension>,
+         >::default())
+         .add_systems(Startup, setup)
+         .add_systems(Update, rotate_sphere)
+@@ -111,7 +113,7 @@ fn setup(
+     mut commands: Commands,
+     asset_server: Res<AssetServer>,
+     mut meshes: ResMut<Assets<Mesh>>,
+-    mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, ExampleBindlessExtension>>>,
++    mut materials: ResMut<Assets<ExtendedMaterial<ExampleBindlessExtension>>>,
+ ) {
+     // Create a gray sphere, modulated with a red-tinted Bevy logo.
+     commands.spawn((

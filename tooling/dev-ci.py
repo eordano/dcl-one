@@ -36,8 +36,8 @@ LINUX_ONLY = ('apps/sites/**', 'apps/ui3/**',
 # What the Rust job reads besides the paths its Rust sources name: the crates it compiles, the SQL, protocol
 # and API contract they embed, the toolchain, the dev shell and stack, and the scripts and tests
 # dev-test.sh runs. A pull request runs the Rust tests only when it changes one of these or a named path.
-RUST_INPUTS = ('services/catalyst/**', 'apps/dcl-scene-cli/**', 'library/dcl-*/**', 'library/vendor/rusty_enet/**',
-               'schemas/**', 'library/protocol/**', 'library/catalyst-api/**', 'docs/openapi.json', 'docs/ui/**',
+RUST_INPUTS = ('services/catalyst/**', 'apps/dcl-scene-cli/Cargo.toml', 'library/dcl-*/**', 'library/vendor/rusty_enet/**',
+               'schemas/**', 'library/protocol/**', 'library/catalyst-api/**',
                '.cargo/**', '**/rust-toolchain*', 'flake.nix', 'flake.lock', 'Makefile',
                'infra/dev/**', 'infra/packages/**',
                'tooling/dev*', 'tooling/catalyst-test*', 'tooling/ci-local.py', 'tooling/ci_paths.py',

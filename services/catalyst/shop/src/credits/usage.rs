@@ -200,14 +200,10 @@ fn is_word(s: &str) -> bool {
     s.len() == 66 && s.starts_with("0x") && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn is_address(s: &str) -> bool {
-    s.len() == 42 && s.starts_with("0x") && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 /// A 0x-prefixed 20-byte address, lowercased; `None` for anything else.
 pub fn normalize_address(raw: &str) -> Option<String> {
     let lower = raw.trim().to_ascii_lowercase();
-    is_address(&lower).then_some(lower)
+    crate::types::is_hex_address(&lower).then_some(lower)
 }
 
 pub fn decode_log(log: &RpcLog) -> Result<Usage, String> {

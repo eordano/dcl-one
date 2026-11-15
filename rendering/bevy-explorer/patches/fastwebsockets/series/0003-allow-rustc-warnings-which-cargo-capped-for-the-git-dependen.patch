@@ -1,0 +1,16 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:24+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 74695dbbf1cea81918203fbedd57158dfcd78a80..30abc7a1049daed434c558dae816bf6cf3b7c67c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -85,3 +85,6 @@ codegen-units = 1
+ 
+ [package.metadata.docs.rs]
+ features = ["upgrade", "with_axum"]
++
++[lints.rust]
++warnings = "allow"

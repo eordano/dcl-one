@@ -1,0 +1,275 @@
+From 9e6ab3e10d63fdb4c3d1e58d43619a623beea4fe
+Subject: chore(bevy-explorer): fix the build warnings the 1.99 toolchain raises (#368)
+Origin: https://github.com/decentraland/dcl-one/commit/9e6ab3e10d63fdb4c3d1e58d43619a623beea4fe
+Date: 2026-11-09T15:26:59+01:00
+
+Rust 1.99.1 raises warnings in the vendored Bevy fork, the Explorer tests and the vendored ENet crate. This PR fixes each warning at its site and keeps the behaviour the same.
+
+ComponentCloneBehavior gets a manual PartialEq that compares Custom function pointers with fn_addr_eq. The derived implementation compared the pointers directly.
+WorldId::new calls try_update on targets with pointer-sized atomics and keeps fetch_update for the portable_atomic fallback (upstream #26020). try_update needs Rust 1.95, so bevy, bevy_ecs and bevy_input_focus declare rust-version = "1.95.0".
+Bevy loses unused imports, the unused UiScale parameter of set_camera_window_cursor_position, redundant alloc:: paths and the parentheses around dyn Any + Send. The avatar and scene runner tests lose unused prelude::* imports.
+ENet patch 0007 names the borrowed Event<'_, C> lifetime in the connected host's handle_event, check_events and service. The lock file and the checksums record the patch.
+docs/guidelines/bevy-fork.md records the WorldId change, the 1.95 floor and the toolchain pins. It also states the rule: fix a warning the pinned toolchain raises at its site.
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 10763ffc10d9d1ca74e935ae5ca43ae01ab03c3d..a0e17bff9df8d2b9f322c9e07d0615f2ac1eb2c0 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -10,7 +10,7 @@ keywords = ["game", "engine", "gamedev", "graphics", "bevy"]
+ license = "MIT OR Apache-2.0"
+ repository = "https://github.com/bevyengine/bevy"
+ documentation = "https://docs.rs/bevy"
+-rust-version = "1.85.0"
++rust-version = "1.95.0"
+ 
+ [workspace]
+ resolver = "2"
+diff --git a/crates/bevy_asset/src/io/source.rs b/crates/bevy_asset/src/io/source.rs
+index 4852a2a71fff2f81ce81237fcc433072b958a216..df8a377758f7ca4598aac309b33320cee71c143a 100644
+--- a/crates/bevy_asset/src/io/source.rs
++++ b/crates/bevy_asset/src/io/source.rs
+@@ -12,7 +12,7 @@ use bevy_ecs::resource::Resource;
+ use bevy_platform::collections::HashMap;
+ use core::{fmt::Display, hash::Hash, time::Duration};
+ use thiserror::Error;
+-use tracing::{error, warn};
++use tracing::warn;
+ 
+ use super::{ErasedAssetReader, ErasedAssetWriter};
+ 
+diff --git a/crates/bevy_ecs/Cargo.toml b/crates/bevy_ecs/Cargo.toml
+index 6f239149795acb8f0d2cb1a1a83eb6bcc2f378d4..0f3b0e3c1b27a27966b62c9a9c158afc6195eb0b 100644
+--- a/crates/bevy_ecs/Cargo.toml
++++ b/crates/bevy_ecs/Cargo.toml
+@@ -8,7 +8,7 @@ repository = "https://github.com/bevyengine/bevy"
+ license = "MIT OR Apache-2.0"
+ keywords = ["ecs", "game", "bevy"]
+ categories = ["game-engines", "data-structures"]
+-rust-version = "1.85.0"
++rust-version = "1.95.0"
+ 
+ [features]
+ default = ["std", "bevy_reflect", "async_executor", "backtrace"]
+diff --git a/crates/bevy_ecs/src/component.rs b/crates/bevy_ecs/src/component.rs
+index bfa55804b616abf96c9f351bf6c9cd9bc65ca5e7..03a0064c462b90f9928d03e5b28ccb1eab55af8a 100644
+--- a/crates/bevy_ecs/src/component.rs
++++ b/crates/bevy_ecs/src/component.rs
+@@ -1197,7 +1197,7 @@ impl ComponentDescriptor {
+ pub type ComponentCloneFn = fn(&SourceComponent, &mut ComponentCloneCtx);
+ 
+ /// The clone behavior to use when cloning a [`Component`].
+-#[derive(Clone, Debug, Default, PartialEq, Eq)]
++#[derive(Clone, Debug, Default)]
+ pub enum ComponentCloneBehavior {
+     /// Uses the default behavior (which is passed to [`ComponentCloneBehavior::resolve`])
+     #[default]
+@@ -1208,6 +1208,18 @@ pub enum ComponentCloneBehavior {
+     Custom(ComponentCloneFn),
+ }
+ 
++impl PartialEq for ComponentCloneBehavior {
++    fn eq(&self, other: &Self) -> bool {
++        match (self, other) {
++            (Self::Default, Self::Default) | (Self::Ignore, Self::Ignore) => true,
++            (Self::Custom(a), Self::Custom(b)) => core::ptr::fn_addr_eq(*a, *b),
++            _ => false,
++        }
++    }
++}
++
++impl Eq for ComponentCloneBehavior {}
++
+ impl ComponentCloneBehavior {
+     /// Set clone handler based on `Clone` trait.
+     ///
+diff --git a/crates/bevy_ecs/src/world/identifier.rs b/crates/bevy_ecs/src/world/identifier.rs
+index 6b1c803e753753e619ae0d5d7761de25b85f5aeb..58cd3e802db22e55da14a472d9212964ffcc480a 100644
+--- a/crates/bevy_ecs/src/world/identifier.rs
++++ b/crates/bevy_ecs/src/world/identifier.rs
+@@ -27,13 +27,29 @@ impl WorldId {
+     /// Please note that the [`WorldId`]s created from this method are unique across
+     /// time - if a given [`WorldId`] is [`Drop`]ped its value still cannot be reused
+     pub fn new() -> Option<Self> {
+-        MAX_WORLD_ID
+-            // We use `Relaxed` here since this atomic only needs to be consistent with itself
+-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
+-                val.checked_add(1)
+-            })
+-            .map(WorldId)
+-            .ok()
++        // NOTE: `fetch_update` has been deprecated for `try_update` in core, but on targets without native
++        // pointer-sized atomics, `AtomicUsize` comes from `portable_atomic` which doesn't have `try_update`
++        // Once `portable_atomic` provides `try_update`, collapse the function into this first branch.
++        #[cfg(target_has_atomic = "ptr")]
++        {
++            MAX_WORLD_ID
++                // We use `Relaxed` here since this atomic only needs to be consistent with itself
++                .try_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
++                    val.checked_add(1)
++                })
++                .map(WorldId)
++                .ok()
++        }
++        #[cfg(not(target_has_atomic = "ptr"))]
++        {
++            MAX_WORLD_ID
++                // We use `Relaxed` here since this atomic only needs to be consistent with itself
++                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |val| {
++                    val.checked_add(1)
++                })
++                .map(WorldId)
++                .ok()
++        }
+     }
+ }
+ 
+diff --git a/crates/bevy_gizmos/src/lib.rs b/crates/bevy_gizmos/src/lib.rs
+index 9e4184dd62328b4a81c87c379cc89a78f4c352c8..1e6c5e03f48dcb6448d05eab097b1d7d02e5da1b 100755
+--- a/crates/bevy_gizmos/src/lib.rs
++++ b/crates/bevy_gizmos/src/lib.rs
+@@ -85,7 +85,9 @@ use bevy_ecs::{
+     schedule::{IntoScheduleConfigs, SystemSet},
+     system::{Res, ResMut},
+ };
+-use bevy_math::{Vec3, Vec4};
++#[cfg(feature = "webgl")]
++use bevy_math::Vec3;
++use bevy_math::Vec4;
+ use bevy_reflect::TypePath;
+ 
+ #[cfg(all(
+diff --git a/crates/bevy_image/src/dynamic_texture_atlas_builder.rs b/crates/bevy_image/src/dynamic_texture_atlas_builder.rs
+index e8b812194a6fee5633204bb175509588e4c0dc98..e056e438eb226129db01c629a5f1f1a898ef8da7 100644
+--- a/crates/bevy_image/src/dynamic_texture_atlas_builder.rs
++++ b/crates/bevy_image/src/dynamic_texture_atlas_builder.rs
+@@ -3,7 +3,6 @@ use bevy_asset::RenderAssetUsages;
+ use bevy_math::{URect, UVec2};
+ use guillotiere::{size2, Allocation, AtlasAllocator};
+ use thiserror::Error;
+-use tracing::error;
+ 
+ #[derive(Debug, Error)]
+ pub enum DynamicTextureAtlasBuilderError {
+diff --git a/crates/bevy_input_focus/Cargo.toml b/crates/bevy_input_focus/Cargo.toml
+index 6bdd23f32ed0d0e20957f2f8dd10fb2142d8d022..3444de56842adb1d699e135cfb2e33977f073f34 100644
+--- a/crates/bevy_input_focus/Cargo.toml
++++ b/crates/bevy_input_focus/Cargo.toml
+@@ -7,7 +7,7 @@ homepage = "https://bevyengine.org"
+ repository = "https://github.com/bevyengine/bevy"
+ license = "MIT OR Apache-2.0"
+ keywords = ["bevy"]
+-rust-version = "1.85.0"
++rust-version = "1.95.0"
+ 
+ [features]
+ default = ["std", "bevy_reflect", "bevy_ecs/async_executor"]
+diff --git a/crates/bevy_picking/src/window.rs b/crates/bevy_picking/src/window.rs
+index 30093da79750bc0f46b423b5b7f9da12640602ca..9c6200b87b1de817c8a00911b89f76cf07d49a55 100644
+--- a/crates/bevy_picking/src/window.rs
++++ b/crates/bevy_picking/src/window.rs
+@@ -11,8 +11,6 @@
+ //!
+ //! - This backend does not provide `position` or `normal` in `HitData`.
+ 
+-use core::f32;
+-
+ use bevy_ecs::prelude::*;
+ use bevy_render::camera::NormalizedRenderTarget;
+ 
+diff --git a/crates/bevy_render/src/render_phase/mod.rs b/crates/bevy_render/src/render_phase/mod.rs
+index cc475eb1ab91108f993ac744f0c1a3c6bde63634..026ce52ebd1977fc405dc05bbc92c611b1072d93 100644
+--- a/crates/bevy_render/src/render_phase/mod.rs
++++ b/crates/bevy_render/src/render_phase/mod.rs
+@@ -67,7 +67,6 @@ use bevy_ecs::{
+ };
+ use core::{fmt::Debug, hash::Hash, iter, marker::PhantomData, ops::Range, slice::SliceIndex};
+ use smallvec::SmallVec;
+-use tracing::warn;
+ 
+ /// Stores the rendering instructions for a single phase that uses bins in all
+ /// views.
+diff --git a/crates/bevy_render/src/texture/gpu_image.rs b/crates/bevy_render/src/texture/gpu_image.rs
+index 4026a048f57a8e3a204a387485f57bbadfc4f3b3..a5be749bfada918951ef87e9d67a9441e260db1e 100644
+--- a/crates/bevy_render/src/texture/gpu_image.rs
++++ b/crates/bevy_render/src/texture/gpu_image.rs
+@@ -5,9 +5,8 @@ use crate::{
+ };
+ use bevy_asset::{AssetId, RenderAssetTransferPriority};
+ use bevy_ecs::system::{lifetimeless::SRes, SystemParamItem};
+-use bevy_image::{Image, ImageSampler, TextureFormatPixelInfo};
++use bevy_image::{Image, ImageSampler};
+ use bevy_math::{AspectRatio, UVec2};
+-use tracing::{error, warn};
+ use wgpu::{Extent3d, TexelCopyBufferLayout, TextureFormat, TextureUsages};
+ use wgpu_types::{TextureDescriptor, TextureViewDescriptor};
+ 
+diff --git a/crates/bevy_tasks/src/task_pool.rs b/crates/bevy_tasks/src/task_pool.rs
+index d19e607c68859c8bf5eee2b9d09504db424c2fd5..bef847fec450a1a1a185aa80b2d70badf9cfd5e0 100644
+--- a/crates/bevy_tasks/src/task_pool.rs
++++ b/crates/bevy_tasks/src/task_pool.rs
+@@ -510,12 +510,12 @@ impl TaskPool {
+             unsafe { mem::transmute(external_executor) };
+         // SAFETY: As above, all futures must complete in this function so we can change the lifetime
+         let scope_executor: &'env ThreadExecutor<'env> = unsafe { mem::transmute(scope_executor) };
+-        let spawned: ConcurrentQueue<FallibleTask<Result<T, Box<(dyn core::any::Any + Send)>>>> =
++        let spawned: ConcurrentQueue<FallibleTask<Result<T, Box<dyn core::any::Any + Send>>>> =
+             ConcurrentQueue::unbounded();
+         // shadow the variable so that the owned value cannot be used for the rest of the function
+         // SAFETY: As above, all futures must complete in this function so we can change the lifetime
+         let spawned: &'env ConcurrentQueue<
+-            FallibleTask<Result<T, Box<(dyn core::any::Any + Send)>>>,
++            FallibleTask<Result<T, Box<dyn core::any::Any + Send>>>,
+         > = unsafe { mem::transmute(&spawned) };
+ 
+         let scope = Scope {
+@@ -810,7 +810,7 @@ pub struct Scope<'scope, 'env: 'scope, T> {
+     executor: &'scope crate::executor::Executor<'scope>,
+     external_executor: &'scope ThreadExecutor<'scope>,
+     scope_executor: &'scope ThreadExecutor<'scope>,
+-    spawned: &'scope ConcurrentQueue<FallibleTask<Result<T, Box<(dyn core::any::Any + Send)>>>>,
++    spawned: &'scope ConcurrentQueue<FallibleTask<Result<T, Box<dyn core::any::Any + Send>>>>,
+     // make `Scope` invariant over 'scope and 'env
+     scope: PhantomData<&'scope mut &'scope ()>,
+     env: PhantomData<&'env mut &'env ()>,
+diff --git a/crates/bevy_text/src/pipeline.rs b/crates/bevy_text/src/pipeline.rs
+index c284bc447921bd954b6e81d115b5d461ce88a6c2..07e03affbd5959d951ef13919cbedb38b8f7915e 100644
+--- a/crates/bevy_text/src/pipeline.rs
++++ b/crates/bevy_text/src/pipeline.rs
+@@ -419,7 +419,7 @@ pub fn remove_dropped_fonts(
+     mut font_system: ResMut<CosmicFontSystem>,
+     mut swash_cache: ResMut<SwashCache>,
+ ) {
+-    let mut removed = alloc::vec::Vec::new();
++    let mut removed = Vec::new();
+     for event in font_events.read() {
+         if let AssetEvent::Removed { id } = event {
+             if let Some((face_id, _)) = pipeline.map_handle_to_font_id.remove(id) {
+@@ -436,7 +436,7 @@ pub fn remove_dropped_fonts(
+     // individual entries, so rebuild it around the pruned database. This also recomputes its
+     // monospace face lists.
+     let placeholder = cosmic_text::FontSystem::new_with_locale_and_db(
+-        alloc::string::String::new(),
++        String::new(),
+         cosmic_text::fontdb::Database::new(),
+     );
+     let (locale, db) = core::mem::replace(&mut font_system.0, placeholder).into_locale_and_db();
+diff --git a/crates/bevy_ui/src/focus.rs b/crates/bevy_ui/src/focus.rs
+index 81c05c6e60d8149cc3efd0e99eb1d223ec604df7..add8aeabcdfcd17c04b9f9479c02fdf4e7b815f0 100644
+--- a/crates/bevy_ui/src/focus.rs
++++ b/crates/bevy_ui/src/focus.rs
+@@ -1,6 +1,4 @@
+-use crate::{
+-    CalculatedClip, ComputedNode, ComputedNodeTarget, ResolvedBorderRadius, UiScale, UiStack,
+-};
++use crate::{CalculatedClip, ComputedNode, ComputedNodeTarget, ResolvedBorderRadius, UiStack};
+ use bevy_ecs::{
+     change_detection::DetectChangesMut,
+     entity::{ContainsEntity, Entity},
+@@ -158,7 +156,6 @@ pub fn set_camera_window_cursor_position(
+     primary_window: Query<Entity, With<PrimaryWindow>>,
+     windows: Query<&Window>,
+     touches_input: Res<Touches>,
+-    ui_scale: Res<UiScale>,
+ ) {
+     let primary_window = primary_window.iter().next();
+     let primary_scale_factor = primary_window

@@ -133,7 +133,9 @@ async fn raw_alias_lifecycles_match_source_rpc_json_audiences_and_restart_reads(
     let upper = raw.to_uppercase();
     let cid: Uuid = raw.parse().unwrap();
     for case in fixture["cases"].as_array().unwrap() {
-        let Some(database) = OwnedDatabase::new().await else {
+        let Some(database) =
+            OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+        else {
             return;
         };
         let pool = database.pool.clone();
@@ -333,13 +335,14 @@ async fn raw_alias_lifecycles_match_source_rpc_json_audiences_and_restart_reads(
             assert_eq!(actual, source["json"], "{scenario}: {} JSON", event.phase);
         }
         drop(watchers);
-        database.close().await;
+        database.drop().await;
     }
 }
 
 #[tokio::test]
 async fn exact_key_cas_restore_and_pages_preserve_sibling_generations_and_ttls() {
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = &database.pool;
@@ -459,12 +462,13 @@ async fn exact_key_cas_restore_and_pages_preserve_sibling_generations_and_ttls()
     }
     assert_eq!(lengths, vec![64, 64, 2]);
     assert_eq!(keys.len(), 130);
-    database.close().await;
+    database.drop().await;
 }
 
 #[tokio::test]
 async fn raw_start_preserves_source_metadata_and_online_audience_in_native_inbox() {
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = &database.pool;
@@ -528,7 +532,7 @@ async fn raw_start_preserves_source_metadata_and_online_audience_in_native_inbox
     let deliveries: Vec<(String,String,i32)> = sqlx::query_as("SELECT n.address,d.state,d.attempts FROM social.notifications n JOIN social.notification_deliveries d ON d.notification_id=n.id WHERE n.type='community_voice_chat_started'").fetch_all(pool).await.unwrap();
     assert_eq!(deliveries, vec![(member.into(), "skipped".into(), 0)]);
     let _ = std::fs::remove_dir_all(directory);
-    database.close().await;
+    database.drop().await;
 }
 
 #[tokio::test]
@@ -536,7 +540,8 @@ async fn active_raw_aliases_refresh_through_real_comms_presence_and_end_after_mo
     use crate::comms::gatekeeper::voice::rooms::VoiceRooms;
     use crate::comms::gatekeeper::{CommsState, Settings as CommsSettings};
     use crate::comms::interfaces::test_support::{StubDirectory, StubPolicy, StubScenes};
-    let Some(database) = OwnedDatabase::new().await else {
+    let Some(database) = OwnedDatabase::new("fanout", crate::db::scratch::Schema::Full, 8).await
+    else {
         return;
     };
     let pool = &database.pool;
@@ -620,5 +625,5 @@ async fn active_raw_aliases_refresh_through_real_comms_presence_and_end_after_mo
             .unwrap()
             .is_empty()
     );
-    database.close().await;
+    database.drop().await;
 }

@@ -39,8 +39,8 @@ understand the change in one sitting.
 - You should not need to add a schedule set or ordering step. If you think you do, raise it
   first; the [scheduling guide](scheduling.md) explains the current setup.
 - If something works better with a change in a dependency, change the dependency. Upstream it
-  where possible; where it is bespoke to us, we maintain our forks for exactly that. Bevy itself
-  is vendored here: see [the bevy fork](bevy-fork.md).
+  where possible; where it is bespoke to us, it is a patch in this repository: see
+  [the bevy fork](bevy-fork.md#changing-bevy).
 
 ## Tests
 
@@ -126,6 +126,8 @@ this engine's design using its requirements and tests.
 ## Before pushing
 
 - Merge main first. CI tests the merge, not the branch.
+- `python3 ../../../tooling/patched-sources.py materialise` after the merge and before the cargo
+  commands: Cargo reads the [rebuilt trees](bevy-fork.md#changing-bevy).
 - `cargo fmt --all`, `cargo clippy --locked -- -D warnings`, `cargo test --all`. Clippy warnings
   are errors in CI.
 - The wasm build, only if the change has platform-sensitive code: `#[cfg]` branches,
@@ -149,11 +151,8 @@ this engine's design using its requirements and tests.
 - Hoist every third-party dependency to `[workspace.dependencies]` and use
   `{ workspace = true }` at the call site, even for a crate used in one place. Convert existing
   inline uses of the same crate in the same change.
-- Changes to bevy go in the vendored tree, `rendering/bevy-explorer/bevy`: see
-  [the bevy fork](bevy-fork.md).
-- `rendering/bevy-explorer/forks.toml` and `cargo-patches.toml` are generated from the lock.
-  After changing a git dependency's revision, run `python3 tooling/upstream-forks.py` from the
-  dcl-one root so they match; a daily workflow otherwise opens an `upstream/forks` PR.
+- A change to bevy or to a forked crate is one more patch file under
+  `rendering/bevy-explorer/patches/<name>/series`: see [the bevy fork](bevy-fork.md#changing-bevy).
 
 ## Review
 

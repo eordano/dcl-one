@@ -14,9 +14,7 @@ use serde::Deserialize;
 use serde_json::{Map, Number, Value, json};
 
 use super::store::{PriceOverride, PriceSnapshot, SNAPSHOT_MAX_AGE};
-use super::{SharedState, unavailable};
-
-pub const MANA_ID: &str = "decentraland";
+use super::{MANA_ID, SharedState, unavailable};
 
 struct PriceQuery {
     ids: Vec<String>,

@@ -1,0 +1,18 @@
+From 8c436d847c1500bd80289b2e0a828d4fa853bc33
+Subject: clear anim evaluator stack
+Origin: https://github.com/robtfm/bevy/commit/8c436d847c1500bd80289b2e0a828d4fa853bc33
+Date: 2025-09-19T10:41:16+01:00
+
+---
+diff --git a/crates/bevy_animation/src/animation_curves.rs b/crates/bevy_animation/src/animation_curves.rs
+index 45fa393e059651d0bc8a610ee22d0c0e84bda066..54ae5f632540e205b0eb2d1d34ce67e3926411be 100644
+--- a/crates/bevy_animation/src/animation_curves.rs
++++ b/crates/bevy_animation/src/animation_curves.rs
+@@ -419,6 +419,7 @@ impl<A: Animatable> AnimationCurveEvaluator for AnimatableCurveEvaluator<A> {
+             .pop()
+             .ok_or_else(inconsistent::<AnimatableCurveEvaluator<A>>)?
+             .value;
++        self.evaluator.stack.clear();
+         Ok(())
+     }
+ }

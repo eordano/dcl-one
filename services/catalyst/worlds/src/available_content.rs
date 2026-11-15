@@ -13,15 +13,11 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 use crate::content::ContentState;
+use crate::content::entity::is_ipfs_v2;
 use crate::content::errors::AppError;
 use crate::content::wire_types::AvailableContentItem;
 
 const MAX_AVAILABLE_CONTENT_CIDS: usize = 500;
-
-/// `@dcl/schemas` `IPFSv2.validate`: `^(ba)[a-zA-Z0-9]{57}$`.
-fn is_ipfs_v2(cid: &str) -> bool {
-    cid.len() == 59 && cid.starts_with("ba") && cid.bytes().all(|b| b.is_ascii_alphanumeric())
-}
 
 fn bad_request(message: &str) -> Response {
     (

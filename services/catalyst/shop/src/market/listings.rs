@@ -33,10 +33,9 @@ use super::wire::ApiError;
 use super::{MarketplaceState, SharedState};
 use crate::comms::limits::{RateLimitDecision, RateLimiter};
 
-pub const ASSET_TYPE_ERC20: i32 = 1;
-pub const ASSET_TYPE_USD_PEGGED_MANA: i32 = 2;
-pub const ASSET_TYPE_ERC721: i32 = 3;
-pub const ASSET_TYPE_COLLECTION_ITEM: i32 = 4;
+use crate::types::{
+    ASSET_TYPE_COLLECTION_ITEM, ASSET_TYPE_ERC20, ASSET_TYPE_ERC721, ASSET_TYPE_USD_PEGGED_MANA,
+};
 
 pub const TRADE_TYPE_BID: &str = "bid";
 pub const TRADE_TYPE_PUBLIC_NFT_ORDER: &str = "public_nft_order";

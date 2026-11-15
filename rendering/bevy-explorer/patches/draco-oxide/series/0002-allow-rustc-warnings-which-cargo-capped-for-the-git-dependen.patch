@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:24+00:00
+
+---
+diff --git a/draco-oxide/core/Cargo.toml b/draco-oxide/core/Cargo.toml
+index 1d1a1ba58c45909b7eb72dfda0e6a49c6cd61615..506aac4c8d1adde96ece833aac8565334d2385d5 100644
+--- a/draco-oxide/core/Cargo.toml
++++ b/draco-oxide/core/Cargo.toml
+@@ -43,3 +43,6 @@ debug_format = []
+ # never a runtime check. Resolved at each macro call site, so every crate that
+ # invokes the macros declares it and forwards into core.
+ safety_assertions = []
++
++[lints.rust]
++warnings = "allow"
+diff --git a/draco-oxide/decoder/Cargo.toml b/draco-oxide/decoder/Cargo.toml
+index f6fcebef2032eca9f26c517e9c28eac5794c7ed4..775ec60251cbfb19ad38f814f2d0020b98922bcf 100644
+--- a/draco-oxide/decoder/Cargo.toml
++++ b/draco-oxide/decoder/Cargo.toml
+@@ -42,3 +42,6 @@ debug_format = ["draco-oxide-core/debug_format"]
+ # `--no-default-features` to drop them from debug builds too. Forwarded to core for
+ # the same call-site resolution reason as `debug_format`.
+ safety_assertions = ["draco-oxide-core/safety_assertions"]
++
++[lints.rust]
++warnings = "allow"
+diff --git a/draco-oxide/macros/draco-nd-vector/Cargo.toml b/draco-oxide/macros/draco-nd-vector/Cargo.toml
+index ac723ecc57b514a9b0303b3926a6a4c51349a753..202b465f7bc38af218800046a1035524578d8067 100644
+--- a/draco-oxide/macros/draco-nd-vector/Cargo.toml
++++ b/draco-oxide/macros/draco-nd-vector/Cargo.toml
+@@ -12,4 +12,7 @@ proc-macro = true
+ [dependencies]
+ syn = "2.0"
+ quote = "1.0"
+-seq-macro = "0.3.6"
+\ No newline at end of file
++seq-macro = "0.3.6"
++
++[lints.rust]
++warnings = "allow"

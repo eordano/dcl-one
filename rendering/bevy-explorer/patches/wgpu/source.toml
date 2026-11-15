@@ -1,0 +1,22 @@
+name       = "wgpu"
+upstream   = "https://github.com/gfx-rs/wgpu"
+commit     = "99e6524b2b03cc35733f199bb5cb28787e8d42de"
+ref        = "v24.0.5"
+origin     = "https://github.com/robtfm/wgpu"
+origin_rev = "e25f3d4b0d7f478ea12105984270a25bbeeb0a64"
+license    = "MIT OR Apache-2.0"
+paths      = [
+    "Cargo.toml",
+    "LICENSE.APACHE",
+    "LICENSE.MIT",
+    "README.md",
+    "naga",
+    "wgpu",
+    "wgpu-core",
+    "wgpu-hal",
+    "wgpu-types",
+]
+exclude    = []
+base_tree  = "7949a032dafd767d24a3afc1e671bfec7c9d7a23"
+tree       = "f39f63a5d7a63f263527b552d7b3f4d30d429d7f"
+nix_hash   = "sha256-F7/pMlNkwmrJrwBJYidlwhFdufHfeqw17tD6EhGm1TE="

@@ -79,7 +79,7 @@ class DevCiTest(unittest.TestCase):
         self.assertNotIn('needs.changes.outputs.macos', workflow)
         self.assertEqual(workflow.count(
             "github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos')"
-            " && '[\"ubuntu-26.04\"]' || '[\"ubuntu-26.04\", \"macos-26\"]'"), 2)
+            " && '[\"ubuntu-26.04\"]' || '[\"ubuntu-26.04\", \"macos-15\"]'"), 2)
 
     def test_main_runs_are_not_cancelled_by_the_next_push(self):
         # PRs test source on Linux only; finished main runs are its macOS check.
@@ -194,8 +194,7 @@ class DevCiTest(unittest.TestCase):
                      'services/catalyst/tests/fixtures/a.json', 'services/catalyst/rust-toolchain.toml',
                      'schemas/storage.sql', 'library/vendor/rusty_enet/src/lib.rs', 'library/dcl-http/src/lib.rs',
                      'library/catalyst-api/openapi/a.json', 'library/protocol/proto/a.proto',
-                     'apps/dcl-scene-cli/src/main.rs', 'apps/dcl-scene-cli/skills/a/SKILL.md',
-                     'docs/openapi.json', 'docs/ui/a.json', '.cargo/config.toml', 'flake.nix', 'flake.lock', 'Makefile',
+                     'apps/dcl-scene-cli/Cargo.toml', '.cargo/config.toml', 'flake.nix', 'flake.lock', 'Makefile',
                      'infra/dev/shell-hook.sh', 'infra/packages/tools.nix', 'tooling/dev.py', 'tooling/dev-test.sh',
                      'tooling/dev-regressions.json', 'tooling/catalyst-test.sh', 'tooling/ci_paths.py',
                      'tooling/tests/test_dev_regressions.py', '.github/workflows/development.yml'):
@@ -203,6 +202,18 @@ class DevCiTest(unittest.TestCase):
                 self.assertTrue(self.rust(path))
                 self.assertTrue(self.rust('apps/ui3/src/play/Hud.tsx', path))
         self.assertEqual(dev.needs_rust([], 'HEAD', self.dev), (True, 'No changed files to compare'))
+
+    def test_every_rust_input_is_a_path_the_workflow_watches(self):
+        # The Rust job needs both answers of the plan. An input outside the workflow's paths gives run=false,
+        # and the tests that read it do not run. Documentation is the workflow's own exclusion.
+        tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=dev.ROOT, text=True).split('\0')
+        tracked = [path for path in tracked if path]
+        for pattern in dev.RUST_INPUTS:
+            inputs = self.dev.non_documentation(self.dev.matching_paths(tracked, (pattern,)))
+            with self.subTest(pattern=pattern):
+                # A pattern that names no tracked file cannot be checked, and selects nothing.
+                self.assertTrue(inputs)
+                self.assertEqual(sorted(set(inputs) - set(dev.watched_changes(inputs, self.dev))), [])
 
     def test_files_that_rust_sources_name_run_the_rust_tests(self):
         references = dev.rust_source_references('HEAD')

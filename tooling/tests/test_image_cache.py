@@ -237,16 +237,28 @@ class WorkflowSetupTest(unittest.TestCase):
     def test_one_image_build_follows_the_bevy_import_without_legacy_caches(self):
         self.assertNotIn('images-deps-node-all', self.build)
         self.assertNotIn('image-nix', self.build)
+        streams = self.build.index("nix build --impure 'git+file:.?lfs=1#image-apis-stream' 'git+file:.?lfs=1#image-sites-stream'")
         images = self.build.index("nix build --impure 'git+file:.?lfs=1#image-apis' 'git+file:.?lfs=1#image-sites'")
-        self.assertLess(self.build.index('tooling/fetch-play.py --wait 0'), images)
-        self.assertEqual(self.build.count('nix build --impure'), 1)
+        self.assertLess(self.build.index('tooling/fetch-play.py --wait 0'), streams)
+        self.assertLess(streams, images)
+        self.assertEqual(self.build.count('nix build --impure'), 2)
         self.assertNotIn('nix build .#image-apis', self.build)
-        loads = self.build[images:self.build.index('tooling/image-smoke.py')]
+        loads = self.build[self.build.rindex('if [ "$GITHUB_EVENT_NAME" = pull_request ]; then\n', 0, streams):self.build.index('tooling/image-smoke.py')]
+        self.assertIn('"$apis" | docker load &\n', loads)
+        self.assertIn('"$sites" | docker load\n', loads)
         self.assertIn('docker load --input .cache/images/apis.tar.gz &\n', loads)
         self.assertIn("'git+file:.?lfs=1#image-sites-polygon-credits' --no-link", loads)
         self.assertIn('docker load --input .cache/images/sites.tar.gz\n', loads)
+        self.assertIn('"$polygon" | docker load\n', loads)
+        self.assertIn("'git+file:.?lfs=1#image-sites-polygon-credits-stream' --no-link", loads)
         self.assertIn('docker load --input .cache/images/sites-polygon-credits.tar.gz\n', loads)
-        self.assertIn('wait "$apis_load"', loads)
+        self.assertEqual(loads.count('wait "$apis_load"'), 2)
+
+    def test_pull_requests_stream_the_images_and_upload_no_archive(self):
+        upload = self.build.split('      - name: Upload tested images\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: github.event_name != 'pull_request'", upload)
+        receipt = self.build.split('      - name: Upload the production receipt for validation\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: github.event_name != 'pull_request'", receipt)
 
     def test_exact_compiled_hits_skip_the_dependency_restores_and_builds(self):
         compiled = self.build.index('id: compiled\n')

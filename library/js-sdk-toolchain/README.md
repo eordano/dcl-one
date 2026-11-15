@@ -16,16 +16,20 @@ This monorepo contains the core packages for Decentraland's SDK and development 
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/decentraland/js-sdk-toolchain.git
-cd js-sdk-toolchain
+git clone https://github.com/decentraland/dcl-one.git
+cd dcl-one/library/js-sdk-toolchain
 ```
 
-2. Install dependencies and build all packages:
+2. With Node ≥24.16 and Corepack available, install dependencies and build:
 
 ```bash
+corepack enable
 make install
 make build
 ```
+
+pnpm workspace links share local build outputs. Every `@dcl/hashing` dependency,
+including those of `dcl-catalyst-client`, resolves to `library/hashing`.
 
 ## Development
 

@@ -1,0 +1,16 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:24+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 88d2bdfc65ed46dd935b564c6f55251bc97543d9..d406363edc3c679b5f36240694d1e529811a8dd1 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -34,3 +34,6 @@ indexmap = "2"
+ wgpu = { version = "24", features = ["naga-ir"] }
+ futures-lite = "1"
+ tracing-subscriber = { version = "0.3", features = ["std", "fmt"] }
++
++[lints.rust]
++warnings = "allow"

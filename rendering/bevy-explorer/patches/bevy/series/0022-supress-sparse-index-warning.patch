@@ -1,0 +1,25 @@
+From 6d073cc8b59469819251ba9cc0e34564a5dba7b5
+Subject: supress sparse index warning
+Origin: https://github.com/robtfm/bevy/commit/6d073cc8b59469819251ba9cc0e34564a5dba7b5
+Date: 2025-07-03T10:19:30+01:00
+
+---
+diff --git a/crates/bevy_render/src/render_phase/mod.rs b/crates/bevy_render/src/render_phase/mod.rs
+index a4eb4a944f4f3ea8d060244835bd70dcdf92fa62..4c6cee06db81bb5f50df839129484082dee45893 100644
+--- a/crates/bevy_render/src/render_phase/mod.rs
++++ b/crates/bevy_render/src/render_phase/mod.rs
+@@ -1330,10 +1330,10 @@ impl UnbatchableBinnedEntityIndexSet {
+                 // but let's go ahead and do the sensible thing anyhow: demote
+                 // the compressed `NoDynamicOffsets` field to the full
+                 // `DynamicOffsets` array.
+-                warn!(
+-                    "Unbatchable binned entity index set was demoted from sparse to dense. \
+-                    This is a bug in the renderer. Please report it.",
+-                );
++                // warn!(
++                //     "Unbatchable binned entity index set was demoted from sparse to dense. \
++                //     This is a bug in the renderer. Please report it.",
++                // );
+                 let new_dynamic_offsets = (0..instance_range.len() as u32)
+                     .flat_map(|entity_index| self.indices_for_entity_index(entity_index))
+                     .chain(iter::once(indices))

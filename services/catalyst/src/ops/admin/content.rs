@@ -224,55 +224,13 @@ mod tests {
 
     use super::*;
     use crate::content::{ContentState, Settings as ContentSettings, SyncState};
-    use crate::jobs::Jobs;
-    use crate::ops::admin::{RawSettings, Settings, State as AdminState, session};
-    use crate::storage::Storage;
+    use crate::ops::admin::tests::{HOST, admin_state, lazy_pool, minted_cookie as cookie};
 
-    const HOST: &str = "realm.test";
     const ADMIN: &str = "0x00000000000000000000000000000000000000aa";
 
-    fn lazy_pool() -> PgPool {
-        sqlx::postgres::PgPoolOptions::new()
-            .acquire_timeout(std::time::Duration::from_millis(500))
-            .connect_lazy("postgres://nobody@127.0.0.1:1/nowhere")
-            .unwrap()
-    }
-
     async fn harness(pool: PgPool, writes_enabled: bool) -> (Router, SharedState) {
-        let tmp = std::env::temp_dir().join(format!(
-            "catalyst-admin-content-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        let storage = Arc::new(Storage::from_config(&tmp).await.unwrap());
-        let content = Arc::new(ContentState::new(
-            pool.clone(),
-            ContentSettings::for_tests(),
-            storage,
-        ));
-        let settings = Settings::parse(RawSettings {
-            session_secret: Some("test-secret-key-0123456789".to_string()),
-            admin_addresses: ADMIN.to_string(),
-            session_ttl_secs: 0,
-            cookie_insecure: true,
-            eth_network: "mainnet".to_string(),
-            writes_enabled,
-        });
-        let admin = Arc::new(AdminState::new(
-            pool,
-            settings,
-            content,
-            Arc::new(Jobs::new()),
-            None,
-        ));
+        let admin = Arc::new(admin_state(pool, writes_enabled, ADMIN, None).await);
         (router(admin.clone()), admin)
-    }
-
-    fn cookie(admin: &SharedState, wallet: &str) -> String {
-        format!(
-            "cat_admin={}",
-            session::mint(&admin.settings, wallet).unwrap()
-        )
     }
 
     async fn post(

@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:25+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index dbf1bd72d38e0a3007ecfaef562741fefd9523aa..a1137d9d275881dbff2154439e06b169e6043e7b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -377,3 +377,6 @@ edition = "2021"
+ [workspace.dependencies]
+ serde = { version = "1", features = ["serde_derive"] }
+ mint = "0.5.6"
++
++[lints.rust]
++warnings = "allow"
+diff --git a/dpi/Cargo.toml b/dpi/Cargo.toml
+index 940105504e2dda561b9eb65ca81d6058bcea3022..546e49ccece89517ca1ab5b0be569151e941a7c6 100644
+--- a/dpi/Cargo.toml
++++ b/dpi/Cargo.toml
+@@ -37,3 +37,6 @@ targets = [
+     "wasm32-unknown-unknown",
+ ]
+ rustdoc-args = ["--cfg", "docsrs"]
++
++[lints.rust]
++warnings = "allow"

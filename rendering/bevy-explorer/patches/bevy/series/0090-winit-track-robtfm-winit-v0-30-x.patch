@@ -1,0 +1,19 @@
+From f38fe6fb889220d8c928bdd4ea0322331fe9f8b2
+Subject: winit: track robtfm/winit v0.30.x
+Origin: https://github.com/robtfm/bevy/commit/f38fe6fb889220d8c928bdd4ea0322331fe9f8b2
+Date: 2026-09-23T22:31:39+01:00
+
+The OffscreenCanvas worker support now lives on robtfm/winit (eordano's
+commits plus the worker wake and resize fixes) rather than a rev of
+eordano's fork.
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index ac5f04a38f1832fe0662936b35578f6e5d2e0318..422a9dae116fa1de2f9e7a2f0c84a26960b5328e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -4346,4 +4346,4 @@ category = "Shaders"
+ wasm = false
+ 
+ [patch.crates-io]
+-winit = { git = "https://github.com/eordano/winit", rev = "54e1fbb990c1ccd8cf205127381617509979dcb9" }
++winit = { git = "https://github.com/robtfm/winit", branch = "v0.30.x" }

@@ -1,0 +1,59 @@
+{
+  "repository": "https://github.com/robtfm/boimp",
+  "revision": "dd1953bf0ccb1cbf692b75b000b940fbfeb34f72",
+  "branch": "feat/composite-bake-via-storage-texture",
+  "package": "boimp",
+  "version": "0.1.1",
+  "license": {
+    "spdx": "MIT OR Apache-2.0",
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1"
+      }
+    ]
+  },
+  "normalization": "Exact file bytes of the pinned revision, written from Git objects without a checkout. Repository .gitattributes disables newline conversion for this subtree. upstream-files.sha256 lists every file of the revision, UTF-8 with LF lines and lexicographically sorted repository-relative paths. No Git metadata or Cargo cache marker is imported.",
+  "manifests": {
+    "upstream-files.sha256": "d9a2cb5f790c58c13bc7b3781c7dcf63a23f5d06416d7efa912d53449dd10675"
+  },
+  "omitted": {
+    "reason": "The examples, the sample model only they load, the readme and .gitignore. Cargo builds the library from Cargo.toml and src alone. Each path stays in upstream-files.sha256 with its upstream digest and must be absent here.",
+    "paths": [
+      ".gitignore",
+      "assets/models/FlightHelmet/FlightHelmet.bin",
+      "assets/models/FlightHelmet/FlightHelmet.gltf",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_GlassPlasticMat_BaseColor.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_GlassPlasticMat_Normal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_GlassPlasticMat_OcclusionRoughMetal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_LeatherPartsMat_BaseColor.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_LeatherPartsMat_Normal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_LeatherPartsMat_OcclusionRoughMetal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_LensesMat_BaseColor.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_LensesMat_Normal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_LensesMat_OcclusionRoughMetal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_MetalPartsMat_BaseColor.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_MetalPartsMat_Normal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_MetalPartsMat_OcclusionRoughMetal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_RubberWoodMat_BaseColor.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_RubberWoodMat_Normal.png",
+      "assets/models/FlightHelmet/FlightHelmet_Materials_RubberWoodMat_OcclusionRoughMetal.png",
+      "examples/custom_mesh.rs",
+      "examples/dynamic.rs",
+      "examples/helpers/camera_controller.rs",
+      "examples/load_asset.rs",
+      "examples/save_asset.rs",
+      "readme.md"
+    ]
+  },
+  "update_instructions": [
+    "Import an exact reviewed revision from Git objects (git archive or cat-file), without .git or .cargo-ok. Do not normalize imported files.",
+    "Regenerate upstream-files.sha256 from every file of the revision; record its digest, the revision, the package version and the licence digests here; revise the omitted paths.",
+    "Run python3 tooling/vendor-provenance.py rendering/bevy-explorer/vendor/boimp.",
+    "Review the diff between the two revisions and the dependency list in Cargo.lock before updating the pin."
+  ]
+}

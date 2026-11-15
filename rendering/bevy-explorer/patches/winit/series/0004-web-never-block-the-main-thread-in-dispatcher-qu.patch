@@ -1,0 +1,37 @@
+From 0831f08e21eb105272d3f10fd98326196727b806
+Subject: web: never block the main thread in Dispatcher::queue's result handoff
+Origin: https://github.com/robtfm/winit/commit/0831f08e21eb105272d3f10fd98326196727b806
+Date: 2026-09-19T01:06:36+01:00
+
+The closure that runs on the main thread stored its result under the same
+mutex the queueing worker holds around its condvar wait. Under contention the
+main thread called Atomics.wait, which traps there. Spin for the lock on the
+main-thread side instead; the worker only holds it momentarily outside the wait.
+---
+diff --git a/src/platform_impl/web/async/dispatcher.rs b/src/platform_impl/web/async/dispatcher.rs
+index 1317ed638aa2429ce91a1734110a52f0fa893490..dcad705bac8fba97badb60e0f742ba37c4d7c210 100644
+--- a/src/platform_impl/web/async/dispatcher.rs
++++ b/src/platform_impl/web/async/dispatcher.rs
+@@ -61,7 +61,21 @@ impl<T> Dispatcher<T> {
+             let closure = Box::new({
+                 let pair = pair.clone();
+                 move |value: &T| {
+-                    *pair.0.lock().unwrap() = Some(f(value));
++                    let result = f(value);
++                    // This runs on the main thread, which must never block (`Atomics.wait`
++                    // traps there). The caller only holds the lock while it is not parked in
++                    // the condvar wait, so spin for it instead of contending.
++                    let mut slot = loop {
++                        match pair.0.try_lock() {
++                            Ok(guard) => break guard,
++                            Err(std::sync::TryLockError::WouldBlock) => std::hint::spin_loop(),
++                            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
++                                break poisoned.into_inner()
++                            },
++                        }
++                    };
++                    *slot = Some(result);
++                    drop(slot);
+                     pair.1.notify_one();
+                 }
+             }) as Box<dyn FnOnce(&T) + Send>;

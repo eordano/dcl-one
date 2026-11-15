@@ -1,0 +1,981 @@
+From bd295880c44ace84ea83808e7889b2443a088633
+Subject: feat(web): add opt-in OffscreenCanvas worker support
+Origin: https://github.com/robtfm/winit/commit/bd295880c44ace84ea83808e7889b2443a088633
+Date: 2026-09-18T19:35:03+02:00
+
+Run the application event loop on a dedicated worker while retaining DOM input and window operations on the page. Gate worker state and dispatch behind the disabled-by-default web-worker feature and Wasm atomics.
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index bb4d72ad2ac22297c2c30bfa63d41d325de8c73b..dbf1bd72d38e0a3007ecfaef562741fefd9523aa 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -57,6 +57,7 @@ rustdoc-args = ["--cfg", "docsrs"]
+ 
+ # Features are documented in either `lib.rs` or under `winit::platform`.
+ [features]
++web-worker = ["rwh_06", "web_sys/OffscreenCanvas", "web_sys/DedicatedWorkerGlobalScope"]
+ default = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
+ x11 = ["x11-dl", "bytemuck", "percent-encoding", "xkbcommon-dl/x11", "x11rb"]
+ wayland = [
+diff --git a/build.rs b/build.rs
+index 6a4528b3b6205c0760a939532a8d1bd5c3980b00..3811a253197299b1bfaff094c2eed8b95c37513d 100644
+--- a/build.rs
++++ b/build.rs
+@@ -16,6 +16,8 @@ fn main() {
+         free_unix: { all(unix, not(apple), not(android_platform), not(target_os = "emscripten")) },
+         redox: { target_os = "redox" },
+ 
++        web_worker: { all(web_platform, feature = "web-worker", target_feature = "atomics") },
++
+         // Native displays.
+         x11_platform: { all(feature = "x11", free_unix, not(redox)) },
+         wayland_platform: { all(feature = "wayland", free_unix, not(redox)) },
+diff --git a/src/platform/web.rs b/src/platform/web.rs
+index f257ca416b9ebf621484eb59b2956635b6fa0e1d..3e8f2b03631033b03a4f826fba6d3d70914d0cc4 100644
+--- a/src/platform/web.rs
++++ b/src/platform/web.rs
+@@ -463,3 +463,9 @@ impl Display for CustomCursorError {
+ }
+ 
+ impl Error for CustomCursorError {}
++
++#[cfg(web_worker)]
++pub use crate::platform_impl::worker::{
++    attach_worker, prepare_worker, set_worker_redraw_strategy, worker_attached,
++    WorkerRedrawStrategy,
++};
+diff --git a/src/platform_impl/web/async/dispatcher.rs b/src/platform_impl/web/async/dispatcher.rs
+index 10ab345e44773528aa88ddbb15ca886a397b5794..1317ed638aa2429ce91a1734110a52f0fa893490 100644
+--- a/src/platform_impl/web/async/dispatcher.rs
++++ b/src/platform_impl/web/async/dispatcher.rs
+@@ -104,3 +104,10 @@ impl<T> DispatchRunner<T> {
+         }
+     }
+ }
++
++#[cfg(web_worker)]
++impl<T> Clone for Dispatcher<T> {
++    fn clone(&self) -> Self {
++        Self(self.0.clone())
++    }
++}
+diff --git a/src/platform_impl/web/event_loop/proxy.rs b/src/platform_impl/web/event_loop/proxy.rs
+index bd8e714635ce834f90716e4340934503f9fe1942..b7fe66093ee552315bc0ccff6cba1932d07d97a0 100644
+--- a/src/platform_impl/web/event_loop/proxy.rs
++++ b/src/platform_impl/web/event_loop/proxy.rs
+@@ -6,12 +6,12 @@ use crate::event_loop::EventLoopClosed;
+ use crate::platform_impl::platform::r#async::Waker;
+ 
+ pub struct EventLoopProxy<T: 'static> {
+-    runner: Waker<Weak<Execution>>,
++    runner: ProxyWaker,
+     sender: Sender<T>,
+ }
+ 
+ impl<T: 'static> EventLoopProxy<T> {
+-    pub fn new(runner: Waker<Weak<Execution>>, sender: Sender<T>) -> Self {
++    pub fn new(runner: ProxyWaker, sender: Sender<T>) -> Self {
+         Self { runner, sender }
+     }
+ 
+@@ -27,3 +27,24 @@ impl<T: 'static> Clone for EventLoopProxy<T> {
+         Self { runner: self.runner.clone(), sender: self.sender.clone() }
+     }
+ }
++
++#[cfg(not(web_worker))]
++pub(crate) type ProxyWaker = Waker<Weak<Execution>>;
++
++#[cfg(web_worker)]
++#[derive(Clone)]
++pub(crate) enum ProxyWaker {
++    Page(Waker<Weak<Execution>>),
++    #[cfg(web_worker)]
++    Worker(std::sync::Arc<super::super::worker::Shared>),
++}
++#[cfg(web_worker)]
++impl ProxyWaker {
++    fn wake(&self) {
++        match self {
++            Self::Page(waker) => waker.wake(),
++            #[cfg(web_worker)]
++            Self::Worker(worker) => worker.wake_user(),
++        }
++    }
++}
+diff --git a/src/platform_impl/web/event_loop/runner.rs b/src/platform_impl/web/event_loop/runner.rs
+index d9ba3d37340eae33efd367b0aae4761a682e1f3c..493c07e441c630295fc188b7979062d1436e070f 100644
+--- a/src/platform_impl/web/event_loop/runner.rs
++++ b/src/platform_impl/web/event_loop/runner.rs
+@@ -28,7 +28,7 @@ use crate::window::WindowId;
+ 
+ pub struct Shared(Rc<Execution>);
+ 
+-pub(super) type EventHandler = dyn FnMut(Event<()>);
++pub(crate) type EventHandler = dyn FnMut(Event<()>);
+ 
+ impl Clone for Shared {
+     fn clone(&self) -> Self {
+diff --git a/src/platform_impl/web/event_loop/window_target.rs b/src/platform_impl/web/event_loop/window_target.rs
+index d741f0987249a2ba6528ad36bcfebaff7acdab53..a1666247d514b90d4e23544ca8c38b3a5921f31d 100644
+--- a/src/platform_impl/web/event_loop/window_target.rs
++++ b/src/platform_impl/web/event_loop/window_target.rs
+@@ -3,14 +3,15 @@ use std::clone::Clone;
+ use std::collections::vec_deque::IntoIter as VecDequeIter;
+ use std::collections::VecDeque;
+ use std::iter;
+-use std::rc::{Rc, Weak};
++use std::rc::Rc;
+ 
+ use web_sys::Element;
+ 
+ use super::super::monitor::MonitorHandle;
+ use super::super::KeyEventExtra;
+ use super::device::DeviceId;
+-use super::runner::{EventWrapper, Execution};
++use super::proxy::ProxyWaker;
++use super::runner::EventWrapper;
+ use super::window::WindowId;
+ use super::{backend, runner};
+ use crate::event::{
+@@ -20,7 +21,7 @@ use crate::event_loop::{ControlFlow, DeviceEvents};
+ use crate::keyboard::ModifiersState;
+ use crate::platform::web::{CustomCursorFuture, PollStrategy, WaitUntilStrategy};
+ use crate::platform_impl::platform::cursor::CustomCursor;
+-use crate::platform_impl::platform::r#async::Waker;
++
+ use crate::window::{
+     CustomCursor as RootCustomCursor, CustomCursorSource, Theme, WindowId as RootWindowId,
+ };
+@@ -44,18 +45,57 @@ impl Clone for ModifiersShared {
+     }
+ }
+ 
++#[cfg(web_worker)]
++#[derive(Clone)]
++pub(crate) struct PageRunner(Option<runner::Shared>);
++
++#[cfg(web_worker)]
++impl std::ops::Deref for PageRunner {
++    type Target = runner::Shared;
++
++    fn deref(&self) -> &Self::Target {
++        self.0.as_ref().expect("DOM operation requires the page host")
++    }
++}
++
+ #[derive(Clone)]
+ pub struct ActiveEventLoop {
++    #[cfg(not(web_worker))]
+     pub(crate) runner: runner::Shared,
++    #[cfg(web_worker)]
++    pub(crate) runner: PageRunner,
++    #[cfg(web_worker)]
++    pub(crate) worker: Option<Rc<super::super::worker::WorkerRunner>>,
+     modifiers: ModifiersShared,
+ }
+ 
+ impl ActiveEventLoop {
+     pub fn new() -> Self {
+-        Self { runner: runner::Shared::new(), modifiers: ModifiersShared::default() }
++        #[cfg(web_worker)]
++        if let Some(worker) = super::super::worker::current() {
++            return Self {
++                runner: PageRunner(None),
++                worker: Some(worker),
++                modifiers: ModifiersShared::default(),
++            };
++        }
++        Self {
++            #[cfg(not(web_worker))]
++            runner: runner::Shared::new(),
++            #[cfg(web_worker)]
++            runner: PageRunner(Some(runner::Shared::new())),
++            modifiers: ModifiersShared::default(),
++            #[cfg(web_worker)]
++            worker: None,
++        }
+     }
+ 
+     pub fn run(&self, event_handler: Box<runner::EventHandler>, event_loop_recreation: bool) {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            worker.run(event_handler);
++            return;
++        }
+         self.runner.event_loop_recreation(event_loop_recreation);
+         self.runner.set_listener(event_handler);
+     }
+@@ -65,10 +105,18 @@ impl ActiveEventLoop {
+     }
+ 
+     pub fn create_custom_cursor(&self, source: CustomCursorSource) -> RootCustomCursor {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.create_custom_cursor(source);
++        }
+         RootCustomCursor { inner: CustomCursor::new(self, source.inner) }
+     }
+ 
+     pub fn create_custom_cursor_async(&self, source: CustomCursorSource) -> CustomCursorFuture {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.create_custom_cursor_async(source);
++        }
+         CustomCursorFuture(CustomCursor::new_async(self, source.inner))
+     }
+ 
+@@ -611,10 +659,18 @@ impl ActiveEventLoop {
+     }
+ 
+     pub fn listen_device_events(&self, allowed: DeviceEvents) {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.listen_device_events(allowed);
++        }
+         self.runner.listen_device_events(allowed)
+     }
+ 
+     pub fn system_theme(&self) -> Option<Theme> {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.system_theme();
++        }
+         backend::is_dark_mode(self.runner.window()).map(|is_dark_mode| {
+             if is_dark_mode {
+                 Theme::Dark
+@@ -625,41 +681,82 @@ impl ActiveEventLoop {
+     }
+ 
+     pub(crate) fn set_control_flow(&self, control_flow: ControlFlow) {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.set_control_flow(control_flow);
++        }
+         self.runner.set_control_flow(control_flow)
+     }
+ 
+     pub(crate) fn control_flow(&self) -> ControlFlow {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.control_flow();
++        }
+         self.runner.control_flow()
+     }
+ 
+     pub(crate) fn exit(&self) {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.exit();
++        }
+         self.runner.exit()
+     }
+ 
+     pub(crate) fn exiting(&self) -> bool {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.exiting();
++        }
+         self.runner.exiting()
+     }
+ 
+     pub(crate) fn set_poll_strategy(&self, strategy: PollStrategy) {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.set_poll_strategy(strategy);
++        }
+         self.runner.set_poll_strategy(strategy)
+     }
+ 
+     pub(crate) fn poll_strategy(&self) -> PollStrategy {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.poll_strategy();
++        }
+         self.runner.poll_strategy()
+     }
+ 
+     pub(crate) fn set_wait_until_strategy(&self, strategy: WaitUntilStrategy) {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.set_wait_until_strategy(strategy);
++        }
+         self.runner.set_wait_until_strategy(strategy)
+     }
+ 
+     pub(crate) fn wait_until_strategy(&self) -> WaitUntilStrategy {
++        #[cfg(web_worker)]
++        if let Some(worker) = &self.worker {
++            return worker.wait_until_strategy();
++        }
+         self.runner.wait_until_strategy()
+     }
+ 
+-    pub(crate) fn waker(&self) -> Waker<Weak<Execution>> {
++    #[cfg(not(web_worker))]
++    pub(crate) fn waker(&self) -> ProxyWaker {
+         self.runner.waker()
+     }
+ 
++    #[cfg(web_worker)]
++    pub(crate) fn waker(&self) -> ProxyWaker {
++        if let Some(worker) = &self.worker {
++            return ProxyWaker::Worker(worker.shared.clone());
++        }
++        ProxyWaker::Page(self.runner.waker())
++    }
++
+     pub(crate) fn owned_display_handle(&self) -> OwnedDisplayHandle {
+         OwnedDisplayHandle
+     }
+diff --git a/src/platform_impl/web/mod.rs b/src/platform_impl/web/mod.rs
+index 969d8bb1885bb08ed8cce5c395b66699bee12a88..5005c5dd9c65d75b28eb33ae6d10d96fb6dde998 100644
+--- a/src/platform_impl/web/mod.rs
++++ b/src/platform_impl/web/mod.rs
+@@ -30,6 +30,8 @@ mod main_thread;
+ mod monitor;
+ mod web_sys;
+ mod window;
++#[cfg(web_worker)]
++pub(crate) mod worker;
+ 
+ pub use self::device::DeviceId;
+ pub use self::error::OsError;
+diff --git a/src/platform_impl/web/window.rs b/src/platform_impl/web/window.rs
+index a70126ed3051d35cc5c6ef233db5db72e4f71cbb..a0424a5ec217b376d4259e8fb57cd2f7841b9867 100644
+--- a/src/platform_impl/web/window.rs
++++ b/src/platform_impl/web/window.rs
+@@ -18,7 +18,9 @@ use std::rc::Rc;
+ use std::sync::Arc;
+ 
+ pub struct Window {
+-    inner: Dispatcher<Inner>,
++    pub(crate) inner: Dispatcher<Inner>,
++    #[cfg(web_worker)]
++    pub(crate) worker_id: Option<u32>,
+ }
+ 
+ pub struct Inner {
+@@ -33,6 +35,10 @@ impl Window {
+         target: &ActiveEventLoop,
+         mut attr: WindowAttributes,
+     ) -> Result<Self, RootOE> {
++        #[cfg(web_worker)]
++        if let Some(worker) = &target.worker {
++            return worker.create_window(attr);
++        }
+         let id = target.generate_id();
+ 
+         let window = target.runner.window();
+@@ -63,7 +69,23 @@ impl Window {
+         let (dispatcher, runner) = Dispatcher::new(target.runner.main_thread(), inner).unwrap();
+         target.runner.add_canvas(RootWI(id), canvas, runner);
+ 
+-        Ok(Window { inner: dispatcher })
++        Ok(Window {
++            inner: dispatcher,
++            #[cfg(web_worker)]
++            worker_id: None,
++        })
++    }
++
++    #[cfg(web_worker)]
++    pub(crate) fn request_worker_redraw(&self) -> bool {
++        #[cfg(web_worker)]
++        if let Some(id) = self.worker_id {
++            if let Some(worker) = super::worker::current().filter(|worker| worker.host_id() == id) {
++                worker.request_redraw();
++                return true;
++            }
++        }
++        false
+     }
+ 
+     pub(crate) fn maybe_queue_on_main(&self, f: impl FnOnce(&Inner) + Send + 'static) {
+@@ -89,6 +111,11 @@ impl Window {
+     #[cfg(feature = "rwh_06")]
+     #[inline]
+     pub fn raw_window_handle_rwh_06(&self) -> Result<rwh_06::RawWindowHandle, rwh_06::HandleError> {
++        #[cfg(web_worker)]
++        if let Some(id) = self.worker_id {
++            return super::worker::window_handle(id);
++        }
++
+         self.inner
+             .value()
+             .map(|inner| {
+@@ -112,6 +139,46 @@ impl Window {
+ }
+ 
+ impl Inner {
++    #[cfg(web_worker)]
++    pub(crate) fn apply_worker_attributes(&self, attributes: WindowAttributes) {
++        {
++            let canvas = self.canvas.borrow();
++            canvas.prevent_default.set(attributes.platform_specific.prevent_default);
++            if attributes.platform_specific.focusable {
++                canvas.set_attribute("tabindex", "0");
++            } else {
++                let _ = canvas.raw().remove_attribute("tabindex");
++                let _ = canvas.raw().blur();
++            }
++            if attributes.platform_specific.append
++                && !canvas.document().contains(Some(canvas.raw()))
++            {
++                canvas
++                    .document()
++                    .body()
++                    .expect("document body")
++                    .append_child(canvas.raw())
++                    .expect("append worker canvas");
++            }
++        }
++        if let Some(size) = attributes.inner_size {
++            self.request_inner_size(size);
++        }
++        self.set_min_inner_size(attributes.min_inner_size);
++        self.set_max_inner_size(attributes.max_inner_size);
++        if let Some(position) = attributes.position {
++            self.set_outer_position(position);
++        }
++        self.set_title(&attributes.title);
++        self.set_cursor(attributes.cursor);
++        if attributes.fullscreen.is_some() {
++            self.set_fullscreen(Some(Fullscreen::Borderless(None)));
++        }
++        if attributes.active && attributes.platform_specific.focusable {
++            self.focus_window();
++        }
++    }
++
+     pub fn set_title(&self, title: &str) {
+         self.canvas.borrow().set_attribute("alt", title)
+     }
+@@ -304,6 +371,10 @@ impl Inner {
+         if fullscreen.is_some() {
+             canvas.request_fullscreen();
+         } else {
++            #[cfg(web_worker)]
++            if !canvas.is_fullscreen() {
++                return;
++            }
+             canvas.exit_fullscreen()
+         }
+     }
+diff --git a/src/platform_impl/web/worker.rs b/src/platform_impl/web/worker.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..682cf6e9e2175054aac09307c556ff87fa0a45af
+--- /dev/null
++++ b/src/platform_impl/web/worker.rs
+@@ -0,0 +1,495 @@
++//! A page-owned window with an application event loop on a dedicated worker.
++//!
++//! The host and worker instantiate the same atomics-enabled Wasm module and
++//! memory. Only the OffscreenCanvas crosses the JavaScript message boundary;
++//! events and the existing DOM command dispatcher travel through Rust memory.
++
++use std::cell::{Cell, RefCell};
++use std::collections::BTreeMap;
++use std::future::poll_fn;
++use std::rc::Rc;
++use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
++use std::sync::{Arc, Mutex, OnceLock};
++use std::task::Poll;
++
++use atomic_waker::AtomicWaker;
++use concurrent_queue::ConcurrentQueue;
++use wasm_bindgen::closure::Closure;
++use wasm_bindgen::{JsCast, JsValue};
++use web_sys::{
++    DedicatedWorkerGlobalScope, HtmlCanvasElement, MessageChannel, MessagePort, OffscreenCanvas,
++};
++use web_time::Instant;
++
++use super::event_loop::runner::EventHandler;
++use super::main_thread::MainThreadMarker;
++use super::r#async::Dispatcher;
++use super::{ActiveEventLoop, Window};
++use crate::dpi::PhysicalSize;
++use crate::event::{Event, StartCause, WindowEvent};
++use crate::event_loop::{ControlFlow, DeviceEvents};
++use crate::platform::web::{PollStrategy, WaitUntilStrategy, WindowAttributesExtWebSys};
++use crate::window::{WindowAttributes, WindowId};
++
++static NEXT_HOST: AtomicU32 = AtomicU32::new(1);
++static HOSTS: OnceLock<Mutex<BTreeMap<u32, Arc<Shared>>>> = OnceLock::new();
++
++thread_local! {
++    static WORKER: RefCell<Option<Rc<WorkerRunner>>> = const { RefCell::new(None) };
++}
++
++struct ForwardedEvent {
++    event: Event<()>,
++    // Winit's normal scale-change callback owns this only until it returns.
++    // Retain it through worker delivery, then apply the application's reply
++    // using the existing page-side window dispatcher.
++    size_reply: Option<(Arc<Mutex<PhysicalSize<u32>>>, PhysicalSize<u32>)>,
++}
++
++pub(crate) struct Shared {
++    host: Dispatcher<ActiveEventLoop>,
++    window: Window,
++    window_id: WindowId,
++    events: ConcurrentQueue<ForwardedEvent>,
++    notified: AtomicBool,
++    user_events: AtomicUsize,
++    closed: AtomicBool,
++    waker: AtomicWaker,
++}
++
++impl Shared {
++    fn notify(&self) {
++        self.notified.store(true, Ordering::Release);
++        self.waker.wake();
++    }
++
++    pub(crate) fn wake_user(&self) {
++        if !self.closed.load(Ordering::Acquire) {
++            self.user_events.fetch_add(1, Ordering::Release);
++            self.notify();
++        }
++    }
++
++    fn forward(&self, event: Event<()>) {
++        if self.closed.load(Ordering::Acquire) {
++            return;
++        }
++        let size_reply = match &event {
++            Event::WindowEvent {
++                event: WindowEvent::ScaleFactorChanged { inner_size_writer, .. },
++                ..
++            } => inner_size_writer.new_inner_size.upgrade().map(|size| {
++                let initial = *size.lock().unwrap();
++                (size, initial)
++            }),
++            _ => None,
++        };
++        match event {
++            Event::NewEvents(_) | Event::AboutToWait => return,
++            _ => (),
++        }
++        let _ = self.events.push(ForwardedEvent { event, size_reply });
++        self.notify();
++    }
++}
++
++/// Prepare one page canvas for an application hosted in a dedicated worker.
++/// Transfer the returned canvas with `postMessage`, and call `attach_worker`
++/// there before building the application's event loop. Both instances must
++/// use the same Wasm module and shared memory. No rendering context may have
++/// been created on the HTML canvas before this call.
++pub fn prepare_worker(canvas: HtmlCanvasElement) -> Result<(u32, OffscreenCanvas), JsValue> {
++    let marker =
++        MainThreadMarker::new().ok_or_else(|| JsValue::from_str("worker host requires a page"))?;
++    let target = ActiveEventLoop::new();
++    let attributes = WindowAttributes::default().with_canvas(Some(canvas.clone()));
++    let window =
++        Window::new(&target, attributes).map_err(|error| JsValue::from_str(&error.to_string()))?;
++    let offscreen = canvas.transfer_control_to_offscreen()?;
++    let window_id = WindowId(window.inner.queue(|window| window.id()));
++    let (host, dispatcher) = Dispatcher::new(marker, target.clone()).unwrap();
++    let shared = Arc::new(Shared {
++        host,
++        window,
++        window_id,
++        events: ConcurrentQueue::unbounded(),
++        notified: AtomicBool::new(false),
++        user_events: AtomicUsize::new(0),
++        closed: AtomicBool::new(false),
++        waker: AtomicWaker::new(),
++    });
++    let id = NEXT_HOST.fetch_add(1, Ordering::Relaxed);
++    HOSTS.get_or_init(Mutex::default).lock().unwrap().insert(id, shared.clone());
++    let mut initial_resume = true;
++    target.run(
++        Box::new(move |event| {
++            let _keep_alive = &dispatcher;
++            if matches!(event, Event::Resumed) && std::mem::take(&mut initial_resume) {
++                return;
++            }
++            shared.forward(event);
++        }),
++        false,
++    );
++    Ok((id, offscreen))
++}
++
++/// Attach a prepared canvas to its owning worker. This does not transfer
++/// JavaScript handles through Rust memory and does not relax the page-only
++/// checks on the existing DOM wrappers.
++pub fn attach_worker(id: u32, canvas: OffscreenCanvas) -> Result<(), JsValue> {
++    if MainThreadMarker::new().is_some()
++        || !js_sys::global().is_instance_of::<DedicatedWorkerGlobalScope>()
++    {
++        return Err(JsValue::from_str("attach_worker requires a dedicated worker"));
++    }
++    WORKER.with(|slot| {
++        if slot.borrow().is_some() {
++            return Err(JsValue::from_str("a worker window is already attached"));
++        }
++        let shared = HOSTS
++            .get()
++            .and_then(|hosts| hosts.lock().unwrap().remove(&id))
++            .ok_or_else(|| JsValue::from_str("unknown or already attached worker host"))?;
++        *slot.borrow_mut() = Some(Rc::new(WorkerRunner {
++            id,
++            shared,
++            canvas: Box::new(canvas.into()),
++            handler: RefCell::new(None),
++            control: Cell::new(ControlFlow::Wait),
++            poll: Cell::new(PollStrategy::default()),
++            wait: Cell::new(WaitUntilStrategy::default()),
++            exit: Cell::new(false),
++            running: Cell::new(false),
++            window_claimed: Cell::new(false),
++            redraw: Cell::new(false),
++            redraw_strategy: Cell::new(WorkerRedrawStrategy::AnimationFrame),
++            waiting_since: Cell::new(Instant::now()),
++            timer: RefCell::new(None),
++            frame: RefCell::new(None),
++        }));
++        Ok(())
++    })
++}
++
++pub(crate) fn current() -> Option<Rc<WorkerRunner>> {
++    WORKER.with(|slot| slot.borrow().clone())
++}
++
++/// Whether the current worker has an attached page canvas.
++pub fn worker_attached() -> bool {
++    current().is_some()
++}
++
++/// How an attached worker schedules requested redraws. This controls application
++/// pacing, not the browser compositor's presentation mode.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum WorkerRedrawStrategy {
++    /// Follow dedicated-worker animation frames (the default).
++    #[default]
++    AnimationFrame,
++    /// Yield through a message task without waiting for a display refresh.
++    /// Browsers may still throttle or suspend background workers.
++    Immediate,
++}
++
++/// Change redraw pacing on the owning worker. Returns false outside an attached
++/// worker. A pending redraw is rescheduled, so changes also wake a paused rAF.
++pub fn set_worker_redraw_strategy(strategy: WorkerRedrawStrategy) -> bool {
++    let Some(runner) = current() else { return false };
++    if runner.redraw_strategy.replace(strategy) != strategy {
++        let pending = runner.frame.borrow_mut().take().is_some();
++        if pending {
++            runner.request_redraw();
++        }
++    }
++    true
++}
++
++#[cfg(feature = "rwh_06")]
++pub(crate) fn window_handle(id: u32) -> Result<rwh_06::RawWindowHandle, rwh_06::HandleError> {
++    let runner =
++        current().filter(|runner| runner.id == id).ok_or(rwh_06::HandleError::Unavailable)?;
++    let pointer = std::ptr::NonNull::from(runner.canvas.as_ref()).cast();
++    Ok(rwh_06::WebOffscreenCanvasWindowHandle::new(pointer).into())
++}
++
++pub(crate) struct WorkerRunner {
++    id: u32,
++    pub(crate) shared: Arc<Shared>,
++    // Kept in the owning worker's TLS for its lifetime, including after loop
++    // exit: a surface retained by the application may outlive the event loop.
++    canvas: Box<JsValue>,
++    handler: RefCell<Option<Box<EventHandler>>>,
++    control: Cell<ControlFlow>,
++    poll: Cell<PollStrategy>,
++    wait: Cell<WaitUntilStrategy>,
++    exit: Cell<bool>,
++    running: Cell<bool>,
++    window_claimed: Cell<bool>,
++    redraw: Cell<bool>,
++    redraw_strategy: Cell<WorkerRedrawStrategy>,
++    waiting_since: Cell<Instant>,
++    timer: RefCell<Option<Callback>>,
++    frame: RefCell<Option<Callback>>,
++}
++
++impl WorkerRunner {
++    pub(crate) fn host_id(&self) -> u32 {
++        self.id
++    }
++    pub(crate) fn create_window(
++        &self,
++        attributes: WindowAttributes,
++    ) -> Result<Window, crate::error::OsError> {
++        if self.window_claimed.replace(true) {
++            return Err(os_error!(super::OsError(
++                "worker mode supports one pre-created canvas".into()
++            )));
++        }
++        self.shared.window.maybe_queue_on_main(move |window| {
++            window.apply_worker_attributes(attributes);
++        });
++        Ok(Window { inner: self.shared.window.inner.clone(), worker_id: Some(self.id) })
++    }
++
++    pub(crate) fn run(self: &Rc<Self>, handler: Box<EventHandler>) {
++        assert!(self.handler.borrow().is_none(), "worker event loop already running");
++        *self.handler.borrow_mut() = Some(handler);
++        self.cycle(StartCause::Init);
++        let runner = Rc::downgrade(self);
++        let shared = self.shared.clone();
++        wasm_bindgen_futures::spawn_local(async move {
++            loop {
++                poll_fn(|cx| {
++                    shared.waker.register(cx.waker());
++                    if shared.notified.swap(false, Ordering::AcqRel)
++                        || shared.closed.load(Ordering::Acquire)
++                    {
++                        Poll::Ready(())
++                    } else {
++                        Poll::Pending
++                    }
++                })
++                .await;
++                if shared.closed.load(Ordering::Acquire) {
++                    break;
++                }
++                let Some(runner) = runner.upgrade() else { break };
++                runner.cycle(runner.wake_cause());
++            }
++        });
++    }
++
++    fn emit(&self, event: Event<()>) {
++        if let Some(handler) = self.handler.borrow_mut().as_mut() {
++            handler(event);
++        }
++    }
++
++    fn cycle(self: &Rc<Self>, cause: StartCause) {
++        if self.shared.closed.load(Ordering::Acquire) || self.running.replace(true) {
++            return;
++        }
++        self.timer.borrow_mut().take();
++        self.emit(Event::NewEvents(cause));
++        if matches!(cause, StartCause::Init) {
++            self.emit(Event::Resumed);
++        }
++        while let Ok(forwarded) = self.shared.events.pop() {
++            if matches!(forwarded.event, Event::LoopExiting) {
++                self.exit.set(true);
++                break;
++            }
++            self.emit(forwarded.event);
++            if let Some((size, initial)) = forwarded.size_reply {
++                let reply = *size.lock().unwrap();
++                if reply != initial {
++                    self.shared.window.maybe_queue_on_main(move |window| {
++                        window.request_inner_size(reply.into());
++                    });
++                }
++            }
++        }
++        for _ in 0..self.shared.user_events.swap(0, Ordering::AcqRel) {
++            self.emit(Event::UserEvent(()));
++        }
++        if self.redraw.replace(false) {
++            let window_id = self.shared.window_id;
++            self.emit(Event::WindowEvent { window_id, event: WindowEvent::RedrawRequested });
++        }
++        self.emit(Event::AboutToWait);
++        self.running.set(false);
++        if self.exit.get() {
++            self.shared.closed.store(true, Ordering::Release);
++            self.shared.notify();
++            self.frame.borrow_mut().take();
++            self.emit(Event::LoopExiting);
++            self.handler.borrow_mut().take();
++            self.shared.host.dispatch(|host| {
++                host.exit();
++                host.runner.poll();
++            });
++            return;
++        }
++        let start = Instant::now();
++        self.waiting_since.set(start);
++        let delay = match self.control.get() {
++            ControlFlow::Wait => return,
++            ControlFlow::Poll => 0,
++            ControlFlow::WaitUntil(deadline) => {
++                let micros = deadline.saturating_duration_since(start).as_micros();
++                ((micros + 999) / 1000).min(i32::MAX as u128) as i32
++            },
++        };
++        let weak = Rc::downgrade(self);
++        let callback = move || {
++            if let Some(runner) = weak.upgrade() {
++                runner.cycle(runner.wake_cause());
++            }
++        };
++        *self.timer.borrow_mut() = Some(if delay == 0 {
++            Callback::immediate(callback)
++        } else {
++            Callback::timeout(delay, callback)
++        });
++    }
++
++    fn wake_cause(&self) -> StartCause {
++        let start = self.waiting_since.get();
++        match self.control.get() {
++            ControlFlow::Poll => StartCause::Poll,
++            ControlFlow::Wait => StartCause::WaitCancelled { start, requested_resume: None },
++            ControlFlow::WaitUntil(deadline) if deadline <= Instant::now() => {
++                StartCause::ResumeTimeReached { start, requested_resume: deadline }
++            },
++            ControlFlow::WaitUntil(deadline) => {
++                StartCause::WaitCancelled { start, requested_resume: Some(deadline) }
++            },
++        }
++    }
++
++    pub(crate) fn request_redraw(self: &Rc<Self>) {
++        if self.frame.borrow().is_some() || self.exit.get() {
++            return;
++        }
++        let weak = Rc::downgrade(self);
++        let callback = move || {
++            if let Some(runner) = weak.upgrade() {
++                runner.frame.borrow_mut().take();
++                runner.redraw.set(true);
++                runner.cycle(runner.wake_cause());
++            }
++        };
++        *self.frame.borrow_mut() = Some(match self.redraw_strategy.get() {
++            WorkerRedrawStrategy::AnimationFrame => Callback::frame(callback),
++            WorkerRedrawStrategy::Immediate => Callback::immediate(callback),
++        });
++    }
++
++    pub(crate) fn control_flow(&self) -> ControlFlow {
++        self.control.get()
++    }
++    pub(crate) fn set_control_flow(&self, flow: ControlFlow) {
++        self.control.set(flow);
++    }
++    pub(crate) fn exit(&self) {
++        self.exit.set(true);
++        self.shared.notify();
++    }
++    pub(crate) fn exiting(&self) -> bool {
++        self.exit.get()
++    }
++    pub(crate) fn poll_strategy(&self) -> PollStrategy {
++        self.poll.get()
++    }
++    pub(crate) fn set_poll_strategy(&self, strategy: PollStrategy) {
++        self.poll.set(strategy);
++    }
++    pub(crate) fn wait_until_strategy(&self) -> WaitUntilStrategy {
++        self.wait.get()
++    }
++    pub(crate) fn set_wait_until_strategy(&self, strategy: WaitUntilStrategy) {
++        self.wait.set(strategy);
++    }
++    pub(crate) fn listen_device_events(&self, allowed: DeviceEvents) {
++        self.shared.host.dispatch(move |host| host.listen_device_events(allowed));
++    }
++    pub(crate) fn system_theme(&self) -> Option<crate::window::Theme> {
++        self.shared.host.queue(|host| host.system_theme())
++    }
++    pub(crate) fn create_custom_cursor(
++        &self,
++        source: crate::window::CustomCursorSource,
++    ) -> crate::window::CustomCursor {
++        self.shared.host.queue(move |host| host.create_custom_cursor(source))
++    }
++    pub(crate) fn create_custom_cursor_async(
++        &self,
++        source: crate::window::CustomCursorSource,
++    ) -> crate::platform::web::CustomCursorFuture {
++        self.shared.host.queue(move |host| host.create_custom_cursor_async(source))
++    }
++}
++
++struct Callback {
++    global: DedicatedWorkerGlobalScope,
++    handle: i32,
++    frame: bool,
++    port: Option<MessagePort>,
++    _closure: Closure<dyn FnMut()>,
++}
++
++impl Callback {
++    fn immediate(callback: impl FnMut() + 'static) -> Self {
++        let global = js_sys::global().unchecked_into();
++        let channel = MessageChannel::new().expect("worker message channel");
++        let port = channel.port1();
++        let closure = Closure::new(callback);
++        port.set_onmessage(Some(closure.as_ref().unchecked_ref()));
++        channel.port2().post_message(&JsValue::UNDEFINED).expect("worker message task");
++        Self { global, handle: 0, frame: false, port: Some(port), _closure: closure }
++    }
++
++    fn timeout(delay: i32, callback: impl FnMut() + 'static) -> Self {
++        let global: DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
++        let closure = Closure::new(callback);
++        let handle = global
++            .set_timeout_with_callback_and_timeout_and_arguments_0(
++                closure.as_ref().unchecked_ref(),
++                delay,
++            )
++            .expect("worker timer");
++        Self { global, handle, frame: false, port: None, _closure: closure }
++    }
++
++    fn frame(callback: impl FnMut() + 'static) -> Self {
++        let global: DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
++        let closure = Closure::new(callback);
++        match global.request_animation_frame(closure.as_ref().unchecked_ref()) {
++            Ok(handle) => Self { global, handle, frame: true, port: None, _closure: closure },
++            Err(_) => {
++                let handle = global
++                    .set_timeout_with_callback_and_timeout_and_arguments_0(
++                        closure.as_ref().unchecked_ref(),
++                        16,
++                    )
++                    .expect("worker frame timer");
++                Self { global, handle, frame: false, port: None, _closure: closure }
++            },
++        }
++    }
++}
++
++impl Drop for Callback {
++    fn drop(&mut self) {
++        if let Some(port) = &self.port {
++            port.set_onmessage(None);
++            port.close();
++        } else if self.frame {
++            let _ = self.global.cancel_animation_frame(self.handle);
++        } else {
++            self.global.clear_timeout_with_handle(self.handle);
++        }
++    }
++}
+diff --git a/src/window.rs b/src/window.rs
+index 0db22bb327276b7726d1d432b8aa08337075ae6e..5ade554f6b75ed89ab296611ccafc901f70420d5 100644
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -595,6 +595,11 @@ impl Window {
+     /// [`WindowEvent::RedrawRequested`]: crate::event::WindowEvent::RedrawRequested
+     #[inline]
+     pub fn request_redraw(&self) {
++        #[cfg(web_worker)]
++        if self.window.request_worker_redraw() {
++            return;
++        }
++
+         let _span = tracing::debug_span!("winit::Window::request_redraw",).entered();
+ 
+         self.window.maybe_queue_on_main(|w| w.request_redraw())

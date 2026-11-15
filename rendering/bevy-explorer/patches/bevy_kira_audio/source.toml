@@ -1,0 +1,12 @@
+name       = "bevy_kira_audio"
+upstream   = "https://github.com/NiklasEi/bevy_kira_audio"
+commit     = "e860c2f537ded91055bc585c2c4bc50788ded1f7"
+ref        = "v0.23.0"
+origin     = "https://github.com/robtfm/bevy_kira_audio"
+origin_rev = "a399357a9d8b0a155727086a26ad75970886d52a"
+license    = "MIT OR Apache-2.0"
+paths      = ["."]
+exclude    = []
+base_tree  = "babd5f2a2e45736711e3791fd7712fd14668c129"
+tree       = "ab49db086de3f13da4e764d55411b5dfbbcef681"
+nix_hash   = "sha256-Ert6kDhCiBWOzZv7vTNiB0MlKl3jWgrpyZ1vhJ2bM7Y="

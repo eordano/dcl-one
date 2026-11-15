@@ -1,0 +1,281 @@
+From 86b444d4753e3099c5c5fd4fce4b974e13c4dfb4
+Subject: use dcl bevy + propagate
+Origin: https://github.com/robtfm/bevy_ecss/commit/86b444d4753e3099c5c5fd4fce4b974e13c4dfb4
+Date: 2025-06-09T17:19:20+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index b9424675cc796f9726a177c7edff65c00d426fa2..94f19af9a5ad23cef265c3e7d24381df9c6942a0 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,7 +12,7 @@ repository = "https://github.com/afonsolage/bevy_ecss"
+ 
+ [dependencies]
+ 
+-bevy = { version = "0.16", default-features = false, features = [
++bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.16-dcl", default-features = false, features = [
+     "std",
+     "bevy_log",
+     "bevy_ui",
+@@ -27,7 +27,7 @@ thiserror = "1.0.50"
+ ahash = "*"
+ 
+ [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+-bevy = { version = "0.16", default-features = false, features = [
++bevy = { git = "https://github.com/robtfm/bevy", branch = "release-0.16-dcl", default-features = false, features = [
+     "std",
+     "bevy_log",
+     "bevy_ui",
+@@ -64,3 +64,6 @@ path = "examples/alpha.rs"
+ [[example]]
+ name = "interactive"
+ path = "examples/interactive.rs"
++
++# [patch."https://github.com/robtfm/bevy"]
++# bevy = { path = "../bevy" }
+diff --git a/examples/alpha.rs b/examples/alpha.rs
+index 71d6ca0008225727efcd44fb593f2747907cd0d0..2709f7e72d8dca9ffe3cd3d7305ee942f4ba8971 100644
+--- a/examples/alpha.rs
++++ b/examples/alpha.rs
+@@ -69,7 +69,6 @@ impl Property for AlphaProperty {
+         cache: &Self::Cache,
+         mut components: QueryItem<Self::Components>,
+         _asset_server: &AssetServer,
+-        _: &mut TextUiWriter,
+         _commands: &mut Commands,
+     ) {
+         components.0.set_alpha(*cache);
+diff --git a/src/lib.rs b/src/lib.rs
+index 4ff425f99381cbadfe0ec9d69741686493e52c3a..86d15abc7d019825ff61127c57c219b1c9a0cf05 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,16 +10,12 @@ mod system;
+ use std::{error::Error, fmt::Display};
+ 
+ use bevy::{
+-    app::First,
+-    asset::AssetEvents,
+-    ecs::{schedule::IntoScheduleConfigs, system::SystemState},
+-    prelude::{
++    app::{First, HierarchyPropagatePlugin}, asset::AssetEvents, ecs::{query::Or, schedule::IntoScheduleConfigs, system::SystemState}, prelude::{
+         AssetApp, Button, Component, Entity, Plugin, PostUpdate, PreUpdate, Query, SystemSet, With,
+-    },
+-    ui::{
++    }, text::{TextColor, TextFont, TextSpan}, ui::{
+         widget::{ImageNode, Text},
+         BackgroundColor, ComputedNode, Interaction, Node,
+-    },
++    }
+ };
+ 
+ use property::StyleSheetState;
+@@ -135,6 +131,11 @@ impl Plugin for EcssPlugin {
+             app.configure_sets(First, EcssHotReload.in_set(AssetEvents))
+                 .add_systems(First, system::hot_reload_style_sheets.in_set(EcssHotReload));
+         }
++
++        app.add_plugins((
++            HierarchyPropagatePlugin::<TextFont, Or<(With<Text>, With<TextSpan>)>>::default(),
++            HierarchyPropagatePlugin::<TextColor, Or<(With<Text>, With<TextSpan>)>>::default(),
++        ));
+     }
+ }
+ 
+diff --git a/src/property/impls.rs b/src/property/impls.rs
+index e8b90037cf1f442415fa8aca251c8887a748af9e..d059518bef9efdb2bed0f3957e4219514309d7c2 100644
+--- a/src/property/impls.rs
++++ b/src/property/impls.rs
+@@ -43,7 +43,6 @@ mod style {
+                     cache: &Self::Cache,
+                     mut components: QueryItem<Self::Components>,
+                     _asset_server: &AssetServer,
+-                    _writer: &mut TextUiWriter,
+                     _commands: &mut Commands,
+                 ) {
+                     components.$style_prop$(.$style_field)? = *cache;
+@@ -89,7 +88,6 @@ mod style {
+                     cache: &Self::Cache,
+                     mut components: QueryItem<Self::Components>,
+                     _asset_server: &AssetServer,
+-                    _writer: &mut TextUiWriter,
+                     _commands: &mut Commands,
+                 ) {
+                     components.$style_prop$(.$style_field)? = *cache;
+@@ -169,7 +167,6 @@ mod style {
+                     cache: &Self::Cache,
+                     mut components: QueryItem<Self::Components>,
+                     _asset_server: &AssetServer,
+-                    _writer: &mut TextUiWriter,
+                     _commands: &mut Commands,
+                 ) {
+                     components.$style_prop$(.$style_field)? = *cache;
+@@ -249,6 +246,8 @@ mod style {
+ 
+ /// Impls for `bevy_text` [`Text`] component
+ mod text {
++    use bevy::app::Propagate;
++
+     use super::*;
+ 
+     /// Applies the `color` property on [`TextStyle::color`](`TextStyle`) field of all sections on matched [`Text`] components.
+@@ -274,12 +273,11 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            components: QueryItem<Self::Components>,
++            entity: QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
+-            writer: &mut TextUiWriter,
+-            _commands: &mut Commands,
++            commands: &mut Commands,
+         ) {
+-            writer.for_each_color(components, |mut c| c.0 = *cache);
++            commands.entity(entity).try_insert(Propagate(TextColor(*cache)));
+         }
+     }
+ 
+@@ -289,7 +287,7 @@ mod text {
+ 
+     impl Property for FontProperty {
+         type Cache = String;
+-        type Components = Entity;
++        type Components = (Entity, &'static TextFont);
+         type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+@@ -306,12 +304,11 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            components: QueryItem<Self::Components>,
++            (entity, font): QueryItem<Self::Components>,
+             asset_server: &AssetServer,
+-            writer: &mut TextUiWriter,
+-            _commands: &mut Commands,
++            commands: &mut Commands,
+         ) {
+-            writer.for_each_font(components, |mut f| f.font = asset_server.load(cache));
++            commands.entity(entity).try_insert(Propagate(font.clone().with_font(asset_server.load(cache))));
+         }
+     }
+ 
+@@ -321,7 +318,7 @@ mod text {
+ 
+     impl Property for FontSizeProperty {
+         type Cache = f32;
+-        type Components = Entity;
++        type Components = (Entity, &'static TextFont);
+         type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+@@ -338,12 +335,11 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            components: QueryItem<Self::Components>,
++            (entity, font): QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
+-            writer: &mut TextUiWriter,
+-            _commands: &mut Commands,
++            commands: &mut Commands,
+         ) {
+-            writer.for_each_font(components, |mut f| f.font_size = *cache);
++            commands.entity(entity).try_insert(Propagate(font.clone().with_font_size(*cache)));
+         }
+     }
+ 
+@@ -377,7 +373,6 @@ mod text {
+             cache: &Self::Cache,
+             mut components: QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
+-            _writer: &mut TextUiWriter,
+             _commands: &mut Commands,
+         ) {
+             components.justify = cache.expect("Should always have a inner value");
+@@ -390,7 +385,7 @@ mod text {
+ 
+     impl Property for TextContentProperty {
+         type Cache = String;
+-        type Components = Entity;
++        type Components = &'static mut Text;
+         type Filters = With<ComputedNode>;
+ 
+         fn name() -> &'static str {
+@@ -407,14 +402,11 @@ mod text {
+ 
+         fn apply<'w>(
+             cache: &Self::Cache,
+-            components: QueryItem<Self::Components>,
++            mut component: QueryItem<Self::Components>,
+             _asset_server: &AssetServer,
+-            writer: &mut TextUiWriter,
+             _commands: &mut Commands,
+         ) {
+-            writer.for_each_text(components, |mut s| {
+-                s.clone_from(cache);
+-            });
++            component.0.clone_from(cache);
+         }
+     }
+ }
+@@ -444,7 +436,6 @@ impl Property for BackgroundColorProperty {
+         cache: &Self::Cache,
+         components: QueryItem<Self::Components>,
+         _asset_server: &AssetServer,
+-        _writer: &mut TextUiWriter,
+         commands: &mut Commands,
+     ) {
+         commands.entity(components).insert(BackgroundColor(*cache));
+@@ -476,7 +467,6 @@ impl Property for BorderColorProperty {
+         cache: &Self::Cache,
+         components: QueryItem<Self::Components>,
+         _asset_server: &AssetServer,
+-        _writer: &mut TextUiWriter,
+         commands: &mut Commands,
+     ) {
+         commands.entity(components).insert(BorderColor(*cache));
+@@ -508,7 +498,6 @@ impl Property for ImageProperty {
+         cache: &Self::Cache,
+         mut components: QueryItem<Self::Components>,
+         asset_server: &AssetServer,
+-        _writer: &mut TextUiWriter,
+         _commands: &mut Commands,
+     ) {
+         components.image = asset_server.load(cache);
+diff --git a/src/property/mod.rs b/src/property/mod.rs
+index 85eb55649c20107759e6b0018399c39520339f6e..3362659faeaa48fb484732489e6269e97112bc57 100644
+--- a/src/property/mod.rs
++++ b/src/property/mod.rs
+@@ -8,7 +8,7 @@ use bevy::{
+         AssetId, AssetServer, Assets, Color, Commands, Deref, DerefMut, Entity, Local, Query, Res,
+         Resource,
+     },
+-    ui::{widget::TextUiWriter, UiRect, Val},
++    ui::{UiRect, Val},
+ };
+ 
+ use cssparser::Token;
+@@ -340,7 +340,6 @@ pub trait Property: Default + Sized + Send + Sync + 'static {
+         cache: &Self::Cache,
+         components: QueryItem<Self::Components>,
+         asset_server: &AssetServer,
+-        text_writer: &mut TextUiWriter,
+         commands: &mut Commands,
+     );
+ 
+@@ -355,7 +354,6 @@ pub trait Property: Default + Sized + Send + Sync + 'static {
+         mut q_nodes: Query<Self::Components, Self::Filters>,
+         asset_server: Res<AssetServer>,
+         mut commands: Commands,
+-        mut writer: TextUiWriter,
+     ) {
+         for (asset_id, _, selected) in apply_sheets.iter() {
+             if let Some(rules) = assets.get(*asset_id) {
+@@ -373,7 +371,6 @@ pub trait Property: Default + Sized + Send + Sync + 'static {
+                                     cached,
+                                     components,
+                                     &asset_server,
+-                                    &mut writer,
+                                     &mut commands,
+                                 );
+                             }

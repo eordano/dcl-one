@@ -1,0 +1,28 @@
+From 140c74769d0ecceff78997542392afac95fe6ca3
+Subject: audio linesize[0]
+Origin: https://github.com/robtfm/rust-ffmpeg/commit/140c74769d0ecceff78997542392afac95fe6ca3
+Date: 2023-07-19T13:44:16+01:00
+
+---
+diff --git a/src/util/frame/audio.rs b/src/util/frame/audio.rs
+index a04dec705937e44f6977db1f3643e6720eb0e5be..e66e4e93c57dd7d986345aa180cee34e72b0d9d7 100644
+--- a/src/util/frame/audio.rs
++++ b/src/util/frame/audio.rs
+@@ -169,7 +169,7 @@ impl Audio {
+         unsafe {
+             slice::from_raw_parts(
+                 (*self.as_ptr()).data[index],
+-                (*self.as_ptr()).linesize[index] as usize,
++                (*self.as_ptr()).linesize[0] as usize,
+             )
+         }
+     }
+@@ -183,7 +183,7 @@ impl Audio {
+         unsafe {
+             slice::from_raw_parts_mut(
+                 (*self.as_mut_ptr()).data[index],
+-                (*self.as_ptr()).linesize[index] as usize,
++                (*self.as_ptr()).linesize[0] as usize,
+             )
+         }
+     }

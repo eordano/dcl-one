@@ -920,6 +920,48 @@ fn ipfs_v2_ids_are_base32_cid_v1() {
         "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
     ));
     assert!(!is_ipfs_v2("bafkrei"));
+    assert!(is_ipfs_v2(&format!("bag{}", "a".repeat(56))));
+}
+
+/// The entity id is held to `IPFSv2.validate` only: a 59-character `ba...`
+/// id of another CID prefix reaches the file checks, a short one is refused.
+#[tokio::test]
+async fn a_batch_entity_id_is_any_ipfs_v2_hash() {
+    require_test_db!(Some(node) = Node::new("ipfs-v2-id", Limits::default()).await);
+    let router = node.router();
+    let signer = PrivateKeySigner::random();
+    let wrong = ("bafkreiaaaa".to_string(), Bytes::from_static(b"x"));
+
+    let other_prefix = format!("bag{}", "a".repeat(56));
+    let chain = chain_for(&signer, &other_prefix).await;
+    let request = batch_request(
+        "?partial=true",
+        &other_prefix,
+        &chain,
+        &[wrong.clone()],
+        true,
+    );
+    let (status, _, body) = call(&router, request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["errors"][0],
+        format!(
+            "The uploaded file 'bafkreiaaaa' does not match its content hash (computed {}).",
+            hash_bytes_v1(b"x")
+        )
+    );
+
+    let short = format!("bafy{}", "a".repeat(20));
+    let chain = chain_for(&signer, &short).await;
+    let request = batch_request("?partial=true", &short, &chain, &[wrong], true);
+    let (status, _, body) = call(&router, request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["errors"][0],
+        format!(
+            "The entity id '{short}' is not a valid IPFS v2 hash. Partial deployments require IPFS v2 entities."
+        )
+    );
 }
 
 #[test]

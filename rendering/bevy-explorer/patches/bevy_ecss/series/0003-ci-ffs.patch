@@ -1,0 +1,27 @@
+From 58cc9c02468617cf17f68bbeafa0c7eab5446acf
+Subject: ci ffs
+Origin: https://github.com/robtfm/bevy_ecss/commit/58cc9c02468617cf17f68bbeafa0c7eab5446acf
+Date: 2024-08-10T14:27:22+01:00
+
+---
+diff --git a/src/property/mod.rs b/src/property/mod.rs
+index 3522c31892275972c120627b746566fc9d276aa3..a64de9e27180e3ca80308c5bd2e402dfe581e262 100644
+--- a/src/property/mod.rs
++++ b/src/property/mod.rs
+@@ -300,14 +300,14 @@ impl StyleSheetState {
+ /// - [`Filters`](Property::Filters) is used to filter which entities will be applied the property modification.
+ ///   Entities are first filtered by [`selectors`](`Selector`), but it can be useful to also ensure some behavior for safety reasons,
+ ///   like only inserting [`JustifyText`](bevy::prelude::JustifyText) if the entity also has a [`Text`](bevy::prelude::Text) component.
+-/// 
++///
+ /// Check [`WorldQuery`] for more.
+ ///
+ /// These are tree functions required to be implemented:
+ /// - [`name`](Property::name) indicates which property name should matched for.
+ /// - [`parse`](Property::parse) parses the [`PropertyValues`] into the [`Cache`](Property::Cache) value to be reused across multiple entities.
+ /// - [`apply`](Property::apply) applies on the given [`Components`](Property::Components) the [`Cache`](Property::Cache) value.
+-/// 
++///
+ /// Additionally, an [`AssetServer`] and [`Commands`] parameters are provided for more complex use cases.
+ ///
+ /// Also, there one function which have default implementations:

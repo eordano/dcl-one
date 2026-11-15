@@ -1,0 +1,52 @@
+From c8f8ea39d35356c5b3168e09bedec1d5317c4925
+Subject: web_worker: print worker console output on the page only
+Origin: https://github.com/robtfm/bevy/commit/c8f8ea39d35356c5b3168e09bedec1d5317c4925
+Date: 2026-09-24T10:18:35+01:00
+
+Each worker line was printed twice: by the worker, and by the page it is
+relayed to. DevTools shows a worker's console alongside the page's, so
+the worker no longer prints what it relays; the page's copy is the one
+its console hooks see. A line that can't be relayed is still printed in
+the worker.
+---
+diff --git a/crates/bevy_internal/src/web_worker.js b/crates/bevy_internal/src/web_worker.js
+index 56e796b1c9f6fd6466dd2d563d5a8efb618b1890..7539180ea139b83572c8ab899ac7ab424a99d6ca 100644
+--- a/crates/bevy_internal/src/web_worker.js
++++ b/crates/bevy_internal/src/web_worker.js
+@@ -5,9 +5,9 @@
+ // once its wasm instance is up (over the shared module and memory the page passes). The page functions
+ // the engine calls (extern blocks marked `#[page_functions]`, listed by the glue exports that
+ // attribute generates) each become a function on the worker's global that posts the call to the
+-// page and resolves with the page function's result. Console output is mirrored to the page
+-// under the worker's tag. When the last export returns (or its promise resolves) the worker
+-// posts `{ __bevy_ready: tag }`; if importing the glue or an export fails it posts
++// page and resolves with the page function's result. Console output is sent to the page to
++// print. When the last export returns (or its promise resolves) the worker posts
++// `{ __bevy_ready: tag }`; if importing the glue or an export fails it posts
+ // `{ __bevy_ready: tag, error }` instead.
+ 
+ /**
+@@ -87,17 +87,19 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
+   });
+ }
+ 
+-// Mirrors this worker's console to the page. Arguments are passed through as-is where they can
+-// be cloned, so styled (`%c`) lines render the same on the page.
++// Sends this worker's console to the page, which prints it (and whose console hooks see it).
++// It is not printed here as well: DevTools shows a worker's console alongside the page's, so
++// every line would appear twice. Arguments are passed through as-is where they can be cloned, so
++// styled (`%c`) lines render the same on the page.
+ function forwardConsole(tag) {
+   for (const level of ["log", "info", "warn", "error", "debug"]) {
+     const original = console[level].bind(console);
+     console[level] = (...args) => {
+-      original(...args);
+       try {
+         postMessage({ __bevy_log: level, tag, args: args.map(cloneable) });
+       } catch (_) {
+-        /* not cloneable; the worker's own console still has it */
++        // not cloneable: print it here instead
++        original(...args);
+       }
+     };
+   }

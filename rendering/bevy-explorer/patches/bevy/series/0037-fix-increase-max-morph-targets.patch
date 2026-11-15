@@ -1,0 +1,23 @@
+From 4784cb867b94636fa741b0e3ee0e83049a9acc73
+Subject: fix increase max morph targets
+Origin: https://github.com/robtfm/bevy/commit/4784cb867b94636fa741b0e3ee0e83049a9acc73
+Date: 2025-10-06T16:45:37+01:00
+
+---
+diff --git a/crates/bevy_pbr/src/render/morph.rs b/crates/bevy_pbr/src/render/morph.rs
+index 29070724dd51c1d9ee8ad7dcb0a289c46ee3bba5..67afd8ea7a01a2e4fd019ad3a900fb98c03f4857 100644
+--- a/crates/bevy_pbr/src/render/morph.rs
++++ b/crates/bevy_pbr/src/render/morph.rs
+@@ -127,7 +127,11 @@ pub fn extract_morphs(
+         }
+         let start = uniform.current_buffer.len();
+         let weights = morph_weights.weights();
+-        let legal_weights = weights.iter().take(MAX_MORPH_WEIGHTS).copied();
++        let legal_weights = weights
++            .iter()
++            .chain(iter::repeat(&0.0))
++            .take(MAX_MORPH_WEIGHTS)
++            .copied();
+         uniform.current_buffer.extend(legal_weights);
+         add_to_alignment::<f32>(&mut uniform.current_buffer);
+ 

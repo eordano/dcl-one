@@ -1,0 +1,22 @@
+From 5282a287d435d3b3e4ac7e9c8c490e36457af1ab
+Subject: force webgpu clipped depth emulation
+Origin: https://github.com/robtfm/bevy/commit/5282a287d435d3b3e4ac7e9c8c490e36457af1ab
+Date: 2025-06-23T16:02:02+01:00
+
+---
+diff --git a/crates/bevy_pbr/src/prepass/mod.rs b/crates/bevy_pbr/src/prepass/mod.rs
+index 800ec72861457cbcef25d1814c69d382bb5cab14..6f76c8d763c9570e4f0de7112465c66535329a61 100644
+--- a/crates/bevy_pbr/src/prepass/mod.rs
++++ b/crates/bevy_pbr/src/prepass/mod.rs
+@@ -378,7 +378,10 @@ impl<M: Material> FromWorld for PrepassPipeline<M> {
+ 
+         let depth_clip_control_supported = render_device
+             .features()
+-            .contains(WgpuFeatures::DEPTH_CLIP_CONTROL);
++            .contains(WgpuFeatures::DEPTH_CLIP_CONTROL)
++            // force unclipped depth emnulation on webgpu as  unclipped depth support
++            // may be declared but is not actually supported
++            && cfg!(not(all(feature = "webgpu", target_arch = "wasm32")));
+         let internal = PrepassPipelineInternal {
+             view_layout_motion_vectors,
+             view_layout_no_motion_vectors,

@@ -58,6 +58,7 @@ use std::sync::LazyLock;
 use super::PlaceRow;
 use super::voting_power::MIN_USER_ACTIVITY;
 use crate::SharedState;
+use crate::auth::normalize_eth_address;
 use crate::fed;
 use crate::shared::errors::{ApiData, ApiError};
 use crate::validate::{self, Flavour, ObjectSchema, UPDATE_FAVORITES_BODY, UPDATE_LIKE_BODY};
@@ -390,16 +391,12 @@ pub async fn import_upstream_likes(
         }
         let mut row: UpstreamLike = serde_json::from_str(&line)
             .with_context(|| format!("line {}: not a user_likes row", index + 1))?;
-        let user = row.user.trim().to_lowercase();
         if !is_place_id(&row.entity_id) && row.entity_id.trim().is_empty() {
             anyhow::bail!("line {}: empty entity_id", index + 1);
         }
-        if user.len() != 42
-            || !user.starts_with("0x")
-            || !user[2..].chars().all(|c| c.is_ascii_hexdigit())
-        {
+        let Some(user) = normalize_eth_address(&row.user) else {
             anyhow::bail!("line {}: {:?} is not a wallet", index + 1, row.user);
-        }
+        };
         out.read += 1;
         row.user = user;
         by_entity

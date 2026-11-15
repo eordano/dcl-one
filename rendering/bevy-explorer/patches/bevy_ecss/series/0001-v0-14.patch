@@ -1,0 +1,472 @@
+From b419f31cb6403ab7f05aa066dfc2f74d17612760
+Subject: v0.14
+Origin: https://github.com/robtfm/bevy_ecss/commit/b419f31cb6403ab7f05aa066dfc2f74d17612760
+Date: 2024-08-10T14:13:10+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 5b2ae3b61b83d40ff4ee617a90f64c5abbcc3932..1f5756857252a7317586cc9cbdf33860970003d0 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -12,7 +12,7 @@ repository = "https://github.com/afonsolage/bevy_ecss"
+ 
+ [dependencies]
+ 
+-bevy = { version = "0.13", default-features = false, features = [
++bevy = { version = "0.14", default-features = false, features = [
+     "bevy_ui",
+     "bevy_asset",
+     "bevy_text",
+@@ -24,7 +24,7 @@ smallvec = { version = "1.11", features = ["serde", "union", "const_generics"] }
+ thiserror = "1.0.50"
+ 
+ [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+-bevy = { version = "0.13", features = [
++bevy = { version = "0.14", features = [
+     "bevy_ui",
+     "bevy_asset",
+     "bevy_text",
+@@ -33,7 +33,7 @@ bevy = { version = "0.13", features = [
+ ] }
+ 
+ [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+-bevy = "0.13"
++bevy = "0.14"
+ 
+ [[example]]
+ name = "simple_ui"
+diff --git a/examples/alpha.rs b/examples/alpha.rs
+index 97c4a75a43bd730ffce6693f4a420db2ec0db025..9e18a58aaf03fe00f776ec8c9ae6df2637efb7d9 100644
+--- a/examples/alpha.rs
++++ b/examples/alpha.rs
+@@ -72,6 +72,6 @@ impl Property for AlphaProperty {
+         _asset_server: &AssetServer,
+         _commands: &mut Commands,
+     ) {
+-        components.0.set_a(*cache);
++        components.0.set_alpha(*cache);
+     }
+ }
+diff --git a/examples/hot_reload.rs b/examples/hot_reload.rs
+index f002d69f57e1c1d0ea426b3ea448d824f36f174a..e47740140af8860cc5fc3254991589310186dba6 100644
+--- a/examples/hot_reload.rs
++++ b/examples/hot_reload.rs
+@@ -1,4 +1,4 @@
+-use bevy::prelude::*;
++use bevy::{color::palettes::basic, prelude::*};
+ use bevy_ecss::prelude::{Class, EcssPlugin, StyleSheet};
+ 
+ fn main() {
+@@ -30,7 +30,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                 justify_content: JustifyContent::SpaceBetween,
+                 ..default()
+             },
+-            background_color: Color::RED.into(),
++            background_color: basic::RED.into(),
+             ..default()
+         })
+         .insert(Name::new("ui-root"))
+@@ -45,7 +45,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(2.0)),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.65, 0.65, 0.65).into(),
++                    background_color: Color::srgb(0.65, 0.65, 0.65).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("left-border"))
+@@ -59,7 +59,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 align_items: AlignItems::FlexEnd,
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.15, 0.15, 0.15).into(),
++                            background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("left-bg"))
+@@ -93,7 +93,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         height: Val::Percent(100.0),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.15, 0.15, 0.15).into(),
++                    background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("right-border"))
+@@ -131,7 +131,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 overflow: Overflow::clip(),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.10, 0.10, 0.10).into(),
++                            background_color: Color::srgb(0.10, 0.10, 0.10).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("right-list"))
+@@ -191,7 +191,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(20.0)),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.4, 0.4, 1.0).into(),
++                    background_color: Color::srgb(0.4, 0.4, 1.0).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("mid-blue-border"))
+@@ -203,7 +203,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 height: Val::Percent(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.8, 0.8, 1.0).into(),
++                            background_color: Color::srgb(0.8, 0.8, 1.0).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("mid-navy-blue-content"));
+@@ -232,7 +232,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 height: Val::Px(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(1.0, 0.0, 0.0).into(),
++                            background_color: Color::srgb(1.0, 0.0, 0.0).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("mid-red-last-but-one"))
+@@ -247,7 +247,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(20.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.3, 0.3).into(),
++                                    background_color: Color::srgb(1.0, 0.3, 0.3).into(),
+                                     ..default()
+                                 })
+                                 .insert(Name::new("mid-red-center"));
+@@ -261,7 +261,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(40.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.5, 0.5).into(),
++                                    background_color: Color::srgb(1.0, 0.5, 0.5).into(),
+                                     ..default()
+                                 })
+                                 .insert(Class::new("blue-bg"))
+@@ -276,7 +276,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(60.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.7, 0.7).into(),
++                                    background_color: Color::srgb(1.0, 0.7, 0.7).into(),
+                                     ..default()
+                                 })
+                                 .insert(Name::new("mid-red-top"));
+@@ -291,7 +291,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(80.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgba(1.0, 0.9, 0.9, 0.4).into(),
++                                    background_color: Color::srgba(1.0, 0.9, 0.9, 0.4).into(),
+                                     ..default()
+                                 })
+                                 .insert(Class::new("blue-bg"))
+diff --git a/examples/simple_ui.rs b/examples/simple_ui.rs
+index a2b8bdafb487ab3a446fb17caa05b7bf61459dbe..7eeeaa9edc860fefc14ae149a08f4b418e09bb50 100644
+--- a/examples/simple_ui.rs
++++ b/examples/simple_ui.rs
+@@ -43,7 +43,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(2.0)),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.65, 0.65, 0.65).into(),
++                    background_color: Color::srgb(0.65, 0.65, 0.65).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("left-border"))
+@@ -57,7 +57,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 align_items: AlignItems::FlexEnd,
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.15, 0.15, 0.15).into(),
++                            background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("left-bg"))
+@@ -91,7 +91,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         height: Val::Percent(100.0),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.15, 0.15, 0.15).into(),
++                    background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("right-border"))
+@@ -129,7 +129,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 overflow: Overflow::clip(),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.10, 0.10, 0.10).into(),
++                            background_color: Color::srgb(0.10, 0.10, 0.10).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("right-list"))
+@@ -189,7 +189,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(20.0)),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.4, 0.4, 1.0).into(),
++                    background_color: Color::srgb(0.4, 0.4, 1.0).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("mid-blue-border"))
+@@ -201,7 +201,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 height: Val::Percent(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.8, 0.8, 1.0).into(),
++                            background_color: Color::srgb(0.8, 0.8, 1.0).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("mid-navy-blue-content"));
+@@ -230,7 +230,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 height: Val::Px(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(1.0, 0.0, 0.0).into(),
++                            background_color: Color::srgb(1.0, 0.0, 0.0).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("mid-red-last-but-one"))
+@@ -245,7 +245,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(20.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.3, 0.3).into(),
++                                    background_color: Color::srgb(1.0, 0.3, 0.3).into(),
+                                     ..default()
+                                 })
+                                 .insert(Name::new("mid-red-center"));
+@@ -259,7 +259,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(40.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.5, 0.5).into(),
++                                    background_color: Color::srgb(1.0, 0.5, 0.5).into(),
+                                     ..default()
+                                 })
+                                 .insert(Class::new("blue-bg"))
+@@ -274,7 +274,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(60.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.7, 0.7).into(),
++                                    background_color: Color::srgb(1.0, 0.7, 0.7).into(),
+                                     ..default()
+                                 })
+                                 .insert(Name::new("mid-red-top"));
+@@ -289,7 +289,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(80.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgba(1.0, 0.9, 0.9, 0.4).into(),
++                                    background_color: Color::srgba(1.0, 0.9, 0.9, 0.4).into(),
+                                     ..default()
+                                 })
+                                 .insert(Class::new("blue-bg"))
+diff --git a/examples/theme.rs b/examples/theme.rs
+index 09ab39327c6acf0e912278650e1740386c515047..d26879bff9652e459304b51429957579d4f6e80c 100644
+--- a/examples/theme.rs
++++ b/examples/theme.rs
+@@ -82,7 +82,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(2.0)),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.65, 0.65, 0.65).into(),
++                    background_color: Color::srgb(0.65, 0.65, 0.65).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("left-border"))
+@@ -96,7 +96,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 align_items: AlignItems::FlexEnd,
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.15, 0.15, 0.15).into(),
++                            background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("left-bg"))
+@@ -130,7 +130,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         height: Val::Percent(100.0),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.15, 0.15, 0.15).into(),
++                    background_color: Color::srgb(0.15, 0.15, 0.15).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("right-border"))
+@@ -170,7 +170,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 overflow: Overflow::clip(),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(0.10, 0.10, 0.10).into(),
++                            background_color: Color::srgb(0.10, 0.10, 0.10).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("right-list"))
+@@ -243,7 +243,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 height: Val::Px(100.0),
+                                 ..default()
+                             },
+-                            background_color: Color::rgb(1.0, 0.0, 0.0).into(),
++                            background_color: Color::srgb(1.0, 0.0, 0.0).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("mid-red-last-but-one"))
+@@ -258,7 +258,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(20.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.3, 0.3).into(),
++                                    background_color: Color::srgb(1.0, 0.3, 0.3).into(),
+                                     ..default()
+                                 })
+                                 .insert(Name::new("mid-red-center"));
+@@ -272,7 +272,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(40.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.5, 0.5).into(),
++                                    background_color: Color::srgb(1.0, 0.5, 0.5).into(),
+                                     ..default()
+                                 })
+                                 .insert(Class::new("blue-bg"))
+@@ -287,7 +287,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(60.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgb(1.0, 0.7, 0.7).into(),
++                                    background_color: Color::srgb(1.0, 0.7, 0.7).into(),
+                                     ..default()
+                                 })
+                                 .insert(Name::new("mid-red-top"));
+@@ -302,7 +302,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         bottom: Val::Px(80.0),
+                                         ..default()
+                                     },
+-                                    background_color: Color::rgba(1.0, 0.9, 0.9, 0.4).into(),
++                                    background_color: Color::srgba(1.0, 0.9, 0.9, 0.4).into(),
+                                     ..default()
+                                 })
+                                 .insert(Class::new("blue-bg"))
+@@ -350,7 +350,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                         border: UiRect::all(Val::Px(20.0)),
+                         ..default()
+                     },
+-                    background_color: Color::rgb(0.4, 0.4, 1.0).into(),
++                    background_color: Color::srgb(0.4, 0.4, 1.0).into(),
+                     ..default()
+                 })
+                 .insert(Name::new("mid-blue-border"))
+@@ -363,7 +363,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 ..default()
+                             },
+                             focus_policy: FocusPolicy::Pass,
+-                            background_color: Color::rgb(0.8, 0.8, 1.0).into(),
++                            background_color: Color::srgb(0.8, 0.8, 1.0).into(),
+                             ..default()
+                         })
+                         .insert(Name::new("mid-navy-blue-content"))
+@@ -383,7 +383,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                         TextStyle {
+                                             font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+                                             font_size: 40.0,
+-                                            color: Color::rgb(0.9, 0.9, 0.9),
++                                            color: Color::srgb(0.9, 0.9, 0.9),
+                                         },
+                                     ));
+                                 });
+diff --git a/src/lib.rs b/src/lib.rs
+index 7a1cc7aca599e998ad769669cdb3beb261629816..df93ff8e7ae0af7fbf5fc9c7891d447614350b0b 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,6 +10,7 @@ mod system;
+ use std::{error::Error, fmt::Display};
+ 
+ use bevy::{
++    app::First,
+     asset::AssetEvents,
+     ecs::system::SystemState,
+     prelude::{
+@@ -123,17 +124,15 @@ impl Plugin for EcssPlugin {
+             )
+             .add_systems(PostUpdate, system::clear_state.in_set(EcssSet::Cleanup));
+ 
+-        let prepared_state = PrepareParams::new(&mut app.world);
++        let prepared_state = PrepareParams::new(app.world_mut());
+         app.insert_resource(prepared_state);
+ 
+         register_component_selector(app);
+         register_properties(app);
+ 
+         if self.hot_reload {
+-            app.configure_sets(AssetEvents, EcssHotReload).add_systems(
+-                AssetEvents,
+-                system::hot_reload_style_sheets.in_set(EcssHotReload),
+-            );
++            app.configure_sets(First, EcssHotReload.in_set(AssetEvents))
++                .add_systems(First, system::hot_reload_style_sheets.in_set(EcssHotReload));
+         }
+     }
+ }
+@@ -232,10 +231,10 @@ impl RegisterComponentSelector for bevy::prelude::App {
+     where
+         T: Component,
+     {
+-        let system_state = SystemState::<Query<Entity, With<T>>>::new(&mut self.world);
++        let system_state = SystemState::<Query<Entity, With<T>>>::new(self.world_mut());
+         let boxed_state = Box::new(system_state);
+ 
+-        self.world
++        self.world_mut()
+             .get_resource_or_insert_with::<ComponentFilterRegistry>(bevy::utils::default)
+             .insert(name, boxed_state);
+ 
+diff --git a/src/property/colors.rs b/src/property/colors.rs
+index 157b511ff326a0006dc9340ff2093c264022d839..32d9a46f7b9424d6940cb45ed65701c6ae7f12b5 100644
+--- a/src/property/colors.rs
++++ b/src/property/colors.rs
+@@ -2,7 +2,7 @@ use bevy::prelude::Color;
+ 
+ pub(super) fn parse_hex_color(hex: &str) -> Option<Color> {
+     if let Ok((r, g, b, a)) = cssparser::color::parse_hash_color(hex.as_bytes()) {
+-        Some(Color::rgba_u8(r, g, b, (a * 255.0) as u8))
++        Some(Color::srgba_u8(r, g, b, (a * 255.0) as u8))
+     } else {
+         None
+     }
+@@ -21,7 +21,7 @@ pub(super) fn parse_named_color(name: &str) -> Option<Color> {
+         alpha,
+     })) = cssparser_color::parse_color_keyword(name)
+     {
+-        Some(Color::rgba_u8(red, green, blue, (alpha * 255.0) as u8))
++        Some(Color::srgba_u8(red, green, blue, (alpha * 255.0) as u8))
+     } else {
+         None
+     }
+diff --git a/src/stylesheet.rs b/src/stylesheet.rs
+index 5c5aa074709e467d77f42f670882721cd61329b3..3b5411b7ae2d8c7fb9021f04485dca5b13354b59 100644
+--- a/src/stylesheet.rs
++++ b/src/stylesheet.rs
+@@ -4,7 +4,7 @@ use bevy::{
+     asset::{io::Reader, AssetLoader, AsyncReadExt},
+     prelude::Asset,
+     reflect::TypePath,
+-    utils::{AHasher, HashMap},
++    utils::{AHasher, ConditionalSendFuture, HashMap},
+ };
+ use smallvec::SmallVec;
+ use thiserror::Error;
+@@ -98,7 +98,7 @@ impl AssetLoader for StyleSheetLoader {
+         reader: &'a mut Reader,
+         _settings: &'a Self::Settings,
+         load_context: &'a mut bevy::asset::LoadContext,
+-    ) -> bevy::utils::BoxedFuture<'a, Result<Self::Asset, Self::Error>> {
++    ) -> impl ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
+         Box::pin(async move {
+             let mut bytes = Vec::new();
+             reader.read_to_end(&mut bytes).await?;

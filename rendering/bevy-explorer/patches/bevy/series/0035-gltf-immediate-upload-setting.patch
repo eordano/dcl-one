@@ -1,0 +1,109 @@
+From 1b645f2810dacd44ccdff26d5243af16d4a4e545
+Subject: gltf immediate upload setting
+Origin: https://github.com/robtfm/bevy/commit/1b645f2810dacd44ccdff26d5243af16d4a4e545
+Date: 2025-10-01T10:07:25+01:00
+
+---
+diff --git a/crates/bevy_gltf/src/loader/mod.rs b/crates/bevy_gltf/src/loader/mod.rs
+index 0b2226fd2bd11521ab9fb52a7771c1f583e9f312..feb53564cfa1eea8dd947ab1b5a9f64d9fa490d9 100644
+--- a/crates/bevy_gltf/src/loader/mod.rs
++++ b/crates/bevy_gltf/src/loader/mod.rs
+@@ -181,6 +181,8 @@ pub struct GltfLoaderSettings {
+     pub load_lights: bool,
+     /// If true, the loader will include the root of the gltf root node.
+     pub include_source: bool,
++    /// force immediate upload for the meshes/textures in this gltf
++    pub immediate_upload: bool,
+ }
+ 
+ impl Default for GltfLoaderSettings {
+@@ -191,6 +193,7 @@ impl Default for GltfLoaderSettings {
+             load_cameras: true,
+             load_lights: true,
+             include_source: false,
++            immediate_upload: false,
+         }
+     }
+ }
+@@ -523,8 +526,7 @@ async fn load_gltf<'a, 'b, 'c>(
+             parent_path,
+             loader.supported_compressed_formats,
+             settings.load_materials,
+-            // )
+-            // .await?;
++            settings.immediate_upload,
+         )?;
+         image.process_loaded_texture(load_context, &mut _texture_handles);
+     }
+@@ -698,6 +700,7 @@ async fn load_gltf<'a, 'b, 'c>(
+                 });
+             }
+ 
++            mesh.immediate_upload = settings.immediate_upload;
+             let mesh_handle = load_context.add_labeled_asset(primitive_label.to_string(), mesh);
+             primitives.push(super::GltfPrimitive::new(
+                 &gltf_mesh,
+@@ -960,6 +963,7 @@ fn load_image<'a, 'b>(
+     parent_path: &'b Path,
+     supported_compressed_formats: CompressedImageFormats,
+     render_asset_usages: RenderAssetUsages,
++    immediate_upload: bool,
+ ) -> Result<ImageOrPath, GltfError> {
+     let is_srgb = !linear_textures.contains(&gltf_texture.index());
+     let sampler_descriptor = texture_sampler(&gltf_texture);
+@@ -1034,6 +1038,11 @@ fn load_image<'a, 'b>(
+                 image
+             };
+ 
++            let image = Image {
++                immediate_upload,
++                ..image
++            };
++
+             Ok(ImageOrPath::Image {
+                 image,
+                 label: GltfAssetLabel::Texture(gltf_texture.index()),
+@@ -1110,6 +1119,11 @@ fn load_image<'a, 'b>(
+                     image
+                 };
+ 
++                let image = Image {
++                    immediate_upload,
++                    ..image
++                };
++
+                 Ok(ImageOrPath::Image {
+                     image,
+                     label: GltfAssetLabel::Texture(gltf_texture.index()),
+diff --git a/crates/bevy_image/src/image_loader.rs b/crates/bevy_image/src/image_loader.rs
+index 530dfc804b6c19e23c92551c9fee79c88cec8384..a6ca903d2c8419d9ca38542f77c247243d67513a 100644
+--- a/crates/bevy_image/src/image_loader.rs
++++ b/crates/bevy_image/src/image_loader.rs
+@@ -95,6 +95,7 @@ pub struct ImageLoaderSettings {
+     pub is_srgb: bool,
+     pub sampler: ImageSampler,
+     pub asset_usage: RenderAssetUsages,
++    pub immediate_upload: bool,
+ }
+ 
+ impl Default for ImageLoaderSettings {
+@@ -104,6 +105,7 @@ impl Default for ImageLoaderSettings {
+             is_srgb: true,
+             sampler: ImageSampler::Default,
+             asset_usage: RenderAssetUsages::default(),
++            immediate_upload: false,
+         }
+     }
+ }
+@@ -214,6 +216,11 @@ impl AssetLoader for ImageLoader {
+             image
+         };
+ 
++        let image = Image {
++            immediate_upload: settings.immediate_upload,
++            ..image
++        };
++
+         Ok(image)
+     }
+ 

@@ -39,7 +39,7 @@ defaults:
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     permissions:
       contents: read
     outputs:

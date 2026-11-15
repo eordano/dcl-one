@@ -1,0 +1,12 @@
+name       = "fastwebsockets"
+upstream   = "https://github.com/denoland/fastwebsockets"
+commit     = "18b66823006de77dff537b3a2d97e1473c23cfb3"
+ref        = "0.8.1"
+origin     = "https://github.com/robtfm/fastwebsockets"
+origin_rev = "1db2dbc2d1db519e6ba76741fd76f13519ab76f7"
+license    = "Apache-2.0"
+paths      = ["."]
+exclude    = []
+base_tree  = "beda2dc9ca50ee138865f53f7e4268d3cc085c5c"
+tree       = "ea8cfbec10d0c48b45f3eb7503213dfbac09f137"
+nix_hash   = "sha256-Pe0d6F2tJEyjEjG5XVeSqfDinG3AaxLCvPPG08C6sn0="

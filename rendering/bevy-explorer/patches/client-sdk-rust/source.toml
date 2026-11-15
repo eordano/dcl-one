@@ -1,0 +1,37 @@
+name       = "client-sdk-rust"
+upstream   = "https://github.com/livekit/rust-sdks"
+commit     = "ead3a6936e7e526c6853255e2a731ba7648dd63d"
+ref        = "livekit/v0.9.7"
+origin     = "https://github.com/robtfm/client-sdk-rust"
+origin_rev = "7f9ed8515625f5149dc074d13bd50e451a442a59"
+license    = "Apache-2.0"
+paths      = [
+    "Cargo.toml",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "device-info",
+    "libwebrtc",
+    "livekit",
+    "livekit-api",
+    "livekit-common",
+    "livekit-data-stream",
+    "livekit-datatrack",
+    "livekit-net",
+    "livekit-protocol",
+    "livekit-region",
+    "livekit-rpc",
+    "livekit-signaling",
+    "livekit-token",
+    "webrtc-sys",
+]
+exclude    = ["livekit-protocol/protocol"]
+base_tree  = "0860dacf759306008cc04a5611265517f09598f4"
+tree       = "bd0d8df20d6b8229786725c6cc4a07b74d7f88a6"
+nix_hash   = "sha256-6GqUYgbYZTZjeYcO/w8EV+jCLt5YsubCI4G7ha7NX2Q="
+
+[[submodule]]
+path     = "livekit-protocol/protocol"
+url      = "https://github.com/livekit/protocol"
+commit   = "3fbe509850cb24aa90a0bc20134936698333dceb"
+nix_hash = "sha256-3nBkE3xqugnvO63OhrpSJvCQH8eOJN9M2+CyN1dnCIU="

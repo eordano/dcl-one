@@ -1,0 +1,19 @@
+From ec8aaea10b89397081d3ed4181f7e644d8e068d8
+Subject: fix skin buffer grow size
+Origin: https://github.com/robtfm/bevy/commit/ec8aaea10b89397081d3ed4181f7e644d8e068d8
+Date: 2025-06-30T18:21:26+01:00
+
+---
+diff --git a/crates/bevy_pbr/src/render/skin.rs b/crates/bevy_pbr/src/render/skin.rs
+index 476e06c1e78beceaf51f8a3b8f59abbbf4b9f085..f9ec672a66eb92171ae5d82a232f5adc8613ad40 100644
+--- a/crates/bevy_pbr/src/render/skin.rs
++++ b/crates/bevy_pbr/src/render/skin.rs
+@@ -220,7 +220,7 @@ pub fn prepare_skins(
+         let mut new_size = uniform.current_buffer.size();
+         while new_size < needed_size {
+             // 1.5× growth factor.
+-            new_size += new_size / 2;
++            new_size = (new_size + new_size / 2).next_multiple_of(4);
+         }
+ 
+         // Create the new buffers.

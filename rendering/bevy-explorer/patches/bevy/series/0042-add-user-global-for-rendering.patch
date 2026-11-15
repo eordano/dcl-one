@@ -1,0 +1,75 @@
+From 45e3680d7e1c8fcb196d2271b30b6320376922cf
+Subject: add user global for rendering
+Origin: https://github.com/robtfm/bevy/commit/45e3680d7e1c8fcb196d2271b30b6320376922cf
+Date: 2026-01-08T17:34:21Z
+
+---
+diff --git a/crates/bevy_render/src/globals.rs b/crates/bevy_render/src/globals.rs
+index c05d96c4c9300f3ea265076cfb8cff62ce1d3fce..6b66c761a2b7f35205da3cd88df4f6990688dad6 100644
+--- a/crates/bevy_render/src/globals.rs
++++ b/crates/bevy_render/src/globals.rs
+@@ -1,9 +1,5 @@
+ use crate::{
+-    extract_resource::ExtractResource,
+-    prelude::Shader,
+-    render_resource::{ShaderType, UniformBuffer},
+-    renderer::{RenderDevice, RenderQueue},
+-    Extract, ExtractSchedule, Render, RenderApp, RenderSet,
++    Extract, ExtractSchedule, Render, RenderApp, RenderSet, extract_resource::{ExtractResource, ExtractResourcePlugin}, prelude::Shader, render_resource::{ShaderType, UniformBuffer}, renderer::{RenderDevice, RenderQueue}
+ };
+ use bevy_app::{App, Plugin};
+ use bevy_asset::{load_internal_asset, weak_handle, Handle};
+@@ -22,6 +18,8 @@ impl Plugin for GlobalsPlugin {
+         load_internal_asset!(app, GLOBALS_TYPE_HANDLE, "globals.wgsl", Shader::from_wgsl);
+         app.register_type::<GlobalsUniform>();
+ 
++        app.add_plugins(ExtractResourcePlugin::<UserGlobal>::default());
++
+         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+             render_app
+                 .init_resource::<GlobalsBuffer>()
+@@ -57,10 +55,13 @@ pub struct GlobalsUniform {
+     /// It wraps to zero when it reaches the maximum value of a u32.
+     frame_count: u32,
+     /// WebGL2 structs must be 16 byte aligned.
+-    #[cfg(all(feature = "webgl", target_arch = "wasm32", not(feature = "webgpu")))]
+-    _wasm_padding: f32,
++    // #[cfg(all(feature = "webgl", target_arch = "wasm32", not(feature = "webgpu")))]
++    user_global: f32,
+ }
+ 
++#[derive(Resource, Clone, ExtractResource, Default)]
++pub struct UserGlobal(pub f32);
++
+ /// The buffer containing the [`GlobalsUniform`]
+ #[derive(Resource, Default)]
+ pub struct GlobalsBuffer {
+@@ -73,11 +74,13 @@ fn prepare_globals_buffer(
+     mut globals_buffer: ResMut<GlobalsBuffer>,
+     time: Res<Time>,
+     frame_count: Res<FrameCount>,
++    user_global: Option<Res<UserGlobal>>,
+ ) {
+     let buffer = globals_buffer.buffer.get_mut();
+     buffer.time = time.elapsed_secs_wrapped();
+     buffer.delta_time = time.delta_secs();
+     buffer.frame_count = frame_count.0;
++    buffer.user_global = user_global.as_ref().map(|ug| ug.0).unwrap_or_default();
+ 
+     globals_buffer
+         .buffer
+diff --git a/crates/bevy_render/src/globals.wgsl b/crates/bevy_render/src/globals.wgsl
+index 6e0f271982b201889ea2b8ec7cf6598ea30c3d8e..b1b9f837a790834ceb9f7c6bf400fb4b1a8c10b5 100644
+--- a/crates/bevy_render/src/globals.wgsl
++++ b/crates/bevy_render/src/globals.wgsl
+@@ -9,8 +9,6 @@ struct Globals {
+     // Frame count since the start of the app.
+     // It wraps to zero when it reaches the maximum value of a u32.
+     frame_count: u32,
+-#ifdef SIXTEEN_BYTE_ALIGNMENT
+-    // WebGL2 structs must be 16 byte aligned.
+-    _webgl2_padding: f32
+-#endif
++    // user global
++    user_global: f32,
+ };

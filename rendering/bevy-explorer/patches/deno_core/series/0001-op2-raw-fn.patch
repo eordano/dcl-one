@@ -1,0 +1,39 @@
+From 97a42b8f33679dd08d90d80402b18371d306fc9b
+Subject: op2 -> raw_fn
+Origin: https://github.com/robtfm/deno_core/commit/97a42b8f33679dd08d90d80402b18371d306fc9b
+Date: 2024-09-20T13:37:38+01:00
+
+---
+diff --git a/ops/op2/mod.rs b/ops/op2/mod.rs
+index 84d94cacc4471a39d1c4377df439d81b95b50c14..e34b0c50c58eeec089b7a4739f7b33e1b4294627 100644
+--- a/ops/op2/mod.rs
++++ b/ops/op2/mod.rs
+@@ -102,6 +102,18 @@ fn generate_op2(
+   op_fn.sig.generics.params.clear();
+   op_fn.sig.ident = call.clone();
+ 
++  // create raw version
++  let mut raw_fn = func.clone();
++  let raw_ident = format_ident!("{}__raw_fn", &func.sig.ident);
++  raw_fn.sig.ident = raw_ident.clone();
++  raw_fn.attrs.retain(|attr| !is_attribute_special(attr));
++  for arg in raw_fn.sig.inputs.iter_mut() {
++    match arg {
++      FnArg::Receiver(slf) => slf.attrs.clear(),
++      FnArg::Typed(ty) => ty.attrs.clear(),
++    }
++  }
++  
+   // Clear inert attributes
+   // TODO(mmastrac): This should limit itself to clearing ours only
+   for arg in op_fn.sig.inputs.iter_mut() {
+@@ -320,6 +332,9 @@ fn generate_op2(
+ 
+       <#name <#(#generic),*>  as ::deno_core::_ops::Op>::DECL
+     }
++
++    #[allow(unused, non_snake_case)]
++    #raw_fn
+   })
+ }
+ 

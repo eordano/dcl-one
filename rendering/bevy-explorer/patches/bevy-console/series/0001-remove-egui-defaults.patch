@@ -1,0 +1,19 @@
+From 8e8681ce2fbc62fee81e25a6222b64d79452450f
+Subject: remove egui defaults
+Origin: https://github.com/robtfm/bevy-console/commit/8e8681ce2fbc62fee81e25a6222b64d79452450f
+Date: 2025-06-09T11:38:13+01:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 3fb1fc7d010110954e04a999361911713c412c72..17b64d4426706662afccc01716bb3f572b26f654 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -16,7 +16,7 @@ bevy = { version = "0.16", default-features = false, features = [
+ ] }
+ clap = { version = "4.5", features = ["derive"] }
+ bevy_console_derive = { path = "./bevy_console_derive", version = "0.5.0" }
+-bevy_egui = "0.34"
++bevy_egui = { version = "0.34", default-features = false, features = [ "render", "default_fonts" ] }
+ shlex = "1.3"
+ ansi-parser = "0.9"
+ strip-ansi-escapes = "0.2"

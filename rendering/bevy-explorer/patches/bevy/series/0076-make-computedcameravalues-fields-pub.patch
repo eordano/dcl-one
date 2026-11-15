@@ -1,0 +1,31 @@
+From 5097f8301c57602f55e28e7e5f96ce0a34ddd2d9
+Subject: make ComputedCameraValues fields pub
+Origin: https://github.com/robtfm/bevy/commit/5097f8301c57602f55e28e7e5f96ce0a34ddd2d9
+Date: 2026-08-27T13:31:42+01:00
+
+Matches upstream bevy_camera, where the fields are already public. Lets a
+render-target owner that grows its image after ui layout (world-ui text and
+the scene ui-canvas atlas) update the camera's computed target size in the
+same frame, instead of waiting for camera_system next frame and rendering
+one frame with the old target size stretched over the new image.
+---
+diff --git a/crates/bevy_render/src/camera/camera.rs b/crates/bevy_render/src/camera/camera.rs
+index 01fa9b66945ebdbc5966632d8b383bce02fd1f5a..03eee69669141120258b165be53766916f8356f6 100644
+--- a/crates/bevy_render/src/camera/camera.rs
++++ b/crates/bevy_render/src/camera/camera.rs
+@@ -176,11 +176,11 @@ pub struct RenderTargetInfo {
+ /// Holds internally computed [`Camera`] values.
+ #[derive(Default, Debug, Clone)]
+ pub struct ComputedCameraValues {
+-    clip_from_view: Mat4,
+-    target_info: Option<RenderTargetInfo>,
++    pub clip_from_view: Mat4,
++    pub target_info: Option<RenderTargetInfo>,
+     // size of the `Viewport`
+-    old_viewport_size: Option<UVec2>,
+-    old_sub_camera_view: Option<SubCameraView>,
++    pub old_viewport_size: Option<UVec2>,
++    pub old_sub_camera_view: Option<SubCameraView>,
+ }
+ 
+ /// How much energy a `Camera3d` absorbs from incoming light.

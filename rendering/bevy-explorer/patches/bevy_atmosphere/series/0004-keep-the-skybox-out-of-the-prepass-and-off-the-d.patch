@@ -1,0 +1,61 @@
+From d18523c8fdecb1847b4f6f82a597752207373cc2
+Subject: Keep the skybox out of the prepass and off the depth buffer
+Origin: https://github.com/robtfm/bevy_atmosphere/commit/d18523c8fdecb1847b4f6f82a597752207373cc2
+Date: 2026-10-13T12:06:17+01:00
+
+Its pixels keep the cleared depth, so post effects can tell the sky
+from geometry: depth of field already treats cleared depth as far,
+and the explorer's screen-space star pass draws only there. The main
+pass still depth-tests the skybox against the geometry.
+---
+diff --git a/src/plugin.rs b/src/plugin.rs
+index c5474f0b4ddf30eba048a4bcf08e4d3e3a1952e3..046e1cf57951b5b3fbd99a5c46a6cb47a0327bef 100644
+--- a/src/plugin.rs
++++ b/src/plugin.rs
+@@ -35,7 +35,12 @@ impl Plugin for AtmospherePlugin {
+             Shader::from_wgsl
+         );
+ 
+-        app.add_plugins(MaterialPlugin::<SkyBoxMaterial>::default());
++        // the skybox stays out of the prepass and writes no depth, so its pixels keep the cleared
++        // depth and post effects (depth of field, stars) can tell the sky from geometry
++        app.add_plugins(MaterialPlugin::<SkyBoxMaterial> {
++            prepass_enabled: false,
++            ..default()
++        });
+ 
+         #[cfg(feature = "procedural")]
+         app.add_plugins(AtmospherePipelinePlugin);
+diff --git a/src/skybox.rs b/src/skybox.rs
+index 37262043c49713b879f89381036d3fa95f981d5a..df66ada658ddd986edb8dd5f1dbe7e196e13439f 100644
+--- a/src/skybox.rs
++++ b/src/skybox.rs
+@@ -7,7 +7,7 @@ use bevy::{
+     reflect::TypePath,
+     render::{
+         mesh::{Indices, Mesh, MeshVertexBufferLayoutRef, PrimitiveTopology},
+-        render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderRef},
++        render_resource::{AsBindGroup, CompareFunction, RenderPipelineDescriptor, ShaderRef},
+     },
+ };
+ 
+@@ -48,13 +48,18 @@ impl Material for SkyBoxMaterial {
+ 
+     fn specialize(
+         _pipeline: &MaterialPipeline<Self>,
+-        #[cfg_attr(not(feature = "dithering"), allow(unused_variables))]
+         descriptor: &mut RenderPipelineDescriptor,
+         _layout: &MeshVertexBufferLayoutRef,
+         #[cfg_attr(not(feature = "dithering"), allow(unused_variables))] key: MaterialPipelineKey<
+             Self,
+         >,
+     ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
++        // leave the cleared depth behind the sky: the main pass still tests against the geometry
++        if let Some(depth_stencil) = &mut descriptor.depth_stencil {
++            depth_stencil.depth_write_enabled = false;
++            depth_stencil.depth_compare = CompareFunction::GreaterEqual;
++        }
++
+         #[cfg(feature = "dithering")]
+         if key.bind_group_data.dithering {
+             if let Some(fragment) = &mut descriptor.fragment {

@@ -8,6 +8,8 @@ on:
       - apps/dcl-scene-cli/**
       - apps/bevy-explorer/e2e/scenes/environment/**
       - library/dcl-scene-build/**
+      - library/hashing/**
+      - tooling/check-local-hashing.mjs
       - .github/workflows/sdk.yml
   pull_request:
     paths:
@@ -16,6 +18,8 @@ on:
       - apps/dcl-scene-cli/**
       - apps/bevy-explorer/e2e/scenes/environment/**
       - library/dcl-scene-build/**
+      - library/hashing/**
+      - tooling/check-local-hashing.mjs
       - .github/workflows/sdk.yml
 permissions:
   contents: read
@@ -29,7 +33,7 @@ env:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -39,10 +43,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.16.0
-          cache: npm
-          # library/protocol keeps no lockfile (it ignores package-lock.json)
-          cache-dependency-path: library/js-sdk-toolchain/package-lock.json
-      - name: Install (builds library/protocol's out-ts first)
+      - run: corepack enable
+      - name: Install (builds library/protocol's out-ts and library/hashing first)
         run: make install
       - name: Lint
         run: make lint
@@ -50,7 +52,7 @@ jobs:
         run: make lint-packages
   build-test:
     name: Build, test, pack
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
     timeout-minutes: 60
     defaults:
       run:
@@ -60,10 +62,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.16.0
-          cache: npm
-          # library/protocol keeps no lockfile (it ignores package-lock.json)
-          cache-dependency-path: library/js-sdk-toolchain/package-lock.json
-      - name: Install (builds library/protocol's out-ts first)
+      - run: corepack enable
+      - name: Install (builds library/protocol's out-ts and library/hashing first)
         run: make install
       - name: Test the embedded CLI SDK contracts and declarations
         run: node --test ../../apps/dcl-scene-cli/scripts/environment-sdk.test.mjs
@@ -102,9 +102,10 @@ jobs:
       - name: Prepare releasable packages
         run: make prepare
         env:
-          # nothing is published from this job, and @dcl/protocol has no version published from here yet:
-          # the packed manifests say so instead of naming a version that is not on npm
+          # nothing is published from this job, and @dcl/protocol and @dcl/hashing have no version published
+          # from here yet: the packed manifests say so instead of naming a version that is not on npm
           PROTOCOL_VERSION: 0.0.0-unpublished.${{ github.sha }}
+          HASHING_VERSION: 0.0.0-unpublished.${{ github.sha }}
       - name: Packed manifests name no local dependency
         run: |
           rm -rf .packed && mkdir .packed

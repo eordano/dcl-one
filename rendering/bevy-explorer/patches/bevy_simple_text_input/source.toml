@@ -1,0 +1,12 @@
+name       = "bevy_simple_text_input"
+upstream   = "https://github.com/rparrett/bevy_simple_text_input"
+commit     = "9345ad4d0a9ba057f805df49e3caf2b8c2960b42"
+ref        = "v0.11.1"
+origin     = "https://github.com/robtfm/bevy_simple_text_input"
+origin_rev = "f63341739ea3c14dc1e98395115dc58969469297"
+license    = "MIT OR Apache-2.0"
+paths      = ["."]
+exclude    = []
+base_tree  = "3410f72cfcd11e2763788068f28b5ce645271226"
+tree       = "41deae76299e3d1dd0b66ea014a113d5c12aaea3"
+nix_hash   = "sha256-3NY8GY4OY4qtlpp0sCuRMKzfctzDM7DtcuFyVoPoji8="

@@ -11,3 +11,8 @@ minimumReleaseAgeExclude:
   - vite@8.3.0
   - zod@4.6.1
   - jsdom@30.1.1
+overrides:
+  'dompurify@<3.4.17': '^3.4.17'
+  'viem>ws': '-'
+  'isows>ws': '-'
+  '@walletconnect/jsonrpc-ws-connection>ws': '-'

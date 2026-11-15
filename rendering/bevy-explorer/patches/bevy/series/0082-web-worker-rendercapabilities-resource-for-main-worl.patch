@@ -1,0 +1,400 @@
+From 9051742a122ca2a8a5fca2efaa201ede8d4a13d2
+Subject: web-worker: RenderCapabilities resource for main-world capability checks
+Origin: https://github.com/robtfm/bevy/commit/9051742a122ca2a8a5fca2efaa201ede8d4a13d2
+Date: 2026-09-18T23:54:15+01:00
+
+Main-world code that only needs limits, features or adapter info (cluster
+assignment, the skin uniform-buffer check, compressed-format detection in the
+image and glTF loaders) now reads a RenderCapabilities resource. Normally it
+wraps and derefs to the RenderDevice; with the web-worker feature it is a
+snapshot taken on the render worker at finish, and the wgpu handles are no
+longer inserted into the main world at all, so nothing there can touch them
+across threads. The existing (&RenderDevice, &RenderAdapter) helpers keep
+their signatures and delegate to `_with(&RenderCapabilities)` cores.
+---
+diff --git a/crates/bevy_gltf/src/lib.rs b/crates/bevy_gltf/src/lib.rs
+index 4d581a3cb39ae0f04d7b1583c9d86e3a00998873..abbb82e7cec83ec84fb9912fe37f0fb9b6e7b886 100644
+--- a/crates/bevy_gltf/src/lib.rs
++++ b/crates/bevy_gltf/src/lib.rs
+@@ -103,7 +103,7 @@ use bevy_app::prelude::*;
+ use bevy_asset::AssetApp;
+ use bevy_image::CompressedImageFormats;
+ use bevy_mesh::MeshVertexAttribute;
+-use bevy_render::renderer::RenderDevice;
++use bevy_render::renderer::RenderCapabilities;
+ 
+ /// The glTF prelude.
+ ///
+@@ -161,8 +161,8 @@ impl Plugin for GltfPlugin {
+     }
+ 
+     fn finish(&self, app: &mut App) {
+-        let supported_compressed_formats = match app.world().get_resource::<RenderDevice>() {
+-            Some(render_device) => CompressedImageFormats::from_features(render_device.features()),
++        let supported_compressed_formats = match app.world().get_resource::<RenderCapabilities>() {
++            Some(capabilities) => CompressedImageFormats::from_features(capabilities.features()),
+             None => CompressedImageFormats::NONE,
+         };
+         app.register_asset_loader(GltfLoader {
+diff --git a/crates/bevy_pbr/src/cluster/assign.rs b/crates/bevy_pbr/src/cluster/assign.rs
+index 1b7b3563d75c814393712cedd76838e81b64b661..ba133f733862ddb65899ea1300b6e50ab5f574f7 100644
+--- a/crates/bevy_pbr/src/cluster/assign.rs
++++ b/crates/bevy_pbr/src/cluster/assign.rs
+@@ -13,7 +13,7 @@ use bevy_render::{
+     camera::Camera,
+     primitives::{Aabb, Frustum, HalfSpace, Sphere},
+     render_resource::BufferBindingType,
+-    renderer::{RenderAdapter, RenderDevice},
++    renderer::RenderCapabilities,
+     view::{RenderLayers, ViewVisibility},
+ };
+ use bevy_transform::components::GlobalTransform;
+@@ -180,9 +180,9 @@ pub(crate) fn assign_objects_to_clusters(
+     mut clusterable_objects: Local<Vec<ClusterableObjectAssignmentData>>,
+     mut cluster_aabb_spheres: Local<Vec<Option<Sphere>>>,
+     mut max_clusterable_objects_warning_emitted: Local<bool>,
+-    (render_device, render_adapter): (Option<Res<RenderDevice>>, Option<Res<RenderAdapter>>),
++    capabilities: Option<Res<RenderCapabilities>>,
+ ) {
+-    let (Some(render_device), Some(render_adapter)) = (render_device, render_adapter) else {
++    let Some(capabilities) = capabilities else {
+         return;
+     };
+ 
+@@ -230,7 +230,7 @@ pub(crate) fn assign_objects_to_clusters(
+     );
+ 
+     let clustered_forward_buffer_binding_type =
+-        render_device.get_supported_read_only_binding_type(CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT);
++        capabilities.get_supported_read_only_binding_type(CLUSTERED_FORWARD_STORAGE_BUFFER_COUNT);
+     let supports_storage_buffers = matches!(
+         clustered_forward_buffer_binding_type,
+         BufferBindingType::Storage { .. }
+@@ -259,7 +259,7 @@ pub(crate) fn assign_objects_to_clusters(
+     }
+ 
+     // Add decals if the current platform supports them.
+-    if decal::clustered::clustered_decals_are_usable(&render_device, &render_adapter) {
++    if decal::clustered::clustered_decals_are_usable_with(&capabilities) {
+         clusterable_objects.extend(decals_query.iter().map(|(entity, transform)| {
+             ClusterableObjectAssignmentData {
+                 entity,
+diff --git a/crates/bevy_pbr/src/decal/clustered.rs b/crates/bevy_pbr/src/decal/clustered.rs
+index 28ea0530c961b7973bd2c9c5c2ffe170f9a84fc4..e8404ca0eca9a0ac06b575929369f9d0c4f42542 100644
+--- a/crates/bevy_pbr/src/decal/clustered.rs
++++ b/crates/bevy_pbr/src/decal/clustered.rs
+@@ -39,7 +39,7 @@ use bevy_render::{
+         binding_types, BindGroupLayoutEntryBuilder, Buffer, BufferUsages, RawBufferVec, Sampler,
+         SamplerBindingType, Shader, ShaderType, TextureSampleType, TextureView,
+     },
+-    renderer::{RenderAdapter, RenderDevice, RenderQueue},
++    renderer::{RenderAdapter, RenderCapabilities, RenderDevice, RenderQueue},
+     sync_world::RenderEntity,
+     texture::{FallbackImage, GpuImage},
+     view::{self, ViewVisibility, Visibility, VisibilityClass},
+@@ -49,7 +49,7 @@ use bevy_transform::{components::GlobalTransform, prelude::Transform};
+ use bytemuck::{Pod, Zeroable};
+ 
+ use crate::{
+-    binding_arrays_are_usable, prepare_lights, DirectionalLight, GlobalClusterableObjectMeta,
++    binding_arrays_are_usable_with, prepare_lights, DirectionalLight, GlobalClusterableObjectMeta,
+     LightVisibilityClass, PointLight, SpotLight,
+ };
+ 
+@@ -531,10 +531,16 @@ pub fn clustered_decals_are_usable(
+     render_device: &RenderDevice,
+     render_adapter: &RenderAdapter,
+ ) -> bool {
++    clustered_decals_are_usable_with(&RenderCapabilities::new(render_device, render_adapter))
++}
++
++/// [`clustered_decals_are_usable`] from captured [`RenderCapabilities`], for use where no device
++/// handle is available (the main world).
++pub fn clustered_decals_are_usable_with(capabilities: &RenderCapabilities) -> bool {
+     // Disable binding arrays on Metal. There aren't enough texture bindings available.
+     // See issue #17553.
+     // Re-enable this when `wgpu` has first-class bindless.
+-    binding_arrays_are_usable(render_device, render_adapter)
++    binding_arrays_are_usable_with(capabilities)
+         && cfg!(not(any(target_os = "macos", target_os = "ios")))
+         && cfg!(feature = "pbr_clustered_decals")
+ }
+diff --git a/crates/bevy_pbr/src/light_probe/mod.rs b/crates/bevy_pbr/src/light_probe/mod.rs
+index ebfc7c7e7c61444da74be627d020b0a0d3db7e8e..77ef78806e40670f08ae42e34b1e4d92c495d0cf 100644
+--- a/crates/bevy_pbr/src/light_probe/mod.rs
++++ b/crates/bevy_pbr/src/light_probe/mod.rs
+@@ -22,7 +22,7 @@ use bevy_render::{
+     primitives::{Aabb, Frustum},
+     render_asset::RenderAssets,
+     render_resource::{DynamicUniformBuffer, Sampler, Shader, ShaderType, TextureView},
+-    renderer::{RenderAdapter, RenderDevice, RenderQueue},
++    renderer::{RenderAdapter, RenderCapabilities, RenderDevice, RenderQueue},
+     settings::WgpuFeatures,
+     sync_world::RenderEntity,
+     texture::{FallbackImage, GpuImage},
+@@ -792,12 +792,19 @@ pub(crate) fn binding_arrays_are_usable(
+     render_device: &RenderDevice,
+     render_adapter: &RenderAdapter,
+ ) -> bool {
++    binding_arrays_are_usable_with(&RenderCapabilities::new(render_device, render_adapter))
++}
++
++/// [`binding_arrays_are_usable`] from captured [`RenderCapabilities`], for use where no device
++/// handle is available (the main world).
++pub(crate) fn binding_arrays_are_usable_with(capabilities: &RenderCapabilities) -> bool {
+     !cfg!(feature = "shader_format_glsl")
+-        && bevy_render::get_adreno_model(render_adapter).is_none_or(|model| model > 610)
+-        && render_device.limits().max_storage_textures_per_shader_stage
++        && bevy_render::get_adreno_model_from_name(&capabilities.adapter_info().name)
++            .is_none_or(|model| model > 610)
++        && capabilities.limits().max_storage_textures_per_shader_stage
+             >= (STANDARD_MATERIAL_FRAGMENT_SHADER_MIN_TEXTURE_BINDINGS + MAX_VIEW_LIGHT_PROBES)
+                 as u32
+-        && render_device.features().contains(
++        && capabilities.features().contains(
+             WgpuFeatures::TEXTURE_BINDING_ARRAY
+                 | WgpuFeatures::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
+         )
+diff --git a/crates/bevy_pbr/src/render/mod.rs b/crates/bevy_pbr/src/render/mod.rs
+index 6a29823022b58b7d7d033046188d6d3eb96a4d89..e8094af6897b61fbebee717071cb434d49eac348 100644
+--- a/crates/bevy_pbr/src/render/mod.rs
++++ b/crates/bevy_pbr/src/render/mod.rs
+@@ -14,4 +14,7 @@ pub use mesh::*;
+ pub use mesh_bindings::MeshLayouts;
+ pub use mesh_view_bindings::*;
+ pub use morph::*;
+-pub use skin::{extract_skins, prepare_skins, skins_use_uniform_buffers, SkinUniforms, MAX_JOINTS};
++pub use skin::{
++    extract_skins, prepare_skins, skins_use_uniform_buffers, skins_use_uniform_buffers_with,
++    SkinUniforms, MAX_JOINTS,
++};
+diff --git a/crates/bevy_pbr/src/render/skin.rs b/crates/bevy_pbr/src/render/skin.rs
+index 6a474fa7dd391e33797fb0e69ca80f13da31bb8f..f572bfe4ed93ef1c2101aa5dd66778eb35a501fb 100644
+--- a/crates/bevy_pbr/src/render/skin.rs
++++ b/crates/bevy_pbr/src/render/skin.rs
+@@ -11,7 +11,8 @@ use bevy_render::{
+     batching::NoAutomaticBatching,
+     mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+     render_resource::BufferUsages,
+-    renderer::{RenderDevice, RenderQueue},
++    renderer::{RenderCapabilities, RenderDevice, RenderQueue},
++    settings::WgpuLimits,
+     view::ViewVisibility,
+     Extract,
+ };
+@@ -191,9 +192,14 @@ impl SkinUniformInfo {
+ /// Returns true if skinning must use uniforms (and dynamic offsets) because
+ /// storage buffers aren't supported on the current platform.
+ pub fn skins_use_uniform_buffers(render_device: &RenderDevice) -> bool {
++    skins_use_uniform_buffers_with(&render_device.limits())
++}
++
++/// [`skins_use_uniform_buffers`] from the device limits, for use where no device handle is
++/// available (the main world).
++pub fn skins_use_uniform_buffers_with(limits: &WgpuLimits) -> bool {
+     static SKINS_USE_UNIFORM_BUFFERS: OnceLock<bool> = OnceLock::new();
+-    *SKINS_USE_UNIFORM_BUFFERS
+-        .get_or_init(|| render_device.limits().max_storage_buffers_per_shader_stage == 0)
++    *SKINS_USE_UNIFORM_BUFFERS.get_or_init(|| limits.max_storage_buffers_per_shader_stage == 0)
+ }
+ 
+ /// Uploads the buffers containing the joints to the GPU.
+@@ -615,14 +621,12 @@ fn remove_skin(skin_uniforms: &mut SkinUniforms, skinned_mesh_entity: MainEntity
+ pub fn no_automatic_skin_batching(
+     mut commands: Commands,
+     query: Query<Entity, (With<SkinnedMesh>, Without<NoAutomaticBatching>)>,
+-    render_device: Option<Res<RenderDevice>>,
++    capabilities: Option<Res<RenderCapabilities>>,
+ ) {
+-    // The main world may not hold a device handle (e.g. when rendering runs on another web
+-    // worker); without one there is no uniform-buffer fallback to worry about.
+-    let Some(render_device) = render_device else {
++    let Some(capabilities) = capabilities else {
+         return;
+     };
+-    if !skins_use_uniform_buffers(&render_device) {
++    if !skins_use_uniform_buffers_with(&capabilities.limits()) {
+         return;
+     }
+ 
+diff --git a/crates/bevy_render/src/lib.rs b/crates/bevy_render/src/lib.rs
+index a6f576d7bb08d90c0794a19f2471aa36e8f1f9b6..79ff2294e32401ca7b26371b3dc1867593e260c9 100644
+--- a/crates/bevy_render/src/lib.rs
++++ b/crates/bevy_render/src/lib.rs
+@@ -102,7 +102,7 @@ use crate::{
+     mesh::{MeshPlugin, MorphPlugin, RenderMesh},
+     render_asset::prepare_assets,
+     render_resource::{PipelineCache, Shader, ShaderLoader},
+-    renderer::{render_system, RenderInstance, WgpuWrapper},
++    renderer::{render_system, RenderCapabilities, RenderInstance, WgpuWrapper},
+     settings::RenderCreation,
+     storage::StoragePlugin,
+     view::{ViewPlugin, WindowRenderPlugin},
+@@ -483,6 +483,10 @@ impl Plugin for RenderPlugin {
+             let RenderResources(device, queue, adapter_info, render_adapter, instance) =
+                 future_render_resources.0.lock().unwrap().take().unwrap();
+ 
++            app.insert_resource(RenderCapabilities::new(&device, &render_adapter));
++            // With the render world on its own web worker the handles must stay off the main
++            // world entirely: any use of them there, including dropping, is a cross-thread access.
++            #[cfg(not(all(target_arch = "wasm32", feature = "web-worker")))]
+             app.insert_resource(device.clone())
+                 .insert_resource(queue.clone())
+                 .insert_resource(adapter_info.clone())
+@@ -599,11 +603,15 @@ fn apply_extract_commands(render_world: &mut World) {
+ ///
+ /// This lets us work around hardware bugs.
+ pub fn get_adreno_model(adapter: &RenderAdapter) -> Option<u32> {
++    get_adreno_model_from_name(&adapter.get_info().name)
++}
++
++/// [`get_adreno_model`] for an adapter name taken from [`AdapterInfo`](wgpu::AdapterInfo).
++pub fn get_adreno_model_from_name(adapter_name: &str) -> Option<u32> {
+     if !cfg!(target_os = "android") {
+         return None;
+     }
+ 
+-    let adapter_name = adapter.get_info().name;
+     let adreno_model = adapter_name.strip_prefix("Adreno (TM) ")?;
+ 
+     // Take suffixes into account (like Adreno 642L).
+diff --git a/crates/bevy_render/src/renderer/mod.rs b/crates/bevy_render/src/renderer/mod.rs
+index ec44718d40a1ec4094f85147bbb3d02c4663ff1c..50afe7da9eec9e1f802a29c6c266937e79a3cd81 100644
+--- a/crates/bevy_render/src/renderer/mod.rs
++++ b/crates/bevy_render/src/renderer/mod.rs
+@@ -182,6 +182,100 @@ pub struct RenderInstance(pub Arc<WgpuWrapper<Instance>>);
+ #[derive(Resource, Clone, Deref, DerefMut)]
+ pub struct RenderAdapterInfo(pub WgpuWrapper<AdapterInfo>);
+ 
++/// What the renderer can do: the device's limits and features and the adapter's info. Present in
++/// the main world so capability checks there never need a device handle.
++///
++/// Normally this wraps (and derefs to) the [`RenderDevice`]. When the render world runs on its
++/// own web worker (`web-worker` feature) the wgpu handles cannot be touched from the main world,
++/// so it holds a snapshot of the data instead.
++#[cfg(not(all(target_arch = "wasm32", feature = "web-worker")))]
++#[derive(Resource, Clone, Deref)]
++pub struct RenderCapabilities {
++    #[deref]
++    device: RenderDevice,
++    adapter_info: AdapterInfo,
++}
++
++/// What the renderer can do: the device's limits and features and the adapter's info. Present in
++/// the main world so capability checks there never need a device handle.
++///
++/// Normally this wraps (and derefs to) the [`RenderDevice`]. When the render world runs on its
++/// own web worker (`web-worker` feature) the wgpu handles cannot be touched from the main world,
++/// so it holds a snapshot of the data instead.
++#[cfg(all(target_arch = "wasm32", feature = "web-worker"))]
++#[derive(Resource, Clone)]
++pub struct RenderCapabilities {
++    limits: wgpu::Limits,
++    features: wgpu::Features,
++    adapter_info: AdapterInfo,
++}
++
++impl RenderCapabilities {
++    /// Captures the capabilities of `device` and `adapter`. Must be called on the thread that
++    /// created them.
++    pub fn new(device: &RenderDevice, adapter: &RenderAdapter) -> Self {
++        #[cfg(not(all(target_arch = "wasm32", feature = "web-worker")))]
++        {
++            Self {
++                device: device.clone(),
++                adapter_info: adapter.get_info(),
++            }
++        }
++        #[cfg(all(target_arch = "wasm32", feature = "web-worker"))]
++        {
++            Self {
++                limits: device.limits(),
++                features: device.features(),
++                adapter_info: adapter.get_info(),
++            }
++        }
++    }
++
++    /// See [`RenderDevice::limits`].
++    #[inline]
++    pub fn limits(&self) -> wgpu::Limits {
++        #[cfg(not(all(target_arch = "wasm32", feature = "web-worker")))]
++        {
++            self.device.limits()
++        }
++        #[cfg(all(target_arch = "wasm32", feature = "web-worker"))]
++        {
++            self.limits.clone()
++        }
++    }
++
++    /// See [`RenderDevice::features`].
++    #[inline]
++    pub fn features(&self) -> wgpu::Features {
++        #[cfg(not(all(target_arch = "wasm32", feature = "web-worker")))]
++        {
++            self.device.features()
++        }
++        #[cfg(all(target_arch = "wasm32", feature = "web-worker"))]
++        {
++            self.features
++        }
++    }
++
++    /// The [`AdapterInfo`] of the adapter in use by the renderer.
++    #[inline]
++    pub fn adapter_info(&self) -> &AdapterInfo {
++        &self.adapter_info
++    }
++
++    /// See [`RenderDevice::get_supported_read_only_binding_type`].
++    pub fn get_supported_read_only_binding_type(
++        &self,
++        buffers_per_shader_stage: u32,
++    ) -> wgpu::BufferBindingType {
++        if self.limits().max_storage_buffers_per_shader_stage >= buffers_per_shader_stage {
++            wgpu::BufferBindingType::Storage { read_only: true }
++        } else {
++            wgpu::BufferBindingType::Uniform
++        }
++    }
++}
++
+ const GPU_NOT_FOUND_ERROR_MESSAGE: &str = if cfg!(target_os = "linux") {
+     "Unable to find a GPU! Make sure you have installed required drivers! For extra information, see: https://github.com/bevyengine/bevy/blob/latest/docs/linux_dependencies.md"
+ } else {
+diff --git a/crates/bevy_render/src/texture/mod.rs b/crates/bevy_render/src/texture/mod.rs
+index 6955de7ff4fc21fa3c2d7c61e0dd25c64c3e7596..1cd5c96754d8f2e968c08fd04e0748f82104fc17 100644
+--- a/crates/bevy_render/src/texture/mod.rs
++++ b/crates/bevy_render/src/texture/mod.rs
+@@ -15,7 +15,9 @@ pub use texture_attachment::*;
+ pub use texture_cache::*;
+ 
+ use crate::{
+-    render_asset::RenderAssetPlugin, renderer::RenderDevice, Render, RenderApp, RenderSet,
++    render_asset::RenderAssetPlugin,
++    renderer::{RenderCapabilities, RenderDevice},
++    Render, RenderApp, RenderSet,
+ };
+ use bevy_app::{App, Plugin};
+ use bevy_asset::{weak_handle, AssetApp, Assets, Handle};
+@@ -111,12 +113,13 @@ impl Plugin for ImagePlugin {
+ 
+     fn finish(&self, app: &mut App) {
+         if !ImageLoader::SUPPORTED_FORMATS.is_empty() {
+-            let supported_compressed_formats = match app.world().get_resource::<RenderDevice>() {
+-                Some(render_device) => {
+-                    CompressedImageFormats::from_features(render_device.features())
+-                }
+-                None => CompressedImageFormats::NONE,
+-            };
++            let supported_compressed_formats =
++                match app.world().get_resource::<RenderCapabilities>() {
++                    Some(capabilities) => {
++                        CompressedImageFormats::from_features(capabilities.features())
++                    }
++                    None => CompressedImageFormats::NONE,
++                };
+             app.register_asset_loader(ImageLoader::new(supported_compressed_formats));
+         }
+ 

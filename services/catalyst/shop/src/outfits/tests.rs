@@ -191,6 +191,17 @@ fn image_sniffing_and_js_number_parsing() {
     assert_eq!(js_number_or(Some(&"7".to_string()), 50), 7);
     assert_eq!(js_number_or(Some(&"7.9".to_string()), 50), 7);
     assert_eq!(js_number_or(Some(&"-3".to_string()), 0), -3);
+    assert_eq!(
+        js_number_or(Some(&"0x10".to_string()), 50),
+        16,
+        "Number('0x10')"
+    );
+    assert_eq!(
+        js_number_or(Some(&"inf".to_string()), 50),
+        50,
+        "Number('inf') is NaN"
+    );
+    assert_eq!(js_number_or(Some(&"1_0".to_string()), 50), 50);
 }
 
 struct Rig {

@@ -23,7 +23,10 @@ jobs:
     concurrency:
       group: headless-build-${{ github.event_name }}-${{ github.ref }}-${{ matrix.platform }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
       cancel-in-progress: true
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'windows-2025' && (vars.RUNNER_WINDOWS_16CORE || 'windows-2025')
+      || matrix.runner == 'macos-15' && (vars.RUNNER_MACOS_XLARGE || 'macos-15')
+      || matrix.runner == 'ubuntu-22.04' && (vars.RUNNER_LINUX_X86_UBUNTU_22_04 || 'ubuntu-22.04')
+      || matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -33,7 +36,7 @@ jobs:
         with:
           node-version: 24
       - name: Reserve disk space on the hosted Linux runner
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         working-directory: .
         run: |-
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup
@@ -55,16 +58,18 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Prepare the pinned native toolchain for caching
         run: python ../../../apps/bevy-explorer/prepare-native-cache.py
+      - name: Rebuild the patched sources
+        uses: ./.github/actions/bevy-explorer-sources
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: bevy-explorer-headless-${{ matrix.platform }}
           workspaces: rendering/bevy-explorer/source -> target
           save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
-      - name: Restore the vendored Bevy's cached file times
+      - name: Restore the rebuilt Bevy tree's cached file times
         run: python "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" restore target
       - name: Build the local headless app
         run: python ../../../apps/bevy-explorer/build-headless.py --target ${{ matrix.target }}
-      - name: Record the vendored Bevy's file times for the cache
+      - name: Record the rebuilt Bevy tree's file times for the cache
         run: python "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" record target
       - name: Stamp snapshot version
         uses: decentraland/oddish-action@a4e98664bf53d4aae1f6d20d1a43ff2c79b555b3 # v1.0.1

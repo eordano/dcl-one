@@ -54,22 +54,6 @@ pub fn friendship_request_status(action: &str, acting_user: &str, context_addres
 
 /// The latest action of the viewer's friendship with each address, as the
 /// wire status; addresses with no friendship row are absent (NONE).
-pub async fn friendship_statuses(
-    pool: &PgPool,
-    viewer: &Address,
-    addresses: &[String],
-) -> HashMap<String, i32> {
-    if addresses.is_empty() {
-        return HashMap::new();
-    }
-    try_friendship_statuses(pool, viewer, addresses)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "legacy friendship status lookup failed");
-            HashMap::new()
-        })
-}
-
 pub async fn try_friendship_statuses(
     pool: &PgPool,
     viewer: &Address,

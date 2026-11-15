@@ -1,0 +1,16 @@
+From 0000000000000000000000000000000000000000
+Subject: Allow rustc warnings, which Cargo capped for the git dependency
+Date: 2026-11-14T17:53:23+00:00
+
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index 311d2c07450b54e257d166ace438a3cd9e5b1c88..03db63b60e9d28976db74861d4792fc53892cd18 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -121,3 +121,6 @@ required-features = ["ogg"]
+ name = "spatial"
+ path = "examples/spatial.rs"
+ required-features = ["ogg"]
++
++[lints.rust]
++warnings = "allow"

@@ -1,0 +1,509 @@
+From ea37d4c6a52097b4ed9482db9c360d8296f88f66
+Subject: don't remove renderassets
+Origin: https://github.com/robtfm/bevy/commit/ea37d4c6a52097b4ed9482db9c360d8296f88f66
+Date: 2025-11-03T12:36:41Z
+
+---
+diff --git a/crates/bevy_asset/src/assets.rs b/crates/bevy_asset/src/assets.rs
+index 9fa8eb4381485a86c8dca22a7c9133b2aee56fa7..54fc3614974517f08dac022ebd6198fcc28a1a76 100644
+--- a/crates/bevy_asset/src/assets.rs
++++ b/crates/bevy_asset/src/assets.rs
+@@ -437,6 +437,16 @@ impl<A: Asset> Assets<A> {
+         result
+     }
+ 
++    #[inline]
++    pub fn get_mut_bypass_change_detection(&mut self, id: impl Into<AssetId<A>>) -> Option<&mut A> {
++        let id: AssetId<A> = id.into();
++        let result = match id {
++            AssetId::Index { index, .. } => self.dense_storage.get_mut(index),
++            AssetId::Uuid { uuid } => self.hash_map.get_mut(&uuid),
++        };
++        result
++    }
++
+     /// Removes (and returns) the [`Asset`] with the given `id`, if it exists.
+     /// Note that this supports anything that implements `Into<AssetId<A>>`, which includes [`Handle`] and [`AssetId`].
+     pub fn remove(&mut self, id: impl Into<AssetId<A>>) -> Option<A> {
+diff --git a/crates/bevy_asset/src/render_asset.rs b/crates/bevy_asset/src/render_asset.rs
+index 583ee454578951e5d37031ca2d43c972138b8357..7b4b17c8d01cd0b3fd33dd89b89619fef0c766b1 100644
+--- a/crates/bevy_asset/src/render_asset.rs
++++ b/crates/bevy_asset/src/render_asset.rs
+@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
+ bitflags::bitflags! {
+     /// Defines where the asset will be used.
+     ///
+-    /// If an asset is set to the `RENDER_WORLD` but not the `MAIN_WORLD`, the asset will be
+-    /// unloaded from the asset server once it's been extracted and prepared in the render world.
++    /// If an asset is set to the `RENDER_WORLD` but not the `MAIN_WORLD`, the asset data (pixel data, 
++    /// mesh vertex data, etc) will be removed from the cpu-side asset once it's been extracted and prepared 
++    /// in the render world. The asset will remain in the assets collection, but with only metadata.
+     ///
+-    /// Unloading the asset saves on memory, as for most cases it is no longer necessary to keep
+-    /// it in RAM once it's been uploaded to the GPU's VRAM. However, this means you can no longer
+-    /// access the asset from the CPU (via the `Assets<T>` resource) once unloaded (without re-loading it).
++    /// Unloading the asset data saves on memory, as for most cases it is no longer necessary to keep
++    /// it in RAM once it's been uploaded to the GPU's VRAM. However, this means you cannot read the
++    /// asset data from the CPU (via the `Assets<T>` resource) once unloaded (without re-loading it).
+     ///
+     /// If you never need access to the asset from the CPU past the first frame it's loaded on,
+     /// or only need very infrequent access, then set this to `RENDER_WORLD`. Otherwise, set this to
+diff --git a/crates/bevy_mesh/src/mesh.rs b/crates/bevy_mesh/src/mesh.rs
+index ce357c61065d400a73c415b342c7e2558f0c9cfa..68c6c2ad46ab68f3504f1fdd394888c8e848c4ab 100644
+--- a/crates/bevy_mesh/src/mesh.rs
++++ b/crates/bevy_mesh/src/mesh.rs
+@@ -114,12 +114,13 @@ pub struct Mesh {
+     /// Uses a [`BTreeMap`] because, unlike `HashMap`, it has a defined iteration order,
+     /// which allows easy stable `VertexBuffers` (i.e. same buffer order)
+     #[reflect(ignore, clone)]
+-    attributes: BTreeMap<MeshVertexAttributeId, MeshAttributeData>,
++    attributes: Option<BTreeMap<MeshVertexAttributeId, MeshAttributeData>>,
+     indices: Option<Indices>,
+     morph_targets: Option<Handle<Image>>,
+     morph_target_names: Option<Vec<String>>,
+     pub asset_usage: RenderAssetUsages,
+     pub immediate_upload: bool,
++    pub extents: Option<(Vec3, Vec3)>,
+ }
+ 
+ impl Mesh {
+@@ -199,12 +200,13 @@ impl Mesh {
+     pub fn new(primitive_topology: PrimitiveTopology, asset_usage: RenderAssetUsages) -> Self {
+         Mesh {
+             primitive_topology,
+-            attributes: Default::default(),
++            attributes: Some(Default::default()),
+             indices: None,
+             morph_targets: None,
+             morph_target_names: None,
+             asset_usage,
+             immediate_upload: false,
++            extents: None,
+         }
+     }
+ 
+@@ -235,7 +237,27 @@ impl Mesh {
+             );
+         }
+ 
++        if attribute.id == Self::ATTRIBUTE_POSITION.id {
++            let VertexAttributeValues::Float32x3(position_values) = &values else {
++                unreachable!(); // we checked above that the values format matches the position format
++            };
++            if position_values.len() > 0 {
++                let mut iter = position_values.into_iter().map(|p| Vec3::from_slice(p));
++                let mut min = iter.next().unwrap();
++                let mut max = min;
++                for v in iter {
++                    min = Vec3::min(min, v);
++                    max = Vec3::max(max, v);
++                }
++                self.extents = Some((min, max))
++            } else {
++                self.extents = None;
++            }
++        }
++
+         self.attributes
++            .as_mut()
++            .expect("Mesh has been extracted to RenderWorld")
+             .insert(attribute.id, MeshAttributeData { attribute, values });
+     }
+ 
+@@ -264,8 +286,14 @@ impl Mesh {
+         &mut self,
+         attribute: impl Into<MeshVertexAttributeId>,
+     ) -> Option<VertexAttributeValues> {
++        let attribute = attribute.into();
++        if attribute == Self::ATTRIBUTE_POSITION.id {
++            self.extents = None;
++        }
+         self.attributes
+-            .remove(&attribute.into())
++            .as_mut()
++            .expect("Mesh has been extracted to RenderWorld")
++            .remove(&attribute)
+             .map(|data| data.values)
+     }
+ 
+@@ -280,7 +308,10 @@ impl Mesh {
+ 
+     #[inline]
+     pub fn contains_attribute(&self, id: impl Into<MeshVertexAttributeId>) -> bool {
+-        self.attributes.contains_key(&id.into())
++        self.attributes
++            .as_ref()
++            .expect("Mesh has been extracted to RenderWorld")
++            .contains_key(&id.into())
+     }
+ 
+     /// Retrieves the data currently set to the vertex attribute with the specified [`MeshVertexAttributeId`].
+@@ -289,7 +320,11 @@ impl Mesh {
+         &self,
+         id: impl Into<MeshVertexAttributeId>,
+     ) -> Option<&VertexAttributeValues> {
+-        self.attributes.get(&id.into()).map(|data| &data.values)
++        self.attributes
++            .as_ref()
++            .expect("Mesh has been extracted to RenderWorld")
++            .get(&id.into())
++            .map(|data| &data.values)
+     }
+ 
+     /// Retrieves the full data currently set to the vertex attribute with the specified [`MeshVertexAttributeId`].
+@@ -298,7 +333,10 @@ impl Mesh {
+         &self,
+         id: impl Into<MeshVertexAttributeId>,
+     ) -> Option<&MeshAttributeData> {
+-        self.attributes.get(&id.into())
++        self.attributes
++            .as_ref()
++            .expect("Mesh has been extracted to RenderWorld")
++            .get(&id.into())
+     }
+ 
+     /// Retrieves the data currently set to the vertex attribute with the specified `name` mutably.
+@@ -308,6 +346,8 @@ impl Mesh {
+         id: impl Into<MeshVertexAttributeId>,
+     ) -> Option<&mut VertexAttributeValues> {
+         self.attributes
++            .as_mut()
++            .expect("Mesh has been extracted to RenderWorld")
+             .get_mut(&id.into())
+             .map(|data| &mut data.values)
+     }
+@@ -317,6 +357,8 @@ impl Mesh {
+         &self,
+     ) -> impl Iterator<Item = (&MeshVertexAttribute, &VertexAttributeValues)> {
+         self.attributes
++            .as_ref()
++            .expect("Mesh has been extracted to RenderWorld")
+             .values()
+             .map(|data| (&data.attribute, &data.values))
+     }
+@@ -326,6 +368,8 @@ impl Mesh {
+         &mut self,
+     ) -> impl Iterator<Item = (&MeshVertexAttribute, &mut VertexAttributeValues)> {
+         self.attributes
++            .as_mut()
++            .expect("Mesh has been extracted to RenderWorld")
+             .values_mut()
+             .map(|data| (&data.attribute, &mut data.values))
+     }
+@@ -380,6 +424,8 @@ impl Mesh {
+     /// Returns the size of a vertex in bytes.
+     pub fn get_vertex_size(&self) -> u64 {
+         self.attributes
++            .as_ref()
++            .expect("Mesh has been extracted to RenderWorld")
+             .values()
+             .map(|data| data.attribute.format.size())
+             .sum()
+@@ -406,10 +452,11 @@ impl Mesh {
+         &self,
+         mesh_vertex_buffer_layouts: &mut MeshVertexBufferLayouts,
+     ) -> MeshVertexBufferLayoutRef {
+-        let mut attributes = Vec::with_capacity(self.attributes.len());
+-        let mut attribute_ids = Vec::with_capacity(self.attributes.len());
++        let initial_attributes = self.attributes.as_ref().expect("Mesh has been extracted to RenderWorld");
++        let mut attributes = Vec::with_capacity(initial_attributes.len());
++        let mut attribute_ids = Vec::with_capacity(initial_attributes.len());
+         let mut accumulated_offset = 0;
+-        for (index, data) in self.attributes.values().enumerate() {
++        for (index, data) in initial_attributes.values().enumerate() {
+             attribute_ids.push(data.attribute.id);
+             attributes.push(VertexAttribute {
+                 offset: accumulated_offset,
+@@ -435,12 +482,12 @@ impl Mesh {
+     /// If the attributes have different vertex counts, the smallest is returned.
+     pub fn count_vertices(&self) -> usize {
+         let mut vertex_count: Option<usize> = None;
+-        for (attribute_id, attribute_data) in &self.attributes {
++        let attributes = self.attributes.as_ref().expect("Mesh has been extracted to RenderWorld");
++        for (attribute_id, attribute_data) in attributes {
+             let attribute_len = attribute_data.values.len();
+             if let Some(previous_vertex_count) = vertex_count {
+                 if previous_vertex_count != attribute_len {
+-                    let name = self
+-                        .attributes
++                    let name = attributes
+                         .get(attribute_id)
+                         .map(|data| data.attribute.name.to_string())
+                         .unwrap_or_else(|| format!("{attribute_id:?}"));
+@@ -483,7 +530,8 @@ impl Mesh {
+         let vertex_count = self.count_vertices();
+         // bundle into interleaved buffers
+         let mut attribute_offset = 0;
+-        for attribute_data in self.attributes.values() {
++        let attributes = self.attributes.as_ref().expect("Mesh has been extracted to RenderWorld");
++        for attribute_data in attributes.values() {
+             let attribute_size = attribute_data.attribute.format.size() as usize;
+             let attributes_bytes = attribute_data.values.get_bytes();
+             for (vertex_index, attribute_bytes) in attributes_bytes
+@@ -512,7 +560,9 @@ impl Mesh {
+             return;
+         };
+ 
+-        for attributes in self.attributes.values_mut() {
++        let attributes = self.attributes.as_mut().expect("Mesh has been extracted to RenderWorld");
++
++        for attributes in attributes.values_mut() {
+             let indices = indices.iter();
+             #[expect(
+                 clippy::match_same_arms,
+@@ -1228,6 +1278,14 @@ impl Mesh {
+             })
+         }
+     }
++
++    /// Make a clone which takes the attribute data, leaving this instance with no attributes
++    pub fn take_gpu_copy(&mut self) -> Option<Self> {
++        self.attributes.take().map(|attrs| Self {
++            attributes: Some(attrs),
++            ..self.clone()
++        })
++    }
+ }
+ 
+ impl core::ops::Mul<Mesh> for Transform {
+diff --git a/crates/bevy_pbr/src/render/mesh.rs b/crates/bevy_pbr/src/render/mesh.rs
+index 9ecc11ad8c6dd46eb4fa9b948873ecfe50bd7811..245280fdf9a1f13b3f3276448763bb6a03a3ea15 100644
+--- a/crates/bevy_pbr/src/render/mesh.rs
++++ b/crates/bevy_pbr/src/render/mesh.rs
+@@ -1856,6 +1856,7 @@ impl FromWorld for MeshPipeline {
+                 sampler,
+                 size: image.texture_descriptor.size,
+                 mip_level_count: image.texture_descriptor.mip_level_count,
++                had_data: true,
+             }
+         };
+ 
+diff --git a/crates/bevy_render/src/mesh/mod.rs b/crates/bevy_render/src/mesh/mod.rs
+index 1fccaa73aa1f13f7887e19c76cf158d8b4fe526c..af6220a1847267b8d4ee373107c0bc05bc638a11 100644
+--- a/crates/bevy_render/src/mesh/mod.rs
++++ b/crates/bevy_render/src/mesh/mod.rs
+@@ -1,4 +1,3 @@
+-use bevy_math::Vec3;
+ pub use bevy_mesh::*;
+ use morph::{MeshMorphWeights, MorphWeights};
+ pub mod allocator;
+@@ -122,13 +121,7 @@ pub trait MeshAabb {
+ 
+ impl MeshAabb for Mesh {
+     fn compute_aabb(&self) -> Option<Aabb> {
+-        let Some(VertexAttributeValues::Float32x3(values)) =
+-            self.attribute(Mesh::ATTRIBUTE_POSITION)
+-        else {
+-            return None;
+-        };
+-
+-        Aabb::enclosing(values.iter().map(|p| Vec3::from_slice(p)))
++        self.extents.map(|(min, max)| Aabb::from_min_max(min, max))
+     }
+ }
+ 
+@@ -208,6 +201,10 @@ impl RenderAsset for RenderMesh {
+         Some(vertex_size * vertex_count + index_bytes)
+     }
+ 
++    fn take_gpu_copy(source: &mut Self::SourceAsset, _: Option<&Self>) -> Option<Self::SourceAsset> {
++        source.take_gpu_copy()
++    }
++
+     /// Converts the extracted mesh into a [`RenderMesh`].
+     fn prepare_asset(
+         mesh: Self::SourceAsset,
+diff --git a/crates/bevy_render/src/render_asset.rs b/crates/bevy_render/src/render_asset.rs
+index 6626cb7797947e3951cae821fdca96bad40d0f86..7b86a9702eb1943435de136ac46463c8ee9e2f5d 100644
+--- a/crates/bevy_render/src/render_asset.rs
++++ b/crates/bevy_render/src/render_asset.rs
+@@ -82,6 +82,20 @@ pub trait RenderAsset: Send + Sync + 'static + Sized {
+         _param: &mut SystemParamItem<Self::Param>,
+     ) {
+     }
++
++    /// Make a copy of the asset to be moved to the gpu. Heavy internal data (pixel data,
++    /// mesh vertex data, etc) should be moved into the copy, leaving this asset with only 
++    /// metadata.
++    /// A null return value indicates that the asset has already been extracted, and should
++    /// not have been modified on the CPU side (as it cannot be transferred to GPU again).
++    /// The previous GPU asset is also provided, which can be used to check if the transfer
++    /// is required.
++    fn take_gpu_copy(
++        source: &mut Self::SourceAsset,
++        _previous_gpu_asset: Option<&Self>,
++    ) -> Option<Self::SourceAsset> {
++        Some(source.clone())
++    }
+ }
+ 
+ /// This plugin extracts the changed assets from the "app world" into the "render world"
+@@ -220,6 +234,7 @@ struct CachedExtractRenderAssetSystemState<A: RenderAsset> {
+     state: SystemState<(
+         EventReader<'static, 'static, AssetEvent<A::SourceAsset>>,
+         ResMut<'static, Assets<A::SourceAsset>>,
++        Option<Res<'static, RenderAssets<A>>>,
+     )>,
+ }
+ 
+@@ -239,7 +254,7 @@ pub(crate) fn extract_render_asset<A: RenderAsset>(
+ ) {
+     main_world.resource_scope(
+         |world, mut cached_state: Mut<CachedExtractRenderAssetSystemState<A>>| {
+-            let (mut events, mut assets) = cached_state.state.get_mut(world);
++            let (mut events, mut assets, maybe_render_assets) = cached_state.state.get_mut(world);
+ 
+             let mut needs_extracting = <HashSet<_>>::default();
+             let mut removed = <HashSet<_>>::default();
+@@ -280,8 +295,12 @@ pub(crate) fn extract_render_asset<A: RenderAsset>(
+                     let asset_usage = A::asset_usage(asset);
+                     if asset_usage.contains(RenderAssetUsages::RENDER_WORLD) {
+                         if asset_usage == RenderAssetUsages::RENDER_WORLD {
+-                            if let Some(asset) = assets.remove(id) {
+-                                extracted_assets.push((id, asset));
++                            if let Some(asset) = assets.get_mut_bypass_change_detection(id) {
++                                let previous_asset = maybe_render_assets.as_ref().and_then(|render_assets| render_assets.get(id));
++                                let Some(gpu_asset) = A::take_gpu_copy(asset, previous_asset) else {
++                                    panic!("{:?} with RenderAssetUsages == RENDER_WORLD was modified after extraction", std::any::type_name::<A>());
++                                };
++                                extracted_assets.push((id, gpu_asset));
+                                 added.insert(id);
+                             }
+                         } else {
+diff --git a/crates/bevy_render/src/storage.rs b/crates/bevy_render/src/storage.rs
+index 0046b4e6ac2bceb624f3fe6358780ef8501fa918..aea979dde9c9e753692dbe37ec3770af4cfe78c4 100644
+--- a/crates/bevy_render/src/storage.rs
++++ b/crates/bevy_render/src/storage.rs
+@@ -102,6 +102,7 @@ where
+ /// A storage buffer that is prepared as a [`RenderAsset`] and uploaded to the GPU.
+ pub struct GpuShaderStorageBuffer {
+     pub buffer: Buffer,
++    pub had_data: bool,
+ }
+ 
+ impl RenderAsset for GpuShaderStorageBuffer {
+@@ -112,6 +113,20 @@ impl RenderAsset for GpuShaderStorageBuffer {
+         source_asset.asset_usage
+     }
+ 
++    fn take_gpu_copy(
++        source: &mut Self::SourceAsset,
++        previous_gpu_asset: Option<&Self>,
++    ) -> Option<Self::SourceAsset> {
++        let data = source.data.take();
++
++        let upload = data.is_some() || previous_gpu_asset.is_none_or(|prev| !prev.had_data);
++
++        upload.then(|| Self::SourceAsset {
++            data,
++            ..source.clone()
++        })
++    }
++
+     fn prepare_asset(
+         source_asset: Self::SourceAsset,
+         _: AssetId<Self::SourceAsset>,
+@@ -124,11 +139,17 @@ impl RenderAsset for GpuShaderStorageBuffer {
+                     contents: &data,
+                     usage: source_asset.buffer_description.usage,
+                 });
+-                Ok(GpuShaderStorageBuffer { buffer })
++                Ok(GpuShaderStorageBuffer {
++                    buffer,
++                    had_data: true,
++                })
+             }
+             None => {
+                 let buffer = render_device.create_buffer(&source_asset.buffer_description);
+-                Ok(GpuShaderStorageBuffer { buffer })
++                Ok(GpuShaderStorageBuffer {
++                    buffer,
++                    had_data: false,
++                })
+             }
+         }
+     }
+diff --git a/crates/bevy_render/src/texture/fallback_image.rs b/crates/bevy_render/src/texture/fallback_image.rs
+index 18c83414bd7d6cffe0ef13b7b7a9990710b10a91..fbaa483a59df2cb132655a80a5c44b1d630de5b4 100644
+--- a/crates/bevy_render/src/texture/fallback_image.rs
++++ b/crates/bevy_render/src/texture/fallback_image.rs
+@@ -138,6 +138,7 @@ fn fallback_image_new(
+         sampler,
+         size: image.texture_descriptor.size,
+         mip_level_count: image.texture_descriptor.mip_level_count,
++        had_data: true,
+     }
+ }
+ 
+diff --git a/crates/bevy_render/src/texture/gpu_image.rs b/crates/bevy_render/src/texture/gpu_image.rs
+index 993e360ca58934751365b4d0c64538ab60c3d020..f826e4f2c7ded9aa340c5e3238e9d22b454dd8e2 100644
+--- a/crates/bevy_render/src/texture/gpu_image.rs
++++ b/crates/bevy_render/src/texture/gpu_image.rs
+@@ -19,6 +19,7 @@ pub struct GpuImage {
+     pub sampler: Sampler,
+     pub size: Extent3d,
+     pub mip_level_count: u32,
++    pub had_data: bool,
+ }
+ 
+ impl RenderAsset for GpuImage {
+@@ -43,12 +44,27 @@ impl RenderAsset for GpuImage {
+         }
+     }
+ 
++    fn take_gpu_copy(
++        source: &mut Self::SourceAsset,
++        previous_gpu_asset: Option<&Self>,
++    ) -> Option<Self::SourceAsset> {
++        let data = source.data.take();
++
++        let upload = data.is_some() || previous_gpu_asset.is_none_or(|prev| !prev.had_data);
++
++        upload.then(|| Image {
++            data,
++            ..source.clone()
++        })
++    }
++
+     /// Converts the extracted image into a [`GpuImage`].
+     fn prepare_asset(
+         image: Self::SourceAsset,
+         _: AssetId<Self::SourceAsset>,
+         (render_device, render_queue, default_sampler): &mut SystemParamItem<Self::Param>,
+     ) -> Result<Self, PrepareAssetError<Self::SourceAsset>> {
++        let had_data = image.data.is_some();
+         let texture = if let Some(ref data) = image.data {
+             render_device.create_texture_with_data(
+                 render_queue,
+@@ -82,6 +98,7 @@ impl RenderAsset for GpuImage {
+             sampler,
+             size: image.texture_descriptor.size,
+             mip_level_count: image.texture_descriptor.mip_level_count,
++            had_data,
+         })
+     }
+ }
+diff --git a/crates/bevy_sprite/src/mesh2d/mesh.rs b/crates/bevy_sprite/src/mesh2d/mesh.rs
+index 5822d47ed623192ef78c7199086bb2dc95074463..ae2853c644199766e028a31e8efb6c120d425c7f 100644
+--- a/crates/bevy_sprite/src/mesh2d/mesh.rs
++++ b/crates/bevy_sprite/src/mesh2d/mesh.rs
+@@ -388,6 +388,7 @@ impl FromWorld for Mesh2dPipeline {
+                 sampler,
+                 size: image.texture_descriptor.size,
+                 mip_level_count: image.texture_descriptor.mip_level_count,
++                had_data: true,
+             }
+         };
+         Mesh2dPipeline {
+diff --git a/crates/bevy_sprite/src/render/mod.rs b/crates/bevy_sprite/src/render/mod.rs
+index 212f08bf480e6670f693fcea010f3808a36fc0fb..425f35af333bb09371c9a83aabb005dd1af9cf34 100644
+--- a/crates/bevy_sprite/src/render/mod.rs
++++ b/crates/bevy_sprite/src/render/mod.rs
+@@ -117,6 +117,7 @@ impl FromWorld for SpritePipeline {
+                 sampler,
+                 size: image.texture_descriptor.size,
+                 mip_level_count: image.texture_descriptor.mip_level_count,
++                had_data: true,
+             }
+         };
+ 

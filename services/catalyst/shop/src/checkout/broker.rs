@@ -11,8 +11,8 @@ use crate::checkout::calls::{
     parse_wei, parse_wei_allow_zero,
 };
 use crate::checkout::trade::{
-    ASSET_TYPE_USD_PEGGED_MANA, TradeDelivery, TradeExpectations, TradeIn, ValidatedTrade,
-    build_trade_accept, transferred_token_id_from_logs, validate_trade,
+    TradeDelivery, TradeExpectations, TradeIn, ValidatedTrade, build_trade_accept,
+    transferred_token_id_from_logs, validate_trade,
 };
 use crate::evm::SharedState;
 use crate::evm::contracts_addrs::DclContracts;
@@ -21,6 +21,7 @@ use crate::evm::handlers::admin::require_admin;
 use crate::evm::handlers::{idempotency_key, require_broadcast_enabled};
 use crate::evm::oracle::{UsdPeggedExpectation, fetch_mana_usd_rate};
 use crate::evm::signer::{DirectSigner, ReceiptOutcome};
+use crate::types::ASSET_TYPE_USD_PEGGED_MANA;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,7 +140,7 @@ pub async fn buy(
                 ApiError::InvalidTransaction(format!("malformed trade payload: {e}"))
             })?;
             let is_usd_pegged = parsed.received.len() == 1
-                && parsed.received[0].asset_type == ASSET_TYPE_USD_PEGGED_MANA;
+                && parsed.received[0].asset_type == i64::from(ASSET_TYPE_USD_PEGGED_MANA);
             if !is_usd_pegged && body.quote_mana_wei.is_some() {
                 return Err(ApiError::InvalidTransaction(
                     "`quoteManaWei` was sent but the trade is not USD-pegged (assetType 2); \

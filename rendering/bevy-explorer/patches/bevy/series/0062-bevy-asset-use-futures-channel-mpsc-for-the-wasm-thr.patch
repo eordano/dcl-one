@@ -1,0 +1,122 @@
+From 794172be404e4c8ec64572ba9aae7421f12225c5
+Subject: bevy_asset: use futures-channel mpsc for the wasm threaded loader
+Origin: https://github.com/robtfm/bevy/commit/794172be404e4c8ec64572ba9aae7421f12225c5
+Date: 2026-06-18T18:00:16+01:00
+
+On `wasm32` with atomics, `async-channel`'s send/notify and receiver
+registration take a blocking lock (`event_listener`'s `std::Mutex`). When
+contended, that lock lowers to `memory.atomic.wait`, which is only legal on a
+worker — on the main (window) thread it traps. The `AssetServer` drives loads
+from the main thread, so the trap intermittently aborts an in-flight load
+mid-poll, leaving the asset stuck (it never completes and never errors).
+
+Switch the wasm threaded loader's request and reply channels to
+`futures::channel::mpsc::unbounded`, whose `unbounded_send`/notify path is
+lock-free (a brief spinlock, not a futex), so the main thread never reaches
+`memory.atomic.wait`. `futures-channel` is already in the dependency tree via
+`bevy_tasks`, so this adds no new dependency.
+---
+diff --git a/crates/bevy_asset/Cargo.toml b/crates/bevy_asset/Cargo.toml
+index 4203a74e5aa2804138f892cdcba6bdb0f7f90e8f..c1552b9b66627fada3d6bb35dc7b3fb659b4c93a 100644
+--- a/crates/bevy_asset/Cargo.toml
++++ b/crates/bevy_asset/Cargo.toml
+@@ -17,7 +17,7 @@ multi_threaded = ["bevy_tasks/multi_threaded"]
+ asset_processor = []
+ watch = []
+ trace = []
+-wasm_threaded_loader = ["async-channel", "spin", "dep:gloo-timers"]
++wasm_threaded_loader = ["spin", "dep:gloo-timers", "dep:futures-channel"]
+ 
+ [dependencies]
+ bevy_app = { path = "../bevy_app", version = "0.16.1" }
+@@ -52,7 +52,7 @@ thiserror = { version = "2", default-features = false }
+ derive_more = { version = "1", default-features = false, features = ["from"] }
+ uuid = { version = "1.13.1", features = ["v4"] }
+ tracing = { version = "0.1", default-features = false, features = ["std"] }
+-async-channel = { version = "2", optional = true }
++futures-channel = { version = "0.3", optional = true }
+ spin = { version = "0.9.8", default-features = false, features = ["rwlock"], optional = true }
+ 
+ [target.'cfg(target_os = "android")'.dependencies]
+diff --git a/crates/bevy_asset/src/lib.rs b/crates/bevy_asset/src/lib.rs
+index 78610194a363c884853c59f9c3cc4f6543835139..02790f6d4e49a4d3f98325d381205d6c93b864fb 100644
+--- a/crates/bevy_asset/src/lib.rs
++++ b/crates/bevy_asset/src/lib.rs
+@@ -241,7 +241,7 @@ compile_error!("wasm_threaded_loader feature requires target-feature=\"atomics\"
+ #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
+ #[derive(Clone)]
+ pub struct WasmLoaderHandle {
+-    load_request_sender: async_channel::Sender<WasmThreadLoadAssetRequest>,
++    load_request_sender: futures_channel::mpsc::UnboundedSender<WasmThreadLoadAssetRequest>,
+ }
+ 
+ /// Provides "asset" loading and processing functionality. An [`Asset`] is a "runtime value" that is loaded from an [`AssetSource`],
+diff --git a/crates/bevy_asset/src/server/mod.rs b/crates/bevy_asset/src/server/mod.rs
+index 66ad9c3e4244bb35e96e66faee32fdca8ec559f8..480c76be819a9ea1cd66386c89580ad3c3731cb2 100644
+--- a/crates/bevy_asset/src/server/mod.rs
++++ b/crates/bevy_asset/src/server/mod.rs
+@@ -86,7 +86,7 @@ pub(crate) struct WasmThreadLoadAssetRequest {
+     loader: Arc<dyn ErasedAssetLoader>,
+     load_dependencies: bool,
+     populate_hashes: bool,
+-    sender: async_channel::Sender<
++    sender: futures_channel::mpsc::UnboundedSender<
+         Result<
+             (
+                 ErasedLoadedAsset,
+@@ -100,7 +100,7 @@ pub(crate) struct WasmThreadLoadAssetRequest {
+ 
+ #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
+ pub fn init_thread_loader() -> super::WasmLoaderHandle {
+-    let (load_request_sender, load_request_receiver) = async_channel::unbounded();
++    let (load_request_sender, load_request_receiver) = futures_channel::mpsc::unbounded();
+     wasm_bindgen_futures::spawn_local(thread_loader(load_request_receiver));
+     super::WasmLoaderHandle {
+         load_request_sender,
+@@ -108,8 +108,8 @@ pub fn init_thread_loader() -> super::WasmLoaderHandle {
+ }
+ 
+ #[cfg(all(feature = "wasm_threaded_loader", target_arch = "wasm32"))]
+-async fn thread_loader(rx: async_channel::Receiver<WasmThreadLoadAssetRequest>) {
+-    while let Ok(thread_load_request) = rx.recv().await {
++async fn thread_loader(mut rx: futures_channel::mpsc::UnboundedReceiver<WasmThreadLoadAssetRequest>) {
++    while let Some(thread_load_request) = rx.next().await {
+         wasm_bindgen_futures::spawn_local(wasm_thread_handle_load_request(thread_load_request));
+     }
+ }
+@@ -159,7 +159,7 @@ async fn wasm_thread_handle_load_request(request: WasmThreadLoadAssetRequest) {
+     };
+ 
+     let result = work.or(cancel).await;
+-    let _ = sender.send(result).await;
++    let _ = sender.unbounded_send(result);
+ }
+ 
+ /// The "asset mode" the server is currently in.
+@@ -1531,12 +1531,12 @@ impl AssetServer {
+         AssetLoadError,
+     > {
+         if let Some(wasm_loader_handle) = self.data.wasm_loader_handle.as_ref() {
+-            let (sender, receiver) = async_channel::bounded(1);
++            let (sender, mut receiver) = futures_channel::mpsc::unbounded();
+             let asset_server = self.clone();
+             let asset_path = asset_path.clone().into_owned();
+             wasm_loader_handle
+                 .load_request_sender
+-                .send(WasmThreadLoadAssetRequest {
++                .unbounded_send(WasmThreadLoadAssetRequest {
+                     asset_server,
+                     asset_path,
+                     meta,
+@@ -1545,9 +1545,8 @@ impl AssetServer {
+                     populate_hashes,
+                     sender,
+                 })
+-                .await
+-                .unwrap();
+-            receiver.recv().await.unwrap()
++                .unwrap_or_else(|_| panic!("asset load request channel closed"));
++            receiver.next().await.unwrap()
+         } else {
+             self.load_with_meta_and_loader_internal(
+                 asset_path,

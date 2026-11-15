@@ -17,13 +17,14 @@ let
     inherit root;
     fileset = lib.fileset.unions (sharedFiles ++ (map (p: lib.fileset.maybeMissing (root + p)) [
       /rendering/bevy-explorer/source
-      /rendering/bevy-explorer/bevy
+      /rendering/bevy-explorer/patches /rendering/bevy-explorer/vendor
       /library/protocol/proto
+      /library/hashing
       /apps/bevy-explorer/build-web.py /apps/bevy-explorer/install-linux-deps.py
       /apps/bevy-explorer/install-web-tools.py
       /apps/bevy-explorer/install-tools.sh /.github/actions/bevy-explorer-tools/action.yml
       /flake.lock /infra/packages/default.nix /infra/packages/tools.nix
-      /tooling/play-artifact.py /tooling/hud_shared_inputs.py
+      /tooling/play-artifact.py /tooling/hud_shared_inputs.py /tooling/patched-sources.py /tooling/check-local-hashing.mjs
       /.github/workflows/bevy-explorer-ci.yml
       /.cargo /rust-toolchain /rust-toolchain.toml
       /library/explorer-core/engine/generated

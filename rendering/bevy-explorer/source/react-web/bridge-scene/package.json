@@ -8,12 +8,12 @@
     "build": "sdk-commands build",
     "export-native": "sdk-commands build --production && sdk-commands export-static --destination ../../assets/bridge-scene --realmName BevyExplorerUI --baseUrl /bridge-scene/ --commsAdapter ws-room:ws-room-service.decentraland.org/rooms/bevy-explorer-ui",
     "export-static": "node ../scripts/bridge-scene-export.mjs",
-    "bundle": "npm run lint && sdk-commands build --production && npm run export-web",
+    "bundle": "oxlint --deny-warnings src && sdk-commands build --production && node ../scripts/bridge-scene-export.mjs --web",
     "lint": "oxlint --deny-warnings src",
     "lint:fix": "oxlint --deny-warnings --fix src",
     "format": "prettier --config .prettierrc -c \"./src/**/*.{ts,tsx}\"",
     "format:fix": "prettier -w --config .prettierrc \"./src/**/*.{ts,tsx}\"",
-    "upgrade-sdk": "npm install @dcl/sdk@experimental-bevy @dcl/js-runtime@experimental-bevy @dcl/react-ecs@experimental-bevy @dcl/sdk-commands@experimental-bevy @dcl/ecs@experimental-bevy --save-exact",
+    "upgrade-sdk": "pnpm add @dcl/sdk@experimental-bevy @dcl/js-runtime@experimental-bevy @dcl/react-ecs@experimental-bevy @dcl/sdk-commands@experimental-bevy @dcl/ecs@experimental-bevy --save-exact",
     "server-logs": "sdk-commands sdk-server-logs",
     "export-web": "node ../scripts/bridge-scene-export.mjs --web"
   },
@@ -24,24 +24,12 @@
     "@dcl/sdk": "7.28.1-34901226656.commit-44656ea",
     "@dcl/sdk-commands": "7.28.1-34901226656.commit-44656ea",
     "oxlint": "1.92.0",
-    "prettier": "3.0.3"
+    "prettier": "3.0.3",
+    "@dcl/hashing": "workspace:*"
   },
   "engines": {
     "node": ">=24",
-    "npm": ">=6.0.0"
+    "pnpm": ">=11.27"
   },
-  "overrides": {
-    "protobufjs": "^7.5.6",
-    "minimatch@9.0.3": "9.0.7",
-    "cookie": "^0.7.2",
-    "@dcl/sdk-commands": {
-      "esbuild": "0.28.1"
-    },
-    "@dcl/hashing@^1": "1.2.0"
-  },
-  "allowScripts": {
-    "@dcl/sdk-commands": false,
-    "esbuild": false,
-    "protobufjs": false
-  }
+  "packageManager": "pnpm@11.27.0"
 }

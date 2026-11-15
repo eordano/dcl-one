@@ -1,0 +1,91 @@
+From 586bfd836b98aadc87ad4e30d65174ad4c9ac7a5
+Subject: wasm: let the embedder supply the clipboard
+Origin: https://github.com/robtfm/copypwasmta/commit/586bfd836b98aadc87ad4e30d65174ad4c9ac7a5
+Date: 2026-09-24T10:18:11+01:00
+
+A context without a `window` (a web worker, whose navigator has no
+clipboard) cannot reach `navigator.clipboard`. `set_external_clipboard`
+takes an async get and set that `WasmClipboardContext` calls instead,
+e.g. functions that relay to the page.
+---
+diff --git a/README.md b/README.md
+index f2e55a1d746950255cd426f228bcedc510045c17..0da3fd2089e14cbfd63d55292692e493a498bf12 100644
+--- a/README.md
++++ b/README.md
+@@ -34,6 +34,8 @@ async fn set_contents(&mut self, String) -> Result<(), Box<Error>>;
+ 
+ `ClipboardContext` is a type alias for one of {`WindowsClipboardContext`, `OSXClipboardContext`, `X11ClipboardContext`, `WasmClipboard`, `NopClipboardContext`}, all of which implement `ClipboardProvider`. Which concrete type is chosen for `ClipboardContext` depends on the OS (via conditional compilation).
+ 
++On wasm, `set_external_clipboard` routes clipboard access through functions the embedder supplies, for contexts with no `window` (e.g. a web worker, which has no `navigator.clipboard`).
++
+ ## License
+ 
+ `copypwasmta` is dual-licensed under MIT and Apache2.
+diff --git a/src/lib.rs b/src/lib.rs
+index 649227a7c5f6738f5dc48d51d802235bf6607932..d1be56e6f0a43bb3e83a355bc736c1b8f5ba3545 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -44,6 +44,8 @@ pub mod windows_clipboard;
+ 
+ #[cfg(target_arch = "wasm32")]
+ pub mod wasm_clipboard;
++#[cfg(target_arch = "wasm32")]
++pub use wasm_clipboard::{set_external_clipboard, ExternalClipboard};
+ 
+ #[cfg(target_os = "macos")]
+ pub mod osx_clipboard;
+diff --git a/src/wasm_clipboard.rs b/src/wasm_clipboard.rs
+index 2f93c2ca7f532c1113276269454ae225a533be9a..41ff0873d200778d325d818b8b8860fd18f4ccca 100644
+--- a/src/wasm_clipboard.rs
++++ b/src/wasm_clipboard.rs
+@@ -1,3 +1,5 @@
++use std::{future::Future, pin::Pin, sync::OnceLock};
++
+ use wasm_bindgen_futures::JsFuture;
+ use web_sys::window;
+ 
+@@ -5,6 +7,24 @@ use async_trait::async_trait;
+ 
+ use crate::common::{ClipboardProvider, Result};
+ 
++pub type ClipboardFuture<T> = Pin<Box<dyn Future<Output = std::result::Result<T, String>>>>;
++
++/// Clipboard access supplied by the embedder, for contexts without a `window` (e.g. a web
++/// worker, whose `navigator` has no clipboard). When set, [`WasmClipboardContext`] calls these
++/// instead of `navigator.clipboard`.
++pub struct ExternalClipboard {
++    pub get: fn() -> ClipboardFuture<String>,
++    pub set: fn(String) -> ClipboardFuture<()>,
++}
++
++static EXTERNAL: OnceLock<ExternalClipboard> = OnceLock::new();
++
++/// Routes clipboard access through `clipboard` from now on. Only the first call takes effect;
++/// returns whether this one did.
++pub fn set_external_clipboard(clipboard: ExternalClipboard) -> bool {
++    EXTERNAL.set(clipboard).is_ok()
++}
++
+ pub struct WasmClipboardContext;
+ 
+ impl WasmClipboardContext {
+@@ -16,6 +36,9 @@ impl WasmClipboardContext {
+ #[async_trait(?Send)]
+ impl ClipboardProvider for WasmClipboardContext {
+     async fn get_contents(&mut self) -> Result<String> {
++        if let Some(external) = EXTERNAL.get() {
++            return Ok((external.get)().await?);
++        }
+         let Some(window) = window() else {
+             return Err("Should have a window in this context".into());
+         };
+@@ -27,6 +50,9 @@ impl ClipboardProvider for WasmClipboardContext {
+     }
+ 
+     async fn set_contents(&mut self, data: String) -> Result<()> {
++        if let Some(external) = EXTERNAL.get() {
++            return Ok((external.set)(data).await?);
++        }
+         let Some(window) = window() else {
+             return Err("Should have a window in this context".into());
+         };

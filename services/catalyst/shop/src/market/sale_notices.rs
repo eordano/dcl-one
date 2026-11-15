@@ -27,13 +27,13 @@ use uuid::Uuid;
 
 use super::MarketplaceState;
 use super::chain_walk::{self, ChainNet, INDEXER_NFT, INDEXER_TRADE_EVENTS};
-use super::listings::{
-    ASSET_TYPE_COLLECTION_ITEM, ASSET_TYPE_ERC20, ASSET_TYPE_ERC721, ASSET_TYPE_USD_PEGGED_MANA,
-};
 use super::notice_cursor;
 use super::trade_events::{self, AssetMeta, StoredTrade};
 use crate::shared::identity::Address;
 use crate::social::notifications::{NewNotification, insert_notifications};
+use crate::types::{
+    ASSET_TYPE_COLLECTION_ITEM, ASSET_TYPE_ERC20, ASSET_TYPE_ERC721, ASSET_TYPE_USD_PEGGED_MANA,
+};
 
 pub const KIND_ITEM_SOLD: &str = "item_sold";
 pub const KIND_BID_ACCEPTED: &str = "bid_accepted";

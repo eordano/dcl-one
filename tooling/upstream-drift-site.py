@@ -117,6 +117,7 @@ const D = JSON.parse(document.getElementById('data').textContent);
 const R = D.research || {}, REC = D.recommendations || {};
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const name = s => (s.repo || s.url).replace(/^https:\/\/github\.com\//, '');
+const crates = s => s.crates || [];
 const CATS = ['features','performance','security','others'];
 const state = { view: location.hash.replace('#','').split('/')[0] || 'overview', sel: decodeURIComponent(location.hash.split('/')[1] || ''), tab: 'missing', q: '' };
 const nav = [['overview','Overview'],['sources','Sources'],['advisories','Advisories'],['dependencies','Dependencies'],['review','Review']];
@@ -125,18 +126,19 @@ window.addEventListener('hashchange', () => { const [v, s] = location.hash.repla
 document.getElementById('q').addEventListener('input', e => { state.q = e.target.value.toLowerCase(); render(); });
 const rec = s => REC[s.url] || null;
 const n = x => x == null ? '–' : x.toLocaleString();
-const carried = s => s.carried && s.carried.fork_only_count != null ? s.carried.fork_only_count : (s.carried && s.carried.commits) ? s.carried.commits.length : (s.vs_parent_default ? s.vs_parent_default.ahead_by : null);
-const missing = s => s.upstream_since_base ? s.upstream_since_base.total_commits : (s.upstream_since_pin ? s.upstream_since_pin.total_commits : (s.vs_parent_default ? s.vs_parent_default.behind_by : null));
-const affecting = s => { const names = new Set(s.crates.map(c => c.name)); return (D.advisories.findings||[]).filter(f => names.has(f.crate) && f.affected).length; };
-const matches = s => !state.q || [name(s), s.parent, s.branch, s.reason, ...(s.crates||[]).map(c => c.name)].join(' ').toLowerCase().includes(state.q);
+const carried = s => s.carried ? s.carried.commits.length : null;
+const missing = s => s.upstream_since_pin ? s.upstream_since_pin.total_commits : null;
+const watched = s => s.branch ? (s.base ? 'tag ' : 'branch ') + s.branch : 'pinned revision';
+const affecting = s => { const names = new Set(crates(s).map(c => c.name)); return (D.advisories.findings||[]).filter(f => names.has(f.crate) && f.affected).length; };
+const matches = s => !state.q || [name(s), s.name, s.branch, s.reason, ...crates(s).map(c => c.name)].join(' ').toLowerCase().includes(state.q);
 function renderNav(){ document.getElementById('nav').innerHTML = nav.map(([k,l]) => `<a href="#${k}" class="${state.view===k?'on':''}">${l}</a>`).join(''); }
 function renderSide(){
   const side = document.getElementById('side');
   if (state.view !== 'sources') { side.innerHTML = ''; side.style.display='none'; document.querySelector('main').style.gridTemplateColumns='1fr'; return; }
   side.style.display=''; document.querySelector('main').style.gridTemplateColumns='300px 1fr';
   side.innerHTML = D.sources.filter(matches).map(s => { const r = rec(s); return `<div class="item ${state.sel===s.url?'on':''}" onclick="go('sources', ${JSON.stringify(s.url)})">
-    <div class="n">${esc(name(s))}</div><div class="m">${esc(s.parent ? 'fork of ' + s.parent : (s.branch ? 'branch ' + s.branch : 'pinned revision'))}</div>
-    <div>${r ? `<span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span>` : ''}<span class="badge">${n(carried(s))} carried</span><span class="badge">${n(missing(s))} missing</span>${affecting(s) ? `<span class="badge b-security">${affecting(s)} advisories</span>` : ''}</div></div>`; }).join('');
+    <div class="n">${esc(name(s))}</div><div class="m">${esc(s.carried ? 'patched · ' + watched(s) : watched(s))}</div>
+    <div>${r ? `<span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span>` : ''}${s.carried ? `<span class="badge">${n(carried(s))} patch(es)</span>` : ''}<span class="badge">${n(missing(s))} missing</span>${affecting(s) ? `<span class="badge b-security">${affecting(s)} advisories</span>` : ''}</div></div>`; }).join('');
 }
 function overview(){
   const rows = D.sources.filter(matches);
@@ -144,15 +146,15 @@ function overview(){
   const verdicts = {}; rows.forEach(s => { const r = rec(s); if (r) verdicts[r.verdict] = (verdicts[r.verdict]||0)+1; });
   return `<h2>Explorer at <code>${esc(D.explorer.revision.slice(0,12))}</code></h2>
   <p class="muted">Generated ${esc(D.generated)}. ${D.lock.packages} packages in the lock: ${Object.entries(D.lock.by_source).map(([k,v])=>`${v} ${k}`).join(', ')}; ${D.lock.duplicates.length} crates present in more than one version.</p>
-  <div class="metrics"><div class="metric"><div class="v">${rows.length}</div><div class="l">git sources</div></div><div class="metric"><div class="v">${rows.filter(s=>s.parent).length}</div><div class="l">forks</div></div>
-  <div class="metric"><div class="v">${n(tot.carried)}</div><div class="l">commits the forks carry</div></div><div class="metric"><div class="v">${n(tot.missing)}</div><div class="l">upstream commits the forks lack</div></div>
+  <div class="metrics"><div class="metric"><div class="v">${rows.length}</div><div class="l">pinned sources</div></div><div class="metric"><div class="v">${rows.filter(s=>s.carried).length}</div><div class="l">patched sources</div></div>
+  <div class="metric"><div class="v">${n(tot.carried)}</div><div class="l">patches carried</div></div><div class="metric"><div class="v">${n(tot.missing)}</div><div class="l">upstream commits past the pins</div></div>
   <div class="metric"><div class="v">${(D.advisories.findings||[]).filter(f=>f.affected).length}</div><div class="l">advisories affecting the lock</div></div>
   ${Object.entries(verdicts).map(([k,v])=>`<div class="metric"><div class="v">${v}</div><div class="l">${esc(k)}</div></div>`).join('')}</div>
   ${D.review_summary ? `<div class="sum">${D.review_summary}</div>` : ''}
-  <h3>Sources</h3><table><thead><tr><th>source</th><th>parent</th><th>base</th><th>latest</th><th>carried</th><th>missing</th><th>releases missed</th><th>branch moved</th><th>advisories</th><th>verdict</th></tr></thead><tbody>
-  ${rows.map(s => { const r = rec(s); return `<tr><td><a href="#sources/${encodeURIComponent(s.url)}">${esc(name(s))}</a><br><span class="muted">${esc((s.crates||[]).slice(0,3).map(c=>c.name).join(', '))}${s.crates.length>3?' +'+(s.crates.length-3):''}</span></td>
-    <td>${esc(s.parent||'–')}</td><td>${esc(s.base?.tag||'–')}<br><span class="muted">${esc(s.base?.date||'')}</span></td><td>${esc(s.parent_latest_release?.tag||'–')}<br><span class="muted">${esc(s.parent_latest_release?.date||'')}</span></td>
-    <td>${n(carried(s))}</td><td>${n(missing(s))}</td><td>${s.releases_since_base ? s.releases_since_base.filter(r=>!r.prerelease).length : '–'}</td><td>${s.branch_since_pin ? s.branch_since_pin.total_commits : '–'}</td>
+  <h3>Sources</h3><table><thead><tr><th>source</th><th>pinned tag</th><th>latest release</th><th>patches</th><th>missing</th><th>releases missed</th><th>newer tags</th><th>ref moved</th><th>advisories</th><th>verdict</th></tr></thead><tbody>
+  ${rows.map(s => { const r = rec(s); return `<tr><td><a href="#sources/${encodeURIComponent(s.url)}">${esc(name(s))}</a><br><span class="muted">${esc(crates(s).slice(0,3).map(c=>c.name).join(', '))}${crates(s).length>3?' +'+(crates(s).length-3):''}</span></td>
+    <td>${esc(s.base?.tag||'–')}<br><span class="muted">${esc(s.base?.date||'')}</span></td><td>${esc(s.parent_latest_release?.tag||'–')}<br><span class="muted">${esc(s.parent_latest_release?.date||'')}</span></td>
+    <td>${n(carried(s))}</td><td>${n(missing(s))}</td><td>${s.releases_since_base ? s.releases_since_base.filter(r=>!r.prerelease).length : '–'}</td><td>${s.newer_tags ? s.newer_tags.length : '–'}</td><td>${s.branch_since_pin ? s.branch_since_pin.total_commits : '–'}</td>
     <td>${affecting(s) ? `<span class="badge b-security">${affecting(s)}</span>` : '0'}</td><td>${r ? `<span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span><span class="muted">${esc(r.priority||'')}</span>` : '<span class="muted">–</span>'}</td></tr>`; }).join('')}</tbody></table>`;
 }
 function catList(obj){
@@ -162,27 +164,27 @@ function catList(obj){
 function commitTable(cmp, repo){
   if (!cmp) return '<p class="empty">no data</p>';
   const list = cmp.commits || [];
-  return `<p class="muted">${cmp.total_commits} commit(s)${list.length < cmp.total_commits ? `, ${list.length} listed` : ''}</p><table><thead><tr><th>date</th><th>commit</th><th>author</th><th>title</th></tr></thead><tbody>${list.map(c => `<tr><td>${esc(c.date)}</td><td><a href="https://github.com/${esc(repo)}/commit/${esc(c.sha)}" target="_blank" rel="noreferrer"><code>${esc(c.sha.slice(0,8))}</code></a></td><td>${esc(c.author)}</td><td>${esc(c.title)}</td></tr>`).join('')}</tbody></table>`;
+  return `<p class="muted">${cmp.total_commits} commit(s)${list.length < cmp.total_commits ? `, ${list.length} listed` : ''}</p><table><thead><tr><th>date</th><th>commit</th><th>author</th><th>title</th></tr></thead><tbody>${list.map(c => `<tr><td>${esc(c.date)}</td><td>${c.local ? `<span class="muted" title="${esc(c.file)}">local patch</span>` : `<a href="${esc(c.url || `https://github.com/${repo}/commit/${c.sha}`)}" target="_blank" rel="noreferrer"><code>${esc(c.sha.slice(0,8))}</code></a>`}</td><td>${esc(c.author)}</td><td>${esc(c.title)}</td></tr>`).join('')}</tbody></table>`;
 }
 function source(){
   const s = D.sources.find(x => x.url === state.sel) || D.sources[0]; if (!s) return '<p class="empty">no sources</p>'; state.sel = s.url;
   const r = rec(s), res = R[s.url];
-  const tabs = [['missing','Missing from upstream'],['carried','What the fork carries'],['releases','Releases missed'],['commits','Commit lists'],['advisories','Advisories'],['recommendation','Recommendation']];
+  const tabs = [['missing','Missing from upstream'],['carried','Patches carried'],['releases','Releases missed'],['commits','Commit lists'],['advisories','Advisories'],['recommendation','Recommendation']];
   let body = '';
-  if (state.tab === 'missing') body = (res ? `<div class="sum">${esc(res.summary||'')}</div>` : '') + catList(res && res.missing) + (res && res.upstreamed && res.upstreamed.length ? `<h3>Fork changes already upstream</h3><ul>${res.upstreamed.map(i=>`<li>${esc(i.text||i)}${i.ref?` <span class="ref">${esc(i.ref)}</span>`:''}</li>`).join('')}</ul>` : '');
-  else if (state.tab === 'carried') body = catList(res && res.carried) + '<h3>Commits only the fork has</h3>' + commitTable(s.carried ? {total_commits: carried(s), commits: s.carried.fork_only || s.carried.commits} : (s.vs_parent_default && {total_commits: s.vs_parent_default.ahead_by, commits: []}), s.repo) + (s.base_note ? `<p class="muted">${esc(s.base_note)}</p>` : '');
-  else if (state.tab === 'releases') body = (s.releases_since_base||[]).length ? s.releases_since_base.slice().reverse().map(rel => `<details><summary>${esc(rel.tag)} <span class="muted">${esc(rel.date)}${rel.prerelease?' · pre-release':''}</span> <a href="${esc(rel.url)}" target="_blank" rel="noreferrer">↗</a></summary><pre>${esc(rel.body||'(no notes)')}</pre></details>`).join('') : '<p class="empty">no releases after the base, or not a fork</p>';
-  else if (state.tab === 'commits') body = `<h3>Upstream since the base</h3>${commitTable(s.upstream_since_base || s.upstream_since_pin, s.parent || s.repo)}<h3>Fork branch since the pin</h3>${commitTable(s.branch_since_pin, s.repo)}`;
-  else if (state.tab === 'advisories') { const names = new Set(s.crates.map(c=>c.name)); const f = (D.advisories.findings||[]).filter(x=>names.has(x.crate)); body = f.length ? advisoryTable(f) : '<p class="empty">no RustSec entries for these crates</p>'; }
+  if (state.tab === 'missing') body = (res ? `<div class="sum">${esc(res.summary||'')}</div>` : '') + catList(res && res.missing) + (res && res.upstreamed && res.upstreamed.length ? `<h3>Carried changes already upstream</h3><ul>${res.upstreamed.map(i=>`<li>${esc(i.text||i)}${i.ref?` <span class="ref">${esc(i.ref)}</span>`:''}</li>`).join('')}</ul>` : '');
+  else if (state.tab === 'carried') body = catList(res && res.carried) + '<h3>The patch series</h3>' + (s.carried ? commitTable({total_commits: carried(s), commits: s.carried.commits}, s.repo) : '<p class="empty">no patches: the lock takes this source as upstream wrote it</p>');
+  else if (state.tab === 'releases') body = (s.releases_since_base||[]).length ? s.releases_since_base.slice().reverse().map(rel => `<details><summary>${esc(rel.tag)} <span class="muted">${esc(rel.date)}${rel.prerelease?' · pre-release':''}</span> <a href="${esc(rel.url)}" target="_blank" rel="noreferrer">↗</a></summary><pre>${esc(rel.body||'(no notes)')}</pre></details>`).join('') : '<p class="empty">no releases after the pinned tag, or the source names no tag</p>';
+  else if (state.tab === 'commits') body = `<h3>The default branch since the pin</h3>${commitTable(s.upstream_since_pin, s.repo)}<h3>The watched ref since the pin</h3>${commitTable(s.branch_since_pin, s.repo)}`;
+  else if (state.tab === 'advisories') { const names = new Set(crates(s).map(c=>c.name)); const f = (D.advisories.findings||[]).filter(x=>names.has(x.crate)); body = f.length ? advisoryTable(f) : '<p class="empty">no RustSec entries for these crates</p>'; }
   else body = r ? `<p><span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span> <span class="badge">${esc(r.priority||'')} priority</span></p><div class="sum">${esc(r.why||'')}</div>${r.how ? `<h3>How</h3><p>${esc(r.how)}</p>` : ''}` : '<p class="empty">No recommendation written.</p>';
   return `<h2>${esc(name(s))} ${r ? `<span class="badge b-${esc(r.verdict)}">${esc(r.verdict)}</span>` : ''}</h2>
-  <p class="muted">${esc(s.description || s.parent_info?.description || '')}</p>
-  <p>${s.parent ? `fork of <a href="https://github.com/${esc(s.parent)}" target="_blank" rel="noreferrer">${esc(s.parent)}</a> · ` : ''}<a href="${esc(s.url)}/tree/${esc(s.rev)}" target="_blank" rel="noreferrer">${esc(s.branch ? s.branch + ' @ ' : '')}${esc(s.rev.slice(0,12))}</a> (${esc(s.rev_date||'')}) · crates: ${s.crates.map(c=>`<code>${esc(c.name)} ${esc(c.version)}</code>`).join(' ')}</p>
+  <p class="muted">${esc(s.description || '')}</p>
+  <p><a href="${esc(s.url)}/tree/${esc(s.rev)}" target="_blank" rel="noreferrer">${esc(s.branch ? s.branch + ' @ ' : '')}${esc(s.rev.slice(0,12))}</a> (${esc(s.rev_date||'')})${crates(s).length ? ' · crates: ' + crates(s).map(c=>`<code>${esc(c.name)} ${esc(c.version)}</code>`).join(' ') : ''}</p>
   ${s.reason ? `<div class="sum"><strong>Upstream's reason:</strong> ${esc(s.reason)}</div>` : ''}
-  <div class="metrics"><div class="metric"><div class="v">${esc(s.base?.tag||'–')}</div><div class="l">base release ${esc(s.base?.date||'')}</div></div><div class="metric"><div class="v">${esc(s.parent_latest_release?.tag||'–')}</div><div class="l">latest upstream release ${esc(s.parent_latest_release?.date||'')}</div></div>
-  <div class="metric"><div class="v">${n(carried(s))}</div><div class="l">commits the fork carries</div></div><div class="metric"><div class="v">${n(missing(s))}</div><div class="l">upstream commits missing</div></div>
-  <div class="metric"><div class="v">${s.releases_since_base ? s.releases_since_base.filter(x=>!x.prerelease).length : '–'}</div><div class="l">releases missed</div></div><div class="metric"><div class="v">${s.branch_since_pin ? s.branch_since_pin.total_commits : '–'}</div><div class="l">fork commits since our pin</div></div>
-  <div class="metric"><div class="v">${s.config_pin === false ? 'lock' : s.config_pin ? 'config' : '–'}</div><div class="l">pinned by</div></div><div class="metric"><div class="v">${affecting(s)}</div><div class="l">advisories affecting</div></div></div>
+  <div class="metrics"><div class="metric"><div class="v">${esc(s.base?.tag||'–')}</div><div class="l">pinned tag ${esc(s.base?.date||'')}</div></div><div class="metric"><div class="v">${esc(s.parent_latest_release?.tag||'–')}</div><div class="l">latest upstream release ${esc(s.parent_latest_release?.date||'')}</div></div>
+  <div class="metric"><div class="v">${n(carried(s))}</div><div class="l">patches carried</div></div><div class="metric"><div class="v">${n(missing(s))}</div><div class="l">upstream commits missing</div></div>
+  <div class="metric"><div class="v">${s.releases_since_base ? s.releases_since_base.filter(x=>!x.prerelease).length : '–'}</div><div class="l">releases missed</div></div><div class="metric"><div class="v">${s.branch_since_pin ? s.branch_since_pin.total_commits : '–'}</div><div class="l">commits on the watched ref since the pin</div></div>
+  <div class="metric"><div class="v">${s.newer_tags ? s.newer_tags.length : '–'}</div><div class="l">newer tags${s.newer_tags && s.newer_tags.length ? ', newest ' + esc(s.newer_tags[s.newer_tags.length-1]) : ''}</div></div><div class="metric"><div class="v">${affecting(s)}</div><div class="l">advisories affecting</div></div></div>
   <div class="tabs">${tabs.map(([k,l]) => `<button class="${state.tab===k?'on':''}" onclick="state.tab='${k}';render()">${l}</button>`).join('')}</div>${body}`;
 }
 function advisoryTable(f){
@@ -217,12 +219,12 @@ render();
 
 
 def main():
-    data = json.loads((CACHE / 'data.json').read_text())
+    data = json.loads((CACHE / 'data.json').read_text(encoding='utf-8'))
     research = {}
     research_dir = OUT / 'research'
     for path in sorted(research_dir.glob('*.json')) if research_dir.exists() else []:
         try:
-            entry = json.loads(path.read_text())
+            entry = json.loads(path.read_text(encoding='utf-8'))
         except json.JSONDecodeError as error:
             print(f'skipping {path.name}: {error}', file=sys.stderr)
             continue
@@ -232,16 +234,16 @@ def main():
                 research[e['url']] = e
     data['research'] = research
     rec_path = OUT / 'recommendations.json'
-    data['recommendations'] = json.loads(rec_path.read_text()) if rec_path.exists() else {}
+    data['recommendations'] = json.loads(rec_path.read_text(encoding='utf-8')) if rec_path.exists() else {}
     review_path = OUT / 'REVIEW.md'
     if review_path.exists():
-        text = review_path.read_text()
+        text = review_path.read_text(encoding='utf-8')
         data['review_html'] = markdown_to_html(text)
         first = next((p for p in text.split('\n\n') if p.strip() and not p.startswith('#')), '')
         data['review_summary'] = markdown_to_html(first)
     OUT.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data).replace('</', '<\\/')
-    (OUT / 'index.html').write_text(PAGE.replace('__DATA__', payload))
+    (OUT / 'index.html').write_text(PAGE.replace('__DATA__', payload), encoding='utf-8')
     print(f'wrote {OUT.relative_to(ROOT)}/index.html ({(OUT / "index.html").stat().st_size // 1024} KiB), research for {len(research)} source(s), {len(data["recommendations"])} recommendation(s)')
     # the artifact: the page with the research and the review it embeds, for CI uploads and sharing
     archive = CACHE / 'drift-site.tar.gz'

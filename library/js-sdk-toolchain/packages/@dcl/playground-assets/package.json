@@ -4,8 +4,8 @@
   "version": "7.0.0",
   "author": "Decentraland",
   "dependencies": {
-    "@dcl/js-runtime": "file:../js-runtime",
-    "@dcl/sdk": "file:../sdk"
+    "@dcl/js-runtime": "workspace:*",
+    "@dcl/sdk": "workspace:*"
   },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.33.8"
@@ -23,8 +23,8 @@
     "directory": "packages/@dcl/playground-assets"
   },
   "scripts": {
-    "build": "npm run build-playground && node_modules/.bin/api-extractor run",
-    "build-local": "npm run build-playground && node_modules/.bin/api-extractor run --local --verbose --diagnostics",
+    "build": "npm run build-playground && api-extractor run",
+    "build-local": "npm run build-playground && api-extractor run --local --verbose --diagnostics",
     "build-playground": "./../sdk-commands/dist/index.js build --production --emitDeclaration --customEntryPoint"
   },
   "tsdoc": {

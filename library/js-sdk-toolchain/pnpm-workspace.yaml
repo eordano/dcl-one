@@ -1,0 +1,23 @@
+nodeLinker: hoisted
+packages:
+  - packages/@dcl/*
+  - ../hashing
+overrides:
+  "react@^18.2.0": "18.3.1"
+  "react-reconciler@^0.29.0": "0.29.0"
+  "scheduler@^0.23.0": "0.23.0"
+  "@dcl/asset-packs": "2.17.2"
+  '@dcl/hashing': workspace:*
+  "protobufjs": "7.6.6"
+  "semver@<7.5.2": "^7.5.4"
+  "minimatch@<3.1.4": "^3.1.4"
+  "zod@<=3.22.2": "^3.23.8"
+  "ajv@<6.14.0": "^6.14.0"
+  "minimatch@>=9.0.0 <9.0.7": "^9.0.7"
+  "test-exclude": "^7.0.1"
+  "glob@10": "^13.0.6"
+minimumReleaseAge: 1440
+allowBuilds:
+  '@dcl/sdk-commands': false
+  esbuild: false
+  protobufjs: false

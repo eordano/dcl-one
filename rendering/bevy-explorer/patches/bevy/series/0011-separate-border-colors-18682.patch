@@ -1,0 +1,782 @@
+From 539a8eaaeed091738364a785a87bad024d5c260e
+Subject: separate border colors (#18682)
+Origin: https://github.com/robtfm/bevy/commit/539a8eaaeed091738364a785a87bad024d5c260e
+Date: 2025-05-26T18:57:13+02:00
+
+allow specifying the left/top/right/bottom border colors separately for
+ui elements
+
+fixes #14773
+
+- change `BorderColor` to
+```rs
+pub struct BorderColor {
+    pub left: Color,
+    pub top: Color,
+    pub right: Color,
+    pub bottom: Color,
+}
+```
+- generate one ui node per distinct border color, set flags for the
+active borders
+- render only the active borders
+
+i chose to do this rather than adding multiple colors to the
+ExtractedUiNode in order to minimize the impact for the common case
+where all border colors are the same.
+
+modified the `borders` example to use separate colors:
+
+![image](https://github.com/user-attachments/assets/5d9a4492-429a-4ee1-9656-215511886164)
+
+the behaviour is a bit weird but it mirrors html/css border behaviour.
+
+---
+
+To keep the existing behaviour, just change `BorderColor(color)` into
+`BorderColor::all(color)`.
+
+---------
+---
+diff --git a/crates/bevy_ui/src/render/debug_overlay.rs b/crates/bevy_ui/src/render/debug_overlay.rs
+index 79001f3ba1982a38896e2fc87fa4cc210847288f..aa9440b8d8e3973fbd7b6583be7fc1b4288e32ee 100644
+--- a/crates/bevy_ui/src/render/debug_overlay.rs
++++ b/crates/bevy_ui/src/render/debug_overlay.rs
+@@ -1,3 +1,4 @@
++use crate::shader_flags;
+ use crate::ui_node::ComputedNodeTarget;
+ use crate::CalculatedClip;
+ use crate::ComputedNode;
+@@ -106,7 +107,7 @@ pub fn extract_debug_overlay(
+                 flip_y: false,
+                 border: BorderRect::all(debug_options.line_width / uinode.inverse_scale_factor()),
+                 border_radius: uinode.border_radius(),
+-                node_type: NodeType::Border,
++                node_type: NodeType::Border(shader_flags::BORDER_ALL),
+             },
+             main_entity: entity.into(),
+         });
+diff --git a/crates/bevy_ui/src/render/mod.rs b/crates/bevy_ui/src/render/mod.rs
+index 36734e9ba1c19b51c0edb684da017e6d240bf93b..13ba851eda0aef7311271596d9a34f84b60923cb 100644
+--- a/crates/bevy_ui/src/render/mod.rs
++++ b/crates/bevy_ui/src/render/mod.rs
+@@ -213,7 +213,7 @@ pub struct ExtractedUiNode {
+ #[derive(Clone, Copy, Debug, PartialEq)]
+ pub enum NodeType {
+     Rect,
+-    Border,
++    Border(u32), // shader flags
+ }
+ 
+ pub enum ExtractedUiItem {
+@@ -506,30 +506,63 @@ pub fn extract_uinode_borders(
+ 
+         // Don't extract borders with zero width along all edges
+         if computed_node.border() != BorderRect::ZERO {
+-            if let Some(border_color) = maybe_border_color.filter(|bc| !bc.0.is_fully_transparent())
+-            {
+-                extracted_uinodes.uinodes.push(ExtractedUiNode {
+-                    stack_index: computed_node.stack_index,
+-                    color: border_color.0.into(),
+-                    rect: Rect {
+-                        max: computed_node.size(),
+-                        ..Default::default()
+-                    },
+-                    image,
+-                    clip: maybe_clip.map(|clip| clip.clip),
+-                    extracted_camera_entity,
+-                    item: ExtractedUiItem::Node {
+-                        atlas_scaling: None,
+-                        transform: global_transform.compute_matrix(),
+-                        flip_x: false,
+-                        flip_y: false,
+-                        border: computed_node.border(),
+-                        border_radius: computed_node.border_radius(),
+-                        node_type: NodeType::Border,
+-                    },
+-                    main_entity: entity.into(),
+-                    render_entity: commands.spawn(TemporaryRenderEntity).id(),
+-                });
++            if let Some(border_color) = maybe_border_color {
++                let border_colors = [
++                    border_color.left.to_linear(),
++                    border_color.top.to_linear(),
++                    border_color.right.to_linear(),
++                    border_color.bottom.to_linear(),
++                ];
++
++                const BORDER_FLAGS: [u32; 4] = [
++                    shader_flags::BORDER_LEFT,
++                    shader_flags::BORDER_TOP,
++                    shader_flags::BORDER_RIGHT,
++                    shader_flags::BORDER_BOTTOM,
++                ];
++                let mut completed_flags = 0;
++
++                for (i, &color) in border_colors.iter().enumerate() {
++                    if color.is_fully_transparent() {
++                        continue;
++                    }
++
++                    let mut border_flags = BORDER_FLAGS[i];
++
++                    if completed_flags & border_flags != 0 {
++                        continue;
++                    }
++
++                    for j in i + 1..4 {
++                        if color == border_colors[j] {
++                            border_flags |= BORDER_FLAGS[j];
++                        }
++                    }
++                    completed_flags |= border_flags;
++
++                    extracted_uinodes.uinodes.push(ExtractedUiNode {
++                        stack_index: computed_node.stack_index,
++                        color,
++                        rect: Rect {
++                            max: computed_node.size(),
++                            ..Default::default()
++                        },
++                        image,
++                        clip: maybe_clip.map(|clip| clip.clip),
++                        extracted_camera_entity,
++                        item: ExtractedUiItem::Node {
++                            atlas_scaling: None,
++                            transform: global_transform.compute_matrix(),
++                            flip_x: false,
++                            flip_y: false,
++                            border: computed_node.border(),
++                            border_radius: computed_node.border_radius(),
++                            node_type: NodeType::Border(border_flags),
++                        },
++                        main_entity: entity.into(),
++                        render_entity: commands.spawn(TemporaryRenderEntity).id(),
++                    });
++                }
+             }
+         }
+ 
+@@ -558,7 +591,7 @@ pub fn extract_uinode_borders(
+                     flip_y: false,
+                     border: BorderRect::all(computed_node.outline_width()),
+                     border_radius: computed_node.outline_radius(),
+-                    node_type: NodeType::Border,
++                    node_type: NodeType::Border(shader_flags::BORDER_ALL),
+                 },
+                 main_entity: entity.into(),
+             });
+@@ -938,7 +971,11 @@ pub mod shader_flags {
+     pub const TEXTURED: u32 = 1;
+     /// Ordering: top left, top right, bottom right, bottom left.
+     pub const CORNERS: [u32; 4] = [0, 2, 2 | 4, 4];
+-    pub const BORDER: u32 = 8;
++    pub const BORDER_LEFT: u32 = 256;
++    pub const BORDER_TOP: u32 = 512;
++    pub const BORDER_RIGHT: u32 = 1024;
++    pub const BORDER_BOTTOM: u32 = 2048;
++    pub const BORDER_ALL: u32 = BORDER_LEFT + BORDER_TOP + BORDER_RIGHT + BORDER_BOTTOM;
+ }
+ 
+ pub fn queue_uinodes(
+@@ -1238,8 +1275,8 @@ pub fn prepare_uinodes(
+                             };
+ 
+                             let color = extracted_uinode.color.to_f32_array();
+-                            if *node_type == NodeType::Border {
+-                                flags |= shader_flags::BORDER;
++                            if let NodeType::Border(border_flags) = *node_type {
++                                flags |= border_flags;
+                             }
+ 
+                             for i in 0..4 {
+diff --git a/crates/bevy_ui/src/render/ui.wgsl b/crates/bevy_ui/src/render/ui.wgsl
+index 3fd339405d7bdd48caee8c7114d1a16e682f51c2..3915900e4e300c634f7600296f6ef5e079de7529 100644
+--- a/crates/bevy_ui/src/render/ui.wgsl
++++ b/crates/bevy_ui/src/render/ui.wgsl
+@@ -3,7 +3,12 @@
+ const TEXTURED = 1u;
+ const RIGHT_VERTEX = 2u;
+ const BOTTOM_VERTEX = 4u;
+-const BORDER: u32 = 8u;
++// must align with BORDER_* shader_flags from bevy_ui/render/mod.rs
++const BORDER_LEFT: u32 = 256u;
++const BORDER_TOP: u32 = 512u;
++const BORDER_RIGHT: u32 = 1024u;
++const BORDER_BOTTOM: u32 = 2048u;
++const BORDER_ANY: u32 = BORDER_LEFT + BORDER_TOP + BORDER_RIGHT + BORDER_BOTTOM;
+ 
+ fn enabled(flags: u32, mask: u32) -> bool {
+     return (flags & mask) != 0u;
+@@ -114,6 +119,27 @@ fn sd_inset_rounded_box(point: vec2<f32>, size: vec2<f32>, radius: vec4<f32>, in
+     return sd_rounded_box(inner_point, inner_size, r);
+ }
+ 
++fn nearest_border_active(point_vs_mid: vec2<f32>, size: vec2<f32>, width: vec4<f32>, flags: u32) -> bool {
++    if (flags & BORDER_ANY) == BORDER_ANY {
++        return true;
++    }
++ 
++    // get point vs top left
++    let point = clamp(point_vs_mid + size * 0.49999, vec2(0.0), size);
++ 
++    let left = point.x / width.x;
++    let top = point.y / width.y;
++    let right = (size.x - point.x) / width.z;
++    let bottom = (size.y - point.y) / width.w;
++ 
++    let min_dist = min(min(left, top), min(right, bottom));
++ 
++    return (enabled(flags, BORDER_LEFT) && min_dist == left) ||
++        (enabled(flags, BORDER_TOP) && min_dist == top) || 
++        (enabled(flags, BORDER_RIGHT) && min_dist == right) || 
++        (enabled(flags, BORDER_BOTTOM) && min_dist == bottom);
++}
++
+ // get alpha for antialiasing for sdf
+ fn antialias(distance: f32) -> f32 {
+     // Using the fwidth(distance) was causing artifacts, so just use the distance.
+@@ -143,6 +169,9 @@ fn draw(in: VertexOutput, texture_color: vec4<f32>) -> vec4<f32> {
+     // outside the outside edge, or inside the inner edge have positive signed distance.
+     let border_distance = max(external_distance, -internal_distance);
+ 
++    // check if this node should apply color for the nearest border
++    let nearest_border = select(0.0, 1.0, nearest_border_active(point, size, border, flags));
++
+ #ifdef ANTI_ALIAS
+     // At external edges with no border, `border_distance` is equal to zero. 
+     // This select statement ensures we only perform anti-aliasing where a non-zero width border 
+@@ -154,7 +183,7 @@ fn draw(in: VertexOutput, texture_color: vec4<f32>) -> vec4<f32> {
+ #endif
+ 
+     // Blend mode ALPHA_BLENDING is used for UI elements, so we don't premultiply alpha here.
+-    return vec4(color.rgb, saturate(color.a * t));
++    return vec4(color.rgb, saturate(color.a * t * nearest_border));
+ }
+ 
+ fn draw_background(in: VertexOutput, texture_color: vec4<f32>) -> vec4<f32> {
+@@ -176,8 +205,8 @@ fn draw_background(in: VertexOutput, texture_color: vec4<f32>) -> vec4<f32> {
+ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+     let texture_color = textureSample(sprite_texture, sprite_sampler, in.uv);
+ 
+-    if enabled(in.flags, BORDER) {
+-        return draw(in, texture_color);
++    if enabled(in.flags, BORDER_ANY) {
++        return draw(in, texture_color, in.flags);
+     } else {
+         return draw_background(in, texture_color);
+     }
+diff --git a/crates/bevy_ui/src/ui_node.rs b/crates/bevy_ui/src/ui_node.rs
+index 2486296bac3e2d154922e6565670fd07137d0b2f..78ac2598af4c08939dc686b4fb34805808f21fe1 100644
+--- a/crates/bevy_ui/src/ui_node.rs
++++ b/crates/bevy_ui/src/ui_node.rs
+@@ -1,5 +1,5 @@
+ use crate::{FocusPolicy, UiRect, Val};
+-use bevy_color::Color;
++use bevy_color::{Alpha, Color};
+ use bevy_derive::{Deref, DerefMut};
+ use bevy_ecs::{prelude::*, system::SystemParam};
+ use bevy_math::{vec4, Rect, UVec2, Vec2, Vec4Swizzles};
+@@ -2036,17 +2036,40 @@ impl<T: Into<Color>> From<T> for BackgroundColor {
+     derive(serde::Serialize, serde::Deserialize),
+     reflect(Serialize, Deserialize)
+ )]
+-pub struct BorderColor(pub Color);
++pub struct BorderColor {
++    pub top: Color,
++    pub right: Color,
++    pub bottom: Color,
++    pub left: Color,
++}
+ 
+ impl<T: Into<Color>> From<T> for BorderColor {
+     fn from(color: T) -> Self {
+-        Self(color.into())
++        Self::all(color.into())
+     }
+ }
+ 
+ impl BorderColor {
+     /// Border color is transparent by default.
+-    pub const DEFAULT: Self = BorderColor(Color::NONE);
++    pub const DEFAULT: Self = BorderColor::all(Color::NONE);
++
++    /// Helper to create a `BorderColor` struct with all borders set to the given color
++    pub const fn all(color: Color) -> Self {
++        Self {
++            top: color,
++            bottom: color,
++            left: color,
++            right: color,
++        }
++    }
++
++    /// Check if all contained border colors are transparent
++    pub fn is_fully_transparent(&self) -> bool {
++        self.top.is_fully_transparent()
++            && self.bottom.is_fully_transparent()
++            && self.left.is_fully_transparent()
++            && self.right.is_fully_transparent()
++    }
+ }
+ 
+ impl Default for BorderColor {
+diff --git a/examples/3d/color_grading.rs b/examples/3d/color_grading.rs
+index 0b2616c1879b5acea7ecbb31ae1cf1551bacb503..17ee0cdacf6fb41ec5af414c11c47c46a9a34ac8 100644
+--- a/examples/3d/color_grading.rs
++++ b/examples/3d/color_grading.rs
+@@ -252,7 +252,7 @@ fn add_button_for_value(
+                 margin: UiRect::right(Val::Px(12.0)),
+                 ..default()
+             },
+-            BorderColor(Color::WHITE),
++            BorderColor::all(Color::WHITE),
+             BorderRadius::MAX,
+             BackgroundColor(Color::BLACK),
+         ))
+diff --git a/examples/3d/split_screen.rs b/examples/3d/split_screen.rs
+index c11fb2e3ccd079ea719d7c9e6bc0fd2bd8788bd1..8baaacd69ba939d2eaf8e381d3c0faa77d14cdda 100644
+--- a/examples/3d/split_screen.rs
++++ b/examples/3d/split_screen.rs
+@@ -137,7 +137,7 @@ fn setup(
+                     align_items: AlignItems::Center,
+                     ..default()
+                 },
+-                BorderColor(Color::WHITE),
++                BorderColor::all(Color::WHITE),
+                 BackgroundColor(Color::srgb(0.25, 0.25, 0.25)),
+             ))
+             .with_children(|parent| {
+diff --git a/examples/animation/animation_graph.rs b/examples/animation/animation_graph.rs
+index 76da8a6644ef1f81ea1479d8220f733013011f50..610074744f901931fd80065d75a7972b42ad189b 100644
+--- a/examples/animation/animation_graph.rs
++++ b/examples/animation/animation_graph.rs
+@@ -295,7 +295,7 @@ fn setup_node_rects(commands: &mut Commands) {
+                     justify_content: JustifyContent::Center,
+                     ..default()
+                 },
+-                BorderColor(WHITE.into()),
++                BorderColor::all(WHITE.into()),
+                 Outline::new(Val::Px(1.), Val::ZERO, Color::WHITE),
+             ));
+ 
+@@ -349,7 +349,7 @@ fn setup_node_lines(commands: &mut Commands) {
+                 border: UiRect::bottom(Val::Px(1.0)),
+                 ..default()
+             },
+-            BorderColor(WHITE.into()),
++            BorderColor::all(WHITE.into()),
+         ));
+     }
+ 
+@@ -364,7 +364,7 @@ fn setup_node_lines(commands: &mut Commands) {
+                 border: UiRect::left(Val::Px(1.0)),
+                 ..default()
+             },
+-            BorderColor(WHITE.into()),
++            BorderColor::all(WHITE.into()),
+         ));
+     }
+ }
+diff --git a/examples/animation/animation_masks.rs b/examples/animation/animation_masks.rs
+index 72408260d62f6794f770740d4bbf29ec7339f997..07261b40df630cdac04aaa1ea50e98d3d052f19b 100644
+--- a/examples/animation/animation_masks.rs
++++ b/examples/animation/animation_masks.rs
+@@ -255,7 +255,7 @@ fn add_mask_group_control(
+                 margin: UiRect::ZERO,
+                 ..default()
+             },
+-            BorderColor(Color::WHITE),
++            BorderColor::all(Color::WHITE),
+             BorderRadius::all(Val::Px(3.0)),
+             BackgroundColor(Color::BLACK),
+         ))
+@@ -292,7 +292,7 @@ fn add_mask_group_control(
+                         border: UiRect::top(Val::Px(1.0)),
+                         ..default()
+                     },
+-                    BorderColor(Color::WHITE),
++                    BorderColor::all(Color::WHITE),
+                 ))
+                 .with_children(|builder| {
+                     for (index, label) in [
+@@ -321,7 +321,7 @@ fn add_mask_group_control(
+                                     },
+                                     ..default()
+                                 },
+-                                BorderColor(Color::WHITE),
++                                BorderColor::all(Color::WHITE),
+                                 AnimationControl {
+                                     group_id: mask_group_id,
+                                     label: *label,
+diff --git a/examples/helpers/widgets.rs b/examples/helpers/widgets.rs
+index 5d83c18c124fbc08dc8ad5f9727f2667b98388b5..14873acc5fc05b8164360a88495de734ad94c259 100644
+--- a/examples/helpers/widgets.rs
++++ b/examples/helpers/widgets.rs
+@@ -28,7 +28,7 @@ pub struct RadioButtonText;
+ pub const BUTTON_BORDER: UiRect = UiRect::all(Val::Px(1.0));
+ 
+ /// The color of the border that surrounds buttons.
+-pub const BUTTON_BORDER_COLOR: BorderColor = BorderColor(Color::WHITE);
++pub const BUTTON_BORDER_COLOR: BorderColor = BorderColor::all(Color::WHITE);
+ 
+ /// The amount of rounding to apply to button corners.
+ pub const BUTTON_BORDER_RADIUS_SIZE: Val = Val::Px(6.0);
+diff --git a/examples/testbed/full_ui.rs b/examples/testbed/full_ui.rs
+index 4c28cf04cd60f38cc1a844e1af7ae8836cd16a7e..33f2b6b5decb0b7f748b93ad0ddc4e0d7ff19e4f 100644
+--- a/examples/testbed/full_ui.rs
++++ b/examples/testbed/full_ui.rs
+@@ -200,7 +200,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                 justify_content: JustifyContent::Center,
+                                 ..default()
+                             },
+-                            BorderColor(LIME.into()),
++                            BorderColor::all(LIME.into()),
+                             BackgroundColor(Color::srgb(0.8, 0.8, 1.)),
+                         ))
+                         .with_children(|parent| {
+diff --git a/examples/testbed/ui.rs b/examples/testbed/ui.rs
+index 0693a4d098c185e624752a0a8c5a1d660bfe905b..ce0dfff0d7a9f6c25b9ae0d26b8bd8eabb182a8b 100644
+--- a/examples/testbed/ui.rs
++++ b/examples/testbed/ui.rs
+@@ -231,7 +231,7 @@ mod borders {
+                             ..default()
+                         },
+                         BackgroundColor(MAROON.into()),
+-                        BorderColor(RED.into()),
++                        BorderColor::all(RED.into()),
+                         Outline {
+                             width: Val::Px(10.),
+                             offset: Val::Px(10.),
+@@ -323,7 +323,7 @@ mod box_shadow {
+                             border: UiRect::all(Val::Px(2.)),
+                             ..default()
+                         },
+-                        BorderColor(WHITE.into()),
++                        BorderColor::all(WHITE.into()),
+                         border_radius,
+                         BackgroundColor(BLUE.into()),
+                         BoxShadow::new(
+@@ -421,7 +421,7 @@ mod overflow {
+                                 overflow,
+                                 ..default()
+                             },
+-                            BorderColor(RED.into()),
++                            BorderColor::all(RED.into()),
+                             BackgroundColor(Color::WHITE),
+                         ))
+                         .with_children(|parent| {
+@@ -523,7 +523,7 @@ mod layout_rounding {
+                                         ..Default::default()
+                                     },
+                                     BackgroundColor(MAROON.into()),
+-                                    BorderColor(DARK_BLUE.into()),
++                                    BorderColor::all(DARK_BLUE.into()),
+                                 ));
+                             }
+                         });
+diff --git a/examples/ui/borders.rs b/examples/ui/borders.rs
+index d7c7797b91bca7dfc6ec95e80cbbdceee0cecfc3..a7d37aabf9db20dc85d9f13b3878d484981d90a4 100644
+--- a/examples/ui/borders.rs
++++ b/examples/ui/borders.rs
+@@ -143,7 +143,12 @@ fn setup(mut commands: Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(MAROON.into()),
+-                BorderColor(RED.into()),
++                BorderColor {
++                                top: RED.into(),
++                                bottom: YELLOW.into(),
++                                left: GREEN.into(),
++                                right: BLUE.into(),
++                            },
+                 Outline {
+                     width: Val::Px(6.),
+                     offset: Val::Px(6.),
+@@ -204,7 +209,12 @@ fn setup(mut commands: Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(MAROON.into()),
+-                BorderColor(RED.into()),
++                BorderColor {
++                                top: RED.into(),
++                                bottom: YELLOW.into(),
++                                left: GREEN.into(),
++                                right: BLUE.into(),
++                            },
+                 border_radius,
+                 Outline {
+                     width: Val::Px(6.),
+diff --git a/examples/ui/box_shadow.rs b/examples/ui/box_shadow.rs
+index c30a1d6ce749768c29c8c04dad81e4dbd895451c..b008fba88b1134d54cc85210e1c30a66089f706a 100644
+--- a/examples/ui/box_shadow.rs
++++ b/examples/ui/box_shadow.rs
+@@ -202,7 +202,7 @@ fn setup(mut commands: Commands) {
+                     border: UiRect::all(Val::Px(4.)),
+                     ..default()
+                 },
+-                BorderColor(LIGHT_SKY_BLUE.into()),
++                BorderColor::all(LIGHT_SKY_BLUE.into()),
+                 BorderRadius::all(Val::Px(20.)),
+                 BackgroundColor(DEEP_SKY_BLUE.into()),
+                 BoxShadow(vec![
+@@ -253,7 +253,7 @@ fn box_shadow_node_bundle(
+             border: UiRect::all(Val::Px(4.)),
+             ..default()
+         },
+-        BorderColor(LIGHT_SKY_BLUE.into()),
++        BorderColor::all(LIGHT_SKY_BLUE.into()),
+         border_radius,
+         BackgroundColor(DEEP_SKY_BLUE.into()),
+         BoxShadow::new(
+diff --git a/examples/ui/button.rs b/examples/ui/button.rs
+index 33210b4df6f89fe7d3d3696a6fdd6c5cbe53b641..f297474c3595036eb161655c4eb165cd7d99374b 100644
+--- a/examples/ui/button.rs
++++ b/examples/ui/button.rs
+@@ -35,17 +35,17 @@ fn button_system(
+             Interaction::Pressed => {
+                 **text = "Press".to_string();
+                 *color = PRESSED_BUTTON.into();
+-                border_color.0 = RED.into();
++                *border_color = BorderColor::all(RED.into());
+             }
+             Interaction::Hovered => {
+                 **text = "Hover".to_string();
+                 *color = HOVERED_BUTTON.into();
+-                border_color.0 = Color::WHITE;
++                *border_color = BorderColor::all(Color::WHITE);
+             }
+             Interaction::None => {
+                 **text = "Button".to_string();
+                 *color = NORMAL_BUTTON.into();
+-                border_color.0 = Color::BLACK;
++                *border_color = BorderColor::all(Color::BLACK);
+             }
+         }
+     }
+@@ -78,7 +78,7 @@ fn button(asset_server: &AssetServer) -> impl Bundle + use<> {
+                 align_items: AlignItems::Center,
+                 ..default()
+             },
+-            BorderColor(Color::BLACK),
++            BorderColor::all(Color::BLACK),
+             BorderRadius::MAX,
+             BackgroundColor(NORMAL_BUTTON),
+             children![(
+diff --git a/examples/ui/directional_navigation.rs b/examples/ui/directional_navigation.rs
+index 937970915cda26501d306fc238b60362f729b2d6..f1b2c62dea51a943cb89a328a6165804a3a042b8 100644
+--- a/examples/ui/directional_navigation.rs
++++ b/examples/ui/directional_navigation.rs
+@@ -361,9 +361,9 @@ fn highlight_focused_element(
+         if input_focus.0 == Some(entity) && input_focus_visible.0 {
+             // Don't change the border size / radius here,
+             // as it would result in wiggling buttons when they are focused
+-            border_color.0 = FOCUSED_BORDER.into();
++            *border_color = BorderColor::all(FOCUSED_BORDER.into());
+         } else {
+-            border_color.0 = Color::NONE;
++            *border_color = BorderColor::DEFAULT;
+         }
+     }
+ }
+diff --git a/examples/ui/ghost_nodes.rs b/examples/ui/ghost_nodes.rs
+index abcebae3ff58f8e1a6c7666906ac43e07717d1c5..6678b24a8089cce99da661ae279a1c66e975f3b1 100644
+--- a/examples/ui/ghost_nodes.rs
++++ b/examples/ui/ghost_nodes.rs
+@@ -83,7 +83,7 @@ fn create_button() -> impl Bundle {
+             align_items: AlignItems::Center,
+             ..default()
+         },
+-        BorderColor(Color::BLACK),
++        BorderColor::all(Color::BLACK),
+         BorderRadius::MAX,
+         BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
+     )
+diff --git a/examples/ui/overflow.rs b/examples/ui/overflow.rs
+index 2bd9aa873e4b5f4477f8f86981d4da55ecf4220d..c5764ce328f54b0dacffb86921987510eac35dfe 100644
+--- a/examples/ui/overflow.rs
++++ b/examples/ui/overflow.rs
+@@ -72,7 +72,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                     overflow,
+                                     ..default()
+                                 },
+-                                BorderColor(Color::BLACK),
++                                BorderColor::all(Color::BLACK),
+                                 BackgroundColor(GRAY.into()),
+                             ))
+                             .with_children(|parent| {
+diff --git a/examples/ui/overflow_clip_margin.rs b/examples/ui/overflow_clip_margin.rs
+index 81c7d6a82905fc03ce4661e4cbe2d76d095182cc..aebcc0682835f3c65b1cdd61357549c0f594164b 100644
+--- a/examples/ui/overflow_clip_margin.rs
++++ b/examples/ui/overflow_clip_margin.rs
+@@ -67,7 +67,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+                                     ..default()
+                                 },
+                                 BackgroundColor(GRAY.into()),
+-                                BorderColor(Color::BLACK),
++                                BorderColor::all(Color::BLACK),
+                             ))
+                             .with_children(|parent| {
+                                 parent
+diff --git a/examples/ui/size_constraints.rs b/examples/ui/size_constraints.rs
+index 95b00086644e5e88677e0d2ca2b5380c815a00fd..72a072d78846561358bb2b58835f9800f0030ca9 100644
+--- a/examples/ui/size_constraints.rs
++++ b/examples/ui/size_constraints.rs
+@@ -221,7 +221,7 @@ fn spawn_button(
+                 margin: UiRect::horizontal(Val::Px(2.)),
+                 ..Default::default()
+             },
+-            BorderColor(if active {
++            BorderColor::all(if active {
+                 ACTIVE_BORDER_COLOR
+             } else {
+                 INACTIVE_BORDER_COLOR
+@@ -345,7 +345,7 @@ fn update_radio_buttons_colors(
+                     )
+                 };
+ 
+-                border_query.get_mut(id).unwrap().0 = border_color;
++                *border_query.get_mut(id).unwrap() = BorderColor::all(border_color);
+                 for &child in children_query.get(id).into_iter().flatten() {
+                     color_query.get_mut(child).unwrap().0 = inner_color;
+                     for &grandchild in children_query.get(child).into_iter().flatten() {
+diff --git a/examples/ui/tab_navigation.rs b/examples/ui/tab_navigation.rs
+index c6060bd848e0713cac6bde4c934ee7ee2a18b146..09242693537dcee7d620f6883316111a048d8216 100644
+--- a/examples/ui/tab_navigation.rs
++++ b/examples/ui/tab_navigation.rs
+@@ -42,17 +42,17 @@ fn button_system(
+             Interaction::Pressed => {
+                 **text = "Press".to_string();
+                 *color = PRESSED_BUTTON.into();
+-                border_color.0 = RED.into();
++                *border_color = BorderColor::all(RED.into());
+             }
+             Interaction::Hovered => {
+                 **text = "Hover".to_string();
+                 *color = HOVERED_BUTTON.into();
+-                border_color.0 = Color::WHITE;
++                *border_color = BorderColor::all(Color::WHITE);
+             }
+             Interaction::None => {
+                 **text = "Button".to_string();
+                 *color = NORMAL_BUTTON.into();
+-                border_color.0 = Color::BLACK;
++                *border_color = BorderColor::all(Color::BLACK);
+             }
+         }
+     }
+@@ -198,7 +198,7 @@ fn create_button(parent: &mut ChildSpawnerCommands<'_>, asset_server: &AssetServ
+                 align_items: AlignItems::Center,
+                 ..default()
+             },
+-            BorderColor(Color::BLACK),
++            BorderColor::all(Color::BLACK),
+             BorderRadius::MAX,
+             BackgroundColor(NORMAL_BUTTON),
+             TabIndex(0),
+diff --git a/examples/ui/viewport_debug.rs b/examples/ui/viewport_debug.rs
+index 5d0ea927493ce5e728b0415c40e1701ef2b83b75..58790f938172c2aeb7f21b5b4e7be5088e227dee 100644
+--- a/examples/ui/viewport_debug.rs
++++ b/examples/ui/viewport_debug.rs
+@@ -75,7 +75,7 @@ fn spawn_with_viewport_coords(commands: &mut Commands) {
+                 flex_wrap: FlexWrap::Wrap,
+                 ..default()
+             },
+-            BorderColor(PALETTE[0].into()),
++            BorderColor::all(PALETTE[0].into()),
+             Coords::Viewport,
+         ))
+         .with_children(|builder| {
+@@ -87,7 +87,7 @@ fn spawn_with_viewport_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[2].into()),
+-                BorderColor(PALETTE[9].into()),
++                BorderColor::all(PALETTE[9].into()),
+             ));
+ 
+             builder.spawn((
+@@ -107,7 +107,7 @@ fn spawn_with_viewport_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[4].into()),
+-                BorderColor(PALETTE[8].into()),
++                BorderColor::all(PALETTE[8].into()),
+             ));
+ 
+             builder.spawn((
+@@ -118,7 +118,7 @@ fn spawn_with_viewport_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[5].into()),
+-                BorderColor(PALETTE[8].into()),
++                BorderColor::all(PALETTE[8].into()),
+             ));
+ 
+             builder.spawn((
+@@ -138,7 +138,7 @@ fn spawn_with_viewport_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[7].into()),
+-                BorderColor(PALETTE[9].into()),
++                BorderColor::all(PALETTE[9].into()),
+             ));
+         });
+ }
+@@ -153,7 +153,7 @@ fn spawn_with_pixel_coords(commands: &mut Commands) {
+                 flex_wrap: FlexWrap::Wrap,
+                 ..default()
+             },
+-            BorderColor(PALETTE[1].into()),
++            BorderColor::all(PALETTE[1].into()),
+             Coords::Pixel,
+         ))
+         .with_children(|builder| {
+@@ -165,7 +165,7 @@ fn spawn_with_pixel_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[2].into()),
+-                BorderColor(PALETTE[9].into()),
++                BorderColor::all(PALETTE[9].into()),
+             ));
+ 
+             builder.spawn((
+@@ -185,7 +185,7 @@ fn spawn_with_pixel_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[4].into()),
+-                BorderColor(PALETTE[8].into()),
++                BorderColor::all(PALETTE[8].into()),
+             ));
+ 
+             builder.spawn((
+@@ -196,7 +196,7 @@ fn spawn_with_pixel_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[5].into()),
+-                BorderColor(PALETTE[8].into()),
++                BorderColor::all(PALETTE[8].into()),
+             ));
+ 
+             builder.spawn((
+@@ -216,7 +216,7 @@ fn spawn_with_pixel_coords(commands: &mut Commands) {
+                     ..default()
+                 },
+                 BackgroundColor(PALETTE[7].into()),
+-                BorderColor(PALETTE[9].into()),
++                BorderColor::all(PALETTE[9].into()),
+             ));
+         });
+ }
+diff --git a/release-content/migration-guides/separate-border-colors.md b/release-content/migration-guides/separate-border-colors.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..28929f22f20e7d9bfe31bbf9d2588716a1867818
+--- /dev/null
++++ b/release-content/migration-guides/separate-border-colors.md
+@@ -0,0 +1,6 @@
++---
++title: Separate Border Colors
++pull_requests: [18682]
++---
++
++The `BorderColor` struct now contains separate fields for each edge, `top`, `bottom`, `left`, `right`. To keep the existing behavior, replace `BorderColor(color)` with `BorderColor::all(color)`, and `border_color.0 = new_color` with `*border_color = BorderColor::all(new_color)`.

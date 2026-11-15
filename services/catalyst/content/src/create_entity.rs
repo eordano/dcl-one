@@ -143,21 +143,10 @@ pub fn extract_auth_chain_from_fields(
         return Ok(Some(chain));
     }
 
-    let mut biggest_index: i64 = -1;
-    for key in fields.keys() {
-        if let Some(rest) = key.strip_prefix("authChain[")
-            && let Some(idx_str) = rest.split(']').next()
-            && let Ok(idx) = idx_str.parse::<i64>()
-            && idx > biggest_index
-        {
-            biggest_index = idx;
-        }
-    }
-
-    if biggest_index == -1 {
+    let Some(biggest_index) = auth_chain_field_max_index(fields.keys()) else {
         return Ok(None);
-    }
-    if biggest_index >= MAX_AUTH_CHAIN_LINKS as i64 {
+    };
+    if biggest_index >= MAX_AUTH_CHAIN_LINKS as u64 {
         return Err(too_long_message());
     }
 
@@ -175,9 +164,28 @@ pub fn extract_auth_chain_from_fields(
     Ok(Some(Value::Array(chain)))
 }
 
+/// The largest link index the indexed form fields name: the first
+/// `authChain[<digits>]` in each field name (`/authChain\[(\d+)\]/`),
+/// saturating; `None` when no name carries one.
+pub fn auth_chain_field_max_index<'a>(keys: impl IntoIterator<Item = &'a String>) -> Option<u64> {
+    keys.into_iter()
+        .filter_map(|key| auth_chain_field_index(key))
+        .max()
+}
+
+fn auth_chain_field_index(key: &str) -> Option<u64> {
+    const OPEN: &str = "authChain[";
+    key.match_indices(OPEN).find_map(|(at, _)| {
+        let rest = &key[at + OPEN.len()..];
+        let digits = &rest[..rest.bytes().take_while(u8::is_ascii_digit).count()];
+        (!digits.is_empty() && rest[digits.len()..].starts_with(']'))
+            .then(|| digits.parse::<u64>().unwrap_or(u64::MAX))
+    })
+}
+
 fn indexed_field<'a>(
     fields: &'a BTreeMap<String, String>,
-    i: i64,
+    i: u64,
     part: &str,
 ) -> Result<&'a String, String> {
     fields
@@ -1139,6 +1147,39 @@ mod tests {
         assert!(
             err.to_lowercase().contains("missing auth chain element"),
             "unexpected error message: {err}"
+        );
+    }
+
+    /// `/authChain\[(\d+)\]/` anywhere in a field name, digits only.
+    #[test]
+    fn indexed_auth_chain_keys_are_scanned_as_upstream() {
+        let mut f = link_fields(1);
+        f.insert("authChain[+1][type]".into(), "SIGNER".into());
+        let chain = extract_auth_chain_from_fields(&f).unwrap().unwrap();
+        assert_eq!(chain.as_array().unwrap().len(), 1);
+
+        let mut f = link_fields(1);
+        f.insert("xauthChain[2][payload]".into(), "0x".into());
+        assert_eq!(
+            extract_auth_chain_from_fields(&f).unwrap_err(),
+            "Missing auth chain element at index 1"
+        );
+
+        let mut f = link_fields(1);
+        f.insert("authChain[x]authChain[1][type]".into(), "SIGNER".into());
+        assert_eq!(
+            extract_auth_chain_from_fields(&f).unwrap_err(),
+            "Missing auth chain element at index 1"
+        );
+
+        let mut f = link_fields(1);
+        f.insert(
+            "authChain[99999999999999999999][type]".into(),
+            "SIGNER".into(),
+        );
+        assert_eq!(
+            extract_auth_chain_from_fields(&f).unwrap_err(),
+            too_long_message()
         );
     }
 

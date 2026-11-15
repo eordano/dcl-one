@@ -247,13 +247,7 @@ async fn published(conn: &mut PgConnection, log: Log) -> Result<Option<i64>, sql
 pub(super) async fn run(pass: &Pass) -> anyhow::Result<u64> {
     let mut passed = 0;
     for log in Log::ALL {
-        for _ in 0..super::MAX_BATCHES_PER_TICK {
-            let (n, more) = batch(pass, log).await?;
-            passed += n;
-            if !more {
-                break;
-            }
-        }
+        passed += super::drain(|| batch(pass, log)).await?;
     }
     Ok(passed)
 }

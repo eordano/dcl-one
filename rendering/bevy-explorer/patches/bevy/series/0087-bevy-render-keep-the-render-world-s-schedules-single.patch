@@ -1,0 +1,40 @@
+From b40c57995b0ef32dbfac4861c104d21dda639d7c
+Subject: bevy_render: keep the render world's schedules single-threaded on the web
+Origin: https://github.com/robtfm/bevy/commit/b40c57995b0ef32dbfac4861c104d21dda639d7c
+Date: 2026-09-22T23:04:15+01:00
+
+With the multi-threaded executor now the default on the web under the
+`web-worker` feature,
+the Extract and Render schedules would spread systems over the compute
+pool's workers. Render-world resources wrap WebGPU objects, which are
+bound to the thread that created them, so those schedules must run
+entirely on the render thread. Pin them to the SingleThreaded executor
+there.
+---
+diff --git a/crates/bevy_render/src/lib.rs b/crates/bevy_render/src/lib.rs
+index cba3f6a1ff3e39b4490a82d5176622cc4b748b98..c13f0609a7f61c012ed20a0a4242b4e3f44f3685 100644
+--- a/crates/bevy_render/src/lib.rs
++++ b/crates/bevy_render/src/lib.rs
+@@ -208,6 +208,10 @@ impl Render {
+         use RenderSet::*;
+ 
+         let mut schedule = Schedule::new(Self);
++        // Render-world resources wrap thread-affine WebGPU objects, so on the web the schedule
++        // stays on the thread that runs it.
++        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
++        schedule.set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
+ 
+         schedule.configure_sets(
+             (
+@@ -551,6 +555,11 @@ unsafe fn initialize_render_app(app: &mut App) {
+     });
+     extract_schedule.set_apply_final_deferred(false);
+ 
++    // Render-world resources wrap thread-affine WebGPU objects, so on the web the render
++    // world's schedules stay on the thread that runs them (see also `Render::base_schedule`).
++    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
++    extract_schedule.set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
++
+     render_app
+         .add_schedule(extract_schedule)
+         .add_schedule(Render::base_schedule())

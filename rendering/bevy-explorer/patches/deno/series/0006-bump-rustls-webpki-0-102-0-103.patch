@@ -1,0 +1,72 @@
+From 3ee34819c57653610521dc6501ddf8e2cf0c5aaa
+Subject: bump rustls-webpki 0.102 -> 0.103
+Origin: https://github.com/robtfm/deno/commit/3ee34819c57653610521dc6501ddf8e2cf0c5aaa
+Date: 2026-08-28T18:49:17+01:00
+
+0.103 no longer re-exports rustls-pki-types as webpki::types; import CertificateDer/PrivateKeyDer from rustls::pki_types as upstream does. rustls-pki-types moves to 1.15 (webpki 0.103 needs ^1.12).
+---
+diff --git a/Cargo.toml b/Cargo.toml
+index e51d51615ec3fb5e08adefe7a505006ec858c9c6..e9f85003ba113e4ebfc5f294504fa49ae2042b96 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -158,7 +158,7 @@ rusqlite = { version = "0.32.0", features = ["unlock_notify", "bundled"] }
+ rustls = { version = "0.23.11", default-features = false, features = ["logging", "std", "tls12", "ring"] }
+ rustls-pemfile = "2"
+ rustls-tokio-stream = "=0.3.0"
+-rustls-webpki = "0.102"
++rustls-webpki = "0.103"
+ rustyline = "=13.0.0"
+ saffron = "=0.1.0"
+ scopeguard = "1.2.0"
+diff --git a/ext/fetch/tests.rs b/ext/fetch/tests.rs
+index dad1b34a9e80161578c9b93c3c872f84963d01e4..207cf0a0bdba3ec3adfbf4e90b2887a26d981c3e 100644
+--- a/ext/fetch/tests.rs
++++ b/ext/fetch/tests.rs
+@@ -97,7 +97,7 @@ async fn create_https_server(allow_h2: bool) -> SocketAddr {
+     .with_no_client_auth()
+     .with_single_cert(
+       vec![EXAMPLE_CRT.into()],
+-      webpki::types::PrivateKeyDer::try_from(EXAMPLE_KEY).unwrap(),
++      deno_tls::rustls::pki_types::PrivateKeyDer::try_from(EXAMPLE_KEY).unwrap(),
+     )
+     .unwrap();
+   if allow_h2 {
+@@ -170,7 +170,7 @@ async fn create_https_proxy(src_addr: SocketAddr) -> SocketAddr {
+     .with_no_client_auth()
+     .with_single_cert(
+       vec![EXAMPLE_CRT.into()],
+-      webpki::types::PrivateKeyDer::try_from(EXAMPLE_KEY).unwrap(),
++      deno_tls::rustls::pki_types::PrivateKeyDer::try_from(EXAMPLE_KEY).unwrap(),
+     )
+     .unwrap();
+   // Set ALPN, to check our proxy connector. But we shouldn't receive anything.
+diff --git a/ext/net/ops_tls.rs b/ext/net/ops_tls.rs
+index 8483e7e66807b180ac41d9370dd741f2b23ca86e..e25b4b024a473d2d0cd4c4ef1cd0e2ffe0109111 100644
+--- a/ext/net/ops_tls.rs
++++ b/ext/net/ops_tls.rs
+@@ -34,8 +34,8 @@ use deno_tls::new_resolver;
+ use deno_tls::rustls::pki_types::ServerName;
+ use deno_tls::rustls::ClientConnection;
+ use deno_tls::rustls::ServerConfig;
+-use deno_tls::webpki::types::CertificateDer;
+-use deno_tls::webpki::types::PrivateKeyDer;
++use deno_tls::rustls::pki_types::CertificateDer;
++use deno_tls::rustls::pki_types::PrivateKeyDer;
+ use deno_tls::ServerConfigProvider;
+ use deno_tls::SocketUse;
+ use deno_tls::TlsKey;
+diff --git a/ext/tls/tls_key.rs b/ext/tls/tls_key.rs
+index 66fac86f87f9c1b317185ce527ce7bf8c3e34a28..819d2531b449f8139f9f3f3986c2cf061f150247 100644
+--- a/ext/tls/tls_key.rs
++++ b/ext/tls/tls_key.rs
+@@ -30,8 +30,8 @@ use std::sync::Arc;
+ use tokio::sync::broadcast;
+ use tokio::sync::mpsc;
+ use tokio::sync::oneshot;
+-use webpki::types::CertificateDer;
+-use webpki::types::PrivateKeyDer;
++use rustls::pki_types::CertificateDer;
++use rustls::pki_types::PrivateKeyDer;
+ 
+ type ErrorType = Rc<AnyError>;
+ 

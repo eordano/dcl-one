@@ -1,0 +1,49 @@
+name: Rebuild the Explorer's patched sources
+description: >-
+  Bevy and the forked crates are tracked as an upstream commit and a patch series under
+  rendering/bevy-explorer/patches. This rebuilds the patched trees at the paths Cargo reads, with
+  the upstream commits delivered from the Actions cache. apps/bevy-explorer/prepare-native-cache.py
+  puts the patch series into the key of the rust-cache step.
+  With `verify: true` it writes nothing for Cargo: it proves that every series applies to its upstream
+  commit and gives the recorded tree ids.
+inputs:
+  verify:
+    description: Prove the series and the tree ids; write no tree.
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    # The tool reads TOML with the standard library of Python 3.11 or later.
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: '3.12'
+    - id: bases
+      shell: bash
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        echo "key=$(grep -hE '^[[:space:]]*(upstream|commit|url)[[:space:]]*=' rendering/bevy-explorer/patches/*/source.toml | git hash-object --stdin)" >> "$GITHUB_OUTPUT"
+    # A changed pin has no exact match: the newest cache of the other upstream commits is restored
+    # and only the new commit is fetched.
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/dcl-one/patched-sources
+        key: bevy-explorer-patch-bases-${{ runner.os }}-${{ steps.bases.outputs.key }}
+        restore-keys: |
+          bevy-explorer-patch-bases-${{ runner.os }}-
+    - if: inputs.verify == 'true'
+      shell: bash
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        python tooling/patched-sources.py verify
+    # --strict: a tree that was edited is an error, never rewritten.
+    - if: inputs.verify != 'true'
+      shell: bash
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        python tooling/patched-sources.py materialise --strict
+    - if: steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/dcl-one/patched-sources
+        key: ${{ steps.restore.outputs.cache-primary-key }}

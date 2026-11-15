@@ -49,6 +49,8 @@ def main():
     parser.add_argument("--filter", default="", help="Run a subset; an empty match fails")
     parser.add_argument("--tests-only", action="store_true", help="Skip consumer compilation")
     args = parser.parse_args()
+    # Cargo reads Bevy and the forked crates from trees that are not tracked.
+    run([sys.executable, str(Path(__file__).with_name("patched-sources.py")), "materialise", "--quiet"])
     matched = 0
     for package, required in REQUIRED.items():
         command = ["cargo", "test", "--locked", "-p", package, "--lib"]

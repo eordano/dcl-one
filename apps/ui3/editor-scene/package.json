@@ -4,7 +4,7 @@
   "private": true,
   "description": "The scene editor's super-user SDK7 scene: selection, transform gizmos and the editor camera, driven by the Creator Hub editor (apps/ui3/src/editor) over the editor bus. Runs on an Explorer with the editor console commands, which the pinned web artifact lacks. `pnpm run build` exports it as a static realm: its files into ui3/public/editor-scene, served by Sites at /editor-scene/, and its about into ui3/src/editor/editor-scene-realm.json, which Sites serves at /editor-scene/EditorScene/about with the deployment's own origin in the scene urn.",
   "scripts": {
-    "build": "sdk-commands build --production && rm -rf ../public/editor-scene && sdk-commands export-static --destination ../public/editor-scene --realmName EditorScene --baseUrl /editor-scene/ --commsAdapter offline:offline --timestamp 0 && mv ../public/editor-scene/EditorScene/about ../src/editor/editor-scene-realm.json && rmdir ../public/editor-scene/EditorScene && node ../../sites/scripts/sync-ui3-public.mts",
+    "build": "pnpm --filter @dcl/hashing build && node ../../../tooling/check-local-hashing.mjs . && sdk-commands build --production && rm -rf ../public/editor-scene && sdk-commands export-static --destination ../public/editor-scene --realmName EditorScene --baseUrl /editor-scene/ --commsAdapter offline:offline --timestamp 0 && mv ../public/editor-scene/EditorScene/about ../src/editor/editor-scene-realm.json && rmdir ../public/editor-scene/EditorScene && node ../../sites/scripts/sync-ui3-public.mts",
     "test": "node test/run.mjs"
   },
   "devDependencies": {
@@ -12,7 +12,8 @@
     "@dcl/js-runtime": "7.30.1",
     "@dcl/react-ecs": "7.30.1",
     "@dcl/sdk": "7.30.1",
-    "@dcl/sdk-commands": "7.30.1"
+    "@dcl/sdk-commands": "7.30.1",
+    "@dcl/hashing": "workspace:*"
   },
   "engines": {
     "node": ">=24"

@@ -1,0 +1,532 @@
+From f1d332e2652e42ad90da50482ae21ed6c3efcf68
+Subject: test(web): cover OffscreenCanvas worker behavior in the browser
+Origin: https://github.com/robtfm/winit/commit/f1d332e2652e42ad90da50482ae21ed6c3efcf68
+Date: 2026-09-18T19:35:03+02:00
+
+Add a standalone shared-memory Wasm fixture and browser checks for drawing during a blocked page, input, window controls, scheduling, lifecycle forwarding, and shutdown.
+---
+diff --git a/tests/web-worker/.cargo/config.toml b/tests/web-worker/.cargo/config.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..10a0b50ebb45fce01996db9f465f5a5162b3b0f3
+--- /dev/null
++++ b/tests/web-worker/.cargo/config.toml
+@@ -0,0 +1,14 @@
++[target.wasm32-unknown-unknown]
++rustflags = [
++  "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
++  "-C", "link-arg=--shared-memory",
++  "-C", "link-arg=--max-memory=4294967296",
++  "-C", "link-arg=--import-memory",
++  "-C", "link-arg=--export=__wasm_init_tls",
++  "-C", "link-arg=--export=__tls_size",
++  "-C", "link-arg=--export=__tls_align",
++  "-C", "link-arg=--export=__tls_base",
++]
++
++[unstable]
++build-std = ["std", "panic_abort"]
+diff --git a/tests/web-worker/.gitignore b/tests/web-worker/.gitignore
+new file mode 100644
+index 0000000000000000000000000000000000000000..755e1a872815820c55e67224a1c681dd22324678
+--- /dev/null
++++ b/tests/web-worker/.gitignore
+@@ -0,0 +1,3 @@
++target/
++pkg/
++node_modules/
+diff --git a/tests/web-worker/Cargo.toml b/tests/web-worker/Cargo.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a500b890288a9ec606620a62f342dbb8b92654f
+--- /dev/null
++++ b/tests/web-worker/Cargo.toml
+@@ -0,0 +1,16 @@
++[package]
++name = "winit-worker-smoke"
++version = "0.1.0"
++edition = "2021"
++[lib]
++crate-type = ["cdylib"]
++[dependencies]
++winit = { path = "../..", default-features = false, features = ["web-worker"] }
++wasm-bindgen = "=0.2.127"
++js-sys = "=0.3.104"
++web-sys = { version = "=0.3.104", features = ["HtmlCanvasElement", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "console"] }
++console_error_panic_hook = "0.1"
++raw-window-handle = "0.6"
++web-time = "1"
++
++[workspace]
+diff --git a/tests/web-worker/README.md b/tests/web-worker/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6708b002d395c2eced5de1323074219818a18768
+--- /dev/null
++++ b/tests/web-worker/README.md
+@@ -0,0 +1,49 @@
++# OffscreenCanvas worker regression fixture
++
++Based on robtfm/winit `v0.30.x` at `a8c6812b`. This experimental backend supports
++one page-owned canvas and one dedicated worker. Both instantiate the same Wasm
++module and shared memory. The page calls `prepare_worker(canvas)`, transfers the
++returned OffscreenCanvas, and the worker calls `attach_worker(id, canvas)` before
++creating its normal winit event loop.
++
++The page retains DOM listeners and window operations; the worker owns application
++events, frame scheduling, and the raw OffscreenCanvas handle. Cross-origin
++isolation and atomics-enabled Wasm are required. DOM queries can still block the
++worker while waiting for the page. Multiple windows and real back/forward-cache
++restoration are not supported or validated by this fixture.
++
++## Opt-in feature
++
++The `web-worker` Cargo feature is disabled by default. Enabling Wasm atomics alone
++does not enable this backend. The worker module, API, event-loop fields, wakeup
++dispatch, and redraw checks compile only with both `web-worker` and Wasm atomics.
++Without the feature, the original page runner storage and wakeup type are used.
++Native builds keep their original backend whether or not the feature is enabled.
++
++```toml
++winit = { version = "0.30", features = ["web-worker"] }
++```
++
++The fixture enables this feature explicitly in its manifest.
++
++## Run
++
++From this directory, using a nightly Rust toolchain with rust-src installed:
++
++```sh
++cargo +nightly build --target wasm32-unknown-unknown
++wasm-bindgen target/wasm32-unknown-unknown/debug/winit_worker_smoke.wasm \
++  --target web --out-dir pkg --out-name smoke
++npm install
++CHROMIUM_BIN=/path/to/chromium WINIT_WORKER_PKG="$PWD/pkg" npm test
++```
++
++Use wasm-bindgen-cli matching the fixture's wasm-bindgen dependency. The browser
++runner supplies isolation headers and serves fixture files through request
++interception, so no server or deployed application is required.
++
++The test checks drawing during a one-second main-thread block, rAF and immediate
++redraw modes, window attributes, cursor visibility, pointer lock, fullscreen,
++keyboard input, resize, DPI replies, synthetic persisted page transitions,
++Wait/WaitUntil, proxy wakeups, and shutdown. Immediate-mode counts measure callback
++throughput, not display refresh or application FPS.
+diff --git a/tests/web-worker/index.html b/tests/web-worker/index.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..8a73d76545e5c34576d720917262651f453f1aaa
+--- /dev/null
++++ b/tests/web-worker/index.html
+@@ -0,0 +1,12 @@
++<canvas id="canvas" style="width:320px;height:240px" tabindex="0"></canvas><input id="other"><script type="module">
++import init, * as wasm from './pkg/smoke.js';
++const module = await WebAssembly.compileStreaming(fetch('./pkg/smoke_bg.wasm'));
++const memory = new WebAssembly.Memory({initial:256,maximum:65536,shared:true});
++await init({module_or_path:module,memory});
++window.wasm=wasm;
++const [id,canvas] = wasm.prepare(document.querySelector('canvas'));
++const worker = new Worker('./worker.js',{type:'module'});
++worker.onerror = e => console.error('WORKER_ERROR',e.message);
++worker.onmessage = e => {window.ready=e.data;};
++worker.postMessage({module,memory,id,canvas},[canvas]);
++</script>
+diff --git a/tests/web-worker/package-lock.json b/tests/web-worker/package-lock.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..3cae0e43cdd9f5283e7db6e1949edf7985069ada
+--- /dev/null
++++ b/tests/web-worker/package-lock.json
+@@ -0,0 +1,25 @@
++{
++  "name": "web-worker",
++  "lockfileVersion": 3,
++  "requires": true,
++  "packages": {
++    "": {
++      "devDependencies": {
++        "playwright-core": "1.62.1"
++      }
++    },
++    "node_modules/playwright-core": {
++      "version": "1.62.1",
++      "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.62.1.tgz",
++      "integrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "bin": {
++        "playwright-core": "cli.js"
++      },
++      "engines": {
++        "node": ">=20"
++      }
++    }
++  }
++}
+diff --git a/tests/web-worker/package.json b/tests/web-worker/package.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..61e19bb36fe95c8ecbd4cb3c422649bf9fceb828
+--- /dev/null
++++ b/tests/web-worker/package.json
+@@ -0,0 +1 @@
++{"private":true,"type":"module","scripts":{"test":"node verify.mjs"},"devDependencies":{"playwright-core":"1.62.1"}}
+diff --git a/tests/web-worker/src/lib.rs b/tests/web-worker/src/lib.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..0fe8f50b73a91a0e09574e10ad018f9002ab5451
+--- /dev/null
++++ b/tests/web-worker/src/lib.rs
+@@ -0,0 +1,215 @@
++use raw_window_handle::{HasWindowHandle, RawWindowHandle};
++use std::sync::atomic::{AtomicU32, Ordering};
++use wasm_bindgen::{prelude::*, JsCast};
++use winit::{
++    application::ApplicationHandler,
++    event::{ElementState, StartCause, WindowEvent},
++    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
++    platform::web::{
++        set_worker_redraw_strategy, EventLoopExtWebSys, WindowAttributesExtWebSys, WindowExtWebSys,
++        WorkerRedrawStrategy,
++    },
++    window::{Window, WindowId},
++};
++
++static FRAMES: AtomicU32 = AtomicU32::new(0);
++static KEYS: AtomicU32 = AtomicU32::new(0);
++static WIDTH: AtomicU32 = AtomicU32::new(0);
++static WAKES: AtomicU32 = AtomicU32::new(0);
++static EXITED: AtomicU32 = AtomicU32::new(0);
++static DEADLINES: AtomicU32 = AtomicU32::new(0);
++static RESUMES: AtomicU32 = AtomicU32::new(0);
++static SUSPENDS: AtomicU32 = AtomicU32::new(0);
++static PROXY: std::sync::OnceLock<winit::event_loop::EventLoopProxy<u32>> =
++    std::sync::OnceLock::new();
++#[wasm_bindgen]
++pub fn prepare(canvas: web_sys::HtmlCanvasElement) -> Result<js_sys::Array, JsValue> {
++    console_error_panic_hook::set_once();
++    let (id, canvas) = winit::platform::web::prepare_worker(canvas)?;
++    Ok([JsValue::from(id), canvas.into()].into_iter().collect())
++}
++#[wasm_bindgen]
++pub fn start(id: u32, canvas: web_sys::OffscreenCanvas) -> Result<(), JsValue> {
++    winit::platform::web::attach_worker(id, canvas)?;
++    let el = EventLoop::<u32>::with_user_event().build().unwrap();
++    PROXY.set(el.create_proxy()).ok().unwrap();
++    el.spawn_app(App {
++        window: None,
++        context: None,
++        init: false,
++        wait: false,
++    });
++    Ok(())
++}
++#[wasm_bindgen]
++pub fn wake(value: u32) {
++    PROXY.get().unwrap().send_event(value).unwrap();
++}
++#[wasm_bindgen]
++pub fn stats() -> Vec<u32> {
++    vec![
++        FRAMES.load(Ordering::Relaxed),
++        KEYS.load(Ordering::Relaxed),
++        WIDTH.load(Ordering::Relaxed),
++        WAKES.load(Ordering::Relaxed),
++        EXITED.load(Ordering::Relaxed),
++        DEADLINES.load(Ordering::Relaxed),
++        RESUMES.load(Ordering::Relaxed),
++        SUSPENDS.load(Ordering::Relaxed),
++    ]
++}
++struct App {
++    window: Option<Window>,
++    context: Option<web_sys::OffscreenCanvasRenderingContext2d>,
++    init: bool,
++    wait: bool,
++}
++impl ApplicationHandler<u32> for App {
++    fn new_events(&mut self, el: &ActiveEventLoop, cause: StartCause) {
++        if !self.init {
++            assert!(matches!(cause, StartCause::Init));
++            self.init = true;
++        }
++        if let ControlFlow::WaitUntil(deadline) = el.control_flow() {
++            assert!(
++                !matches!(cause, StartCause::Poll),
++                "redraw bypassed WaitUntil"
++            );
++            if matches!(cause, StartCause::ResumeTimeReached { .. }) {
++                assert!(web_time::Instant::now() >= deadline, "early deadline wake");
++            }
++        }
++        if let StartCause::ResumeTimeReached {
++            start,
++            requested_resume,
++        } = cause
++        {
++            assert!(requested_resume > start);
++            DEADLINES.fetch_add(1, Ordering::Relaxed);
++            el.set_control_flow(ControlFlow::Wait);
++        }
++    }
++    fn resumed(&mut self, el: &ActiveEventLoop) {
++        RESUMES.fetch_add(1, Ordering::Relaxed);
++        if self.window.is_some() {
++            return;
++        }
++        let window = el
++            .create_window(
++                Window::default_attributes()
++                    .with_title("worker fixture")
++                    .with_inner_size(winit::dpi::LogicalSize::new(320, 240))
++                    .with_min_inner_size(winit::dpi::LogicalSize::new(100, 100))
++                    .with_max_inner_size(winit::dpi::LogicalSize::new(800, 600))
++                    .with_focusable(false)
++                    .with_prevent_default(false),
++            )
++            .unwrap();
++        let handle = window.window_handle().unwrap();
++        let RawWindowHandle::WebOffscreenCanvas(raw) = handle.as_raw() else {
++            panic!("wrong handle")
++        };
++        let canvas: web_sys::OffscreenCanvas = unsafe { raw.obj.cast::<JsValue>().as_ref() }
++            .clone()
++            .unchecked_into();
++        self.context = Some(canvas.get_context("2d").unwrap().unwrap().unchecked_into());
++        window.request_redraw();
++        self.window = Some(window);
++    }
++    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
++        match event {
++            WindowEvent::RedrawRequested => {
++                if self.wait {
++                    return;
++                }
++                let n = FRAMES.fetch_add(1, Ordering::Relaxed);
++                let context = self.context.as_ref().unwrap();
++                context.set_fill_style_str(if n % 2 == 0 { "red" } else { "blue" });
++                context.fill_rect(0., 0., 100., 100.);
++                self.window.as_ref().unwrap().request_redraw();
++            }
++            WindowEvent::Resized(size) => {
++                WIDTH.store(size.width, Ordering::Relaxed);
++                let canvas = self.context.as_ref().unwrap().canvas();
++                canvas.set_width(size.width);
++                canvas.set_height(size.height);
++            }
++            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
++                KEYS.fetch_add(1, Ordering::Relaxed);
++            }
++            WindowEvent::ScaleFactorChanged {
++                mut inner_size_writer,
++                ..
++            } => {
++                inner_size_writer
++                    .request_inner_size(winit::dpi::PhysicalSize::new(420, 240))
++                    .unwrap();
++            }
++            _ => (),
++        }
++    }
++    fn user_event(&mut self, el: &ActiveEventLoop, value: u32) {
++        WAKES.fetch_add(1, Ordering::Relaxed);
++        match value {
++            0 => {
++                self.wait = true;
++                el.set_control_flow(ControlFlow::Wait);
++            }
++            1 => {
++                self.wait = false;
++                self.window.as_ref().unwrap().request_redraw();
++            }
++            2 => el.exit(),
++            4 => {
++                assert!(set_worker_redraw_strategy(WorkerRedrawStrategy::Immediate));
++            }
++            5 => {
++                assert!(set_worker_redraw_strategy(
++                    WorkerRedrawStrategy::AnimationFrame
++                ));
++            }
++            6 => {
++                let window = self.window.as_ref().unwrap();
++                window.set_title("updated on worker");
++                window.set_min_inner_size(Some(winit::dpi::LogicalSize::new(120, 120)));
++                window.set_max_inner_size(Some(winit::dpi::LogicalSize::new(750, 550)));
++                window.set_cursor(winit::window::CursorIcon::Crosshair);
++                window.set_prevent_default(true);
++            }
++            7 => self.window.as_ref().unwrap().set_cursor_visible(false),
++            8 => {
++                let window = self.window.as_ref().unwrap();
++                window.set_cursor_visible(true);
++                window.set_fullscreen(None);
++                window
++                    .set_cursor_grab(winit::window::CursorGrabMode::None)
++                    .unwrap();
++            }
++            9 => self
++                .window
++                .as_ref()
++                .unwrap()
++                .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None))),
++            10 => self
++                .window
++                .as_ref()
++                .unwrap()
++                .set_cursor_grab(winit::window::CursorGrabMode::Locked)
++                .unwrap(),
++            3 => {
++                self.wait = true;
++                el.set_control_flow(ControlFlow::wait_duration(
++                    std::time::Duration::from_millis(40),
++                ));
++                self.window.as_ref().unwrap().request_redraw();
++            }
++            _ => (),
++        }
++    }
++    fn suspended(&mut self, _: &ActiveEventLoop) {
++        SUSPENDS.fetch_add(1, Ordering::Relaxed);
++    }
++    fn exiting(&mut self, _: &ActiveEventLoop) {
++        EXITED.store(1, Ordering::Relaxed);
++    }
++}
+diff --git a/tests/web-worker/verify.mjs b/tests/web-worker/verify.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..33142c0dfc34278580f9d5b5e15801cee54c6146
+--- /dev/null
++++ b/tests/web-worker/verify.mjs
+@@ -0,0 +1,127 @@
++import { chromium } from "playwright-core";
++import { readFile } from "node:fs/promises";
++import assert from "node:assert/strict";
++import { fileURLToPath } from "node:url";
++
++const fixture = fileURLToPath(new URL("./", import.meta.url));
++const build = process.env.WINIT_WORKER_PKG;
++assert.ok(build, "WINIT_WORKER_PKG must point to the compiled fixture pkg directory");
++assert.ok(process.env.CHROMIUM_BIN, "CHROMIUM_BIN must point to a Chromium executable");
++const browser = await chromium.launch({
++  executablePath: process.env.CHROMIUM_BIN,
++  headless: true,
++  args: ["--no-sandbox"],
++});
++try {
++  const context = await browser.newContext();
++  await context.route("https://winit.test/**", async (route) => {
++    const path = new URL(route.request().url()).pathname;
++    const file = path.startsWith("/pkg/")
++      ? build + path.slice(4)
++      : fixture + (path === "/" ? "index.html" : path.slice(1));
++    await route.fulfill({
++      body: await readFile(file),
++      contentType: path.endsWith(".wasm") ? "application/wasm"
++        : path.endsWith(".js") ? "text/javascript" : "text/html",
++      headers: {
++        "Cross-Origin-Opener-Policy": "same-origin",
++        "Cross-Origin-Embedder-Policy": "require-corp",
++      },
++    });
++  });
++  const errors = [];
++  const page = await context.newPage();
++  page.on("console", (message) => {
++    if (message.type() === "error") errors.push(message.text());
++  });
++  page.on("pageerror", (error) => errors.push(String(error)));
++  await page.goto("https://winit.test/");
++  await page.waitForFunction(() => window.ready, null, { timeout: 30000 });
++  assert.equal(await page.evaluate(() => window.ready), "ready");
++  await page.waitForFunction(() => wasm.stats()[0] > 5);
++
++  const progress = await page.evaluate(() => {
++    const before = wasm.stats()[0];
++    const end = performance.now() + 1000;
++    while (performance.now() < end) {}
++    return wasm.stats()[0] - before;
++  });
++  assert.ok(progress > 15, `only ${progress} frames while page blocked`);
++  console.log("frames during one-second page block:", progress);
++
++  const canvas = page.locator("canvas");
++  assert.equal(await canvas.getAttribute("alt"), "worker fixture");
++  assert.equal(await canvas.getAttribute("tabindex"), null);
++  assert.equal(await canvas.evaluate((el) => el.style.minWidth), "100px");
++  assert.equal(await canvas.evaluate((el) => el.style.maxWidth), "800px");
++  await page.evaluate(() => wasm.wake(4));
++  await new Promise((resolve) => setTimeout(resolve, 100));
++  const uncapped = await page.evaluate(() => {
++    const before = wasm.stats()[0];
++    const end = performance.now() + 1000;
++    while (performance.now() < end) {}
++    return wasm.stats()[0] - before;
++  });
++  assert.ok(uncapped > progress * 1.5, `${uncapped} immediate frames vs ${progress} rAF frames`);
++  console.log("uncapped frames during one-second page block:", uncapped);
++  await page.evaluate(() => wasm.wake(5));
++  await new Promise((resolve) => setTimeout(resolve, 100));
++  const restored = await page.evaluate(() => {
++    const before = wasm.stats()[0];
++    const end = performance.now() + 1000;
++    while (performance.now() < end) {}
++    return wasm.stats()[0] - before;
++  });
++  assert.ok(restored > 15 && restored < progress * 1.5, `rAF not restored: ${restored}`);
++  await page.evaluate(() => wasm.wake(6));
++  await page.waitForFunction(() => document.querySelector("canvas").getAttribute("alt") === "updated on worker");
++  assert.equal(await canvas.evaluate((el) => el.style.minWidth), "120px");
++  assert.equal(await canvas.evaluate((el) => el.style.maxWidth), "750px");
++  assert.equal(await canvas.evaluate((el) => getComputedStyle(el).cursor), "crosshair");
++  await page.evaluate(() => wasm.wake(7));
++  await page.waitForFunction(() => getComputedStyle(document.querySelector("canvas")).cursor === "none");
++  await page.evaluate(() => wasm.wake(8));
++  await page.waitForFunction(() => getComputedStyle(document.querySelector("canvas")).cursor === "crosshair");
++  await canvas.evaluate((el) => { el.tabIndex = 0; });
++  await page.locator("canvas").click();
++  await page.keyboard.press("w");
++  await page.evaluate(() => wasm.wake(10));
++  await page.waitForFunction(() => document.pointerLockElement === document.querySelector("canvas"));
++  await page.evaluate(() => wasm.wake(8));
++  await page.waitForFunction(() => !document.pointerLockElement);
++  await canvas.click();
++  await page.evaluate(() => wasm.wake(9));
++  await page.waitForFunction(() => document.fullscreenElement === document.querySelector("canvas"));
++  await page.evaluate(() => wasm.wake(8));
++  await page.waitForFunction(() => !document.fullscreenElement);
++  await page.waitForFunction(() => wasm.stats()[1] > 0);
++  await page.locator("canvas").evaluate((element) => { element.style.width = "500px"; });
++  await page.waitForFunction(() => wasm.stats()[2] === 500);
++
++  const cdp = await context.newCDPSession(page);
++  await cdp.send("Emulation.setDeviceMetricsOverride", {
++    width: 800, height: 600, deviceScaleFactor: 2, mobile: false,
++  });
++  await page.waitForFunction(() => document.querySelector("canvas").style.width === "210px");
++
++  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
++  await page.waitForFunction(() => wasm.stats()[7] === 1);
++  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
++  await page.waitForFunction(() => wasm.stats()[6] === 2);
++  const wakes = await page.evaluate(() => { const count = wasm.stats()[3]; wasm.wake(0); return count; });
++  await page.waitForFunction((count) => wasm.stats()[3] > count, wakes);
++  const before = await page.evaluate(() => wasm.stats()[0]);
++  await new Promise((resolve) => setTimeout(resolve, 150));
++  assert.equal(await page.evaluate(() => wasm.stats()[0]), before);
++  await page.evaluate(() => wasm.wake(3));
++  await page.waitForFunction(() => wasm.stats()[5] === 1);
++  await page.evaluate(() => wasm.wake(1));
++  await page.waitForFunction((count) => wasm.stats()[0] > count, before);
++  await page.evaluate(() => wasm.wake(2));
++  await page.waitForFunction(() => wasm.stats()[4] === 1);
++  await new Promise((resolve) => setTimeout(resolve, 200));
++  assert.deepEqual(errors, []);
++  console.log("PASS: redraw modes, window attributes, cursor, pointer lock, fullscreen, lifecycle forwarding, input, DPI, Wait, WaitUntil, proxy wake, and exit");
++} finally {
++  await browser.close();
++}
+diff --git a/tests/web-worker/worker.js b/tests/web-worker/worker.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..baf1fc12ccd7fd1da038b5f0ea1a94df701759f4
+--- /dev/null
++++ b/tests/web-worker/worker.js
+@@ -0,0 +1,3 @@
++import init, {start} from './pkg/smoke.js';
++Error.stackTraceLimit=100;
++onmessage=async ({data:{module,memory,id,canvas}})=>{try{await init({module_or_path:module,memory}); start(id,canvas);postMessage('ready');}catch(e){console.error(e);postMessage('error:'+e.stack);}};

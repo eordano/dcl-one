@@ -24,9 +24,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
-pub const STORAGE_DELEGATION_PREFIX: &str = "Decentraland Authoritative Storage Delegation";
-
-pub const MAX_SCOPE_HEADER_LENGTH: usize = 4096;
+/// The claim grammar the storage routes verify, so a minted delegation is
+/// shaped and sized as they will read it.
+pub use crate::storage::delegation::{MAX_SCOPE_HEADER_LENGTH, STORAGE_DELEGATION_PREFIX};
 
 pub const REFRESH_BUFFER_SECS: i64 = 5 * 60;
 

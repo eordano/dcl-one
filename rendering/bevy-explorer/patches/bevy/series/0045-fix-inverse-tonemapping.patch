@@ -1,0 +1,18 @@
+From 5f2a9949c7af393dd81d0babd4eaed5495162a2a
+Subject: fix inverse tonemapping
+Origin: https://github.com/robtfm/bevy/commit/5f2a9949c7af393dd81d0babd4eaed5495162a2a
+Date: 2026-01-12T17:34:25Z
+
+---
+diff --git a/crates/bevy_core_pipeline/src/tonemapping/tonemapping_shared.wgsl b/crates/bevy_core_pipeline/src/tonemapping/tonemapping_shared.wgsl
+index 52d1ddcb6f16714eb403d78223eecddd1a9c4de6..a56acebb3a6ef0619115638a2b02809105ee5bac 100644
+--- a/crates/bevy_core_pipeline/src/tonemapping/tonemapping_shared.wgsl
++++ b/crates/bevy_core_pipeline/src/tonemapping/tonemapping_shared.wgsl
+@@ -400,6 +400,6 @@ fn tone_mapping(in: vec4<f32>, in_color_grading: ColorGrading) -> vec4<f32> {
+ // when sampling from an already tonemapped image. (e.g. for transmissive materials when HDR is off)
+ fn approximate_inverse_tone_mapping(in: vec4<f32>, color_grading: ColorGrading) -> vec4<f32> {
+     let out = tone_mapping(in, color_grading);
+-    let approximate_ratio = length(in.rgb) / length(out.rgb);
++    let approximate_ratio = length(in.rgb) / max(length(out.rgb), 0.0001);
+     return vec4(in.rgb * approximate_ratio, in.a);
+ }

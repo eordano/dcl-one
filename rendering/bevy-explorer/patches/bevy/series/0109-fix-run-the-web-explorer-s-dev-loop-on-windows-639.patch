@@ -1,0 +1,109 @@
+From b0f89a5ce97cb9addda47ae71b5ba6ca1ccc176d
+Subject: fix: run the web explorer's dev loop on Windows (#639)
+Origin: https://github.com/decentraland/dcl-one/commit/b0f89a5ce97cb9addda47ae71b5ba6ca1ccc176d
+Date: 2026-11-13T15:47:16+01:00
+
+* fix: run the web explorer's dev loop on Windows
+
+- bevy_asset: normalize `file!()` backslashes in embedded asset paths on
+  non-Windows targets, so a wasm build made on a Windows host no longer
+  panics at start with `Failed to find src_prefix "src"`.
+- react-web dev server: serve `/engine/` files on Windows (the containment
+  check compared against a `/` prefix and answered 403 to every file), and
+  start the bridge scene preview through a shell there (npx is npx.cmd),
+  stopping it with taskkill.
+- justfile: call gen-ts-bindings.sh relatively; `justfile_directory()`
+  gave a backslash path that sh could not run.
+
+* fix: address the Windows dev loop review
+
+- regenerate the vite.config.ts hash in shared-inputs.json
+- start sdk-commands with node and its local bin, without npx or a shell (no DEP0190)
+- stop the bridge preview once, and not after it has exited, so taskkill never hits a reused pid
+- reject only `..` path segments in serveStatic, not names starting with `..`
+- serve an absolute WEB_EDITOR_DIR on Windows
+
+* fix: keep vite up on an unreadable sdk-commands bin; stop POSIX survivors
+
+- read the sdk-commands bin in a try/catch: a corrupt package.json or a renamed bin warns
+  instead of stopping vite
+- skip the stop after the child exits on Windows only; a POSIX process group is not reused while
+  a member lives, so its survivors are still stopped
+
+* fix: keep the bridge preview across vite restarts; stop it on Ctrl+C
+
+A restart (an edit to vite.config.ts, `r`) builds the new server before it
+closes the old one: the new server's probe found the running preview on :8100
+and reused it, then the old server's close stopped it, leaving the dev loop
+without a bridge on every platform. The preview is now stopped only when the
+process ends.
+
+Node runs no exit listener when SIGINT or SIGHUP ends it, and vite handles only
+SIGTERM, so Ctrl+C left the POSIX preview (its own process group) running.
+SIGINT and SIGHUP now exit through the exit listener.
+
+* fix: build the web distributable on Windows
+
+- build-web.py starts each tool by its resolved path on Windows, where npm is
+  npm.cmd, and runs gen-ts-bindings.sh in Git for Windows' bash: the `bash`
+  on a Windows PATH is usually WSL's.
+- The bridge scene's export-static and export-web scripts move to a node
+  script: npm runs package scripts under cmd.exe on Windows, which has no
+  `rm -rf`, `mkdir -p`, `cp -R` or `${SCENE_BASE_URL:-../}`. It lives in
+  react-web/scripts so the scene export never packs it.
+- The Makefile takes PYTHON (python3 is a Microsoft Store stub on a stock
+  Windows), and the README says how to build there without make.
+
+* fix: native HUD check without python3; document Windows builds
+
+- _bundle-native-if-stale falls back to `python` when python3 does not run,
+  as on a stock Windows, where it is a Microsoft Store stub.
+- Windows build notes: run `just` from Git Bash (from PowerShell it finds no
+  sh), build-web.py in place of make, a short space-free CARGO_TARGET_DIR
+  (webrtc-sys passes MAX_PATH under a worktree's target; GN-style scripts
+  break on a space), the pinned protoc release, and CEF_PATH as a Windows path.
+
+* fix: hash the bridge scene's package.json after its export scripts moved
+
+bridge-scene/package.json is one of the HUD's shared inputs; the previous
+commit changed its export-static and export-web scripts.
+
+---------
+---
+diff --git a/crates/bevy_asset/src/io/embedded/mod.rs b/crates/bevy_asset/src/io/embedded/mod.rs
+index 13610531e299a17c7ae0905e695f95a578719fe6..59d2f502789c6c6c22ede982a709dbaace45c74c 100644
+--- a/crates/bevy_asset/src/io/embedded/mod.rs
++++ b/crates/bevy_asset/src/io/embedded/mod.rs
+@@ -168,6 +168,12 @@ pub fn _embedded_asset_path(
+     file_path: &Path,
+     asset_path: &Path,
+ ) -> PathBuf {
++    // `file!()` keeps the build host's separators: a wasm build on a Windows host yields `\`,
++    // which a non-Windows `Path` does not split on.
++    #[cfg(not(windows))]
++    let normalized = PathBuf::from(file_path.to_string_lossy().replace('\\', "/"));
++    #[cfg(not(windows))]
++    let file_path = normalized.as_path();
+     let mut maybe_parent = file_path.parent();
+     let after_src = loop {
+         let Some(parent) = maybe_parent else {
+@@ -351,6 +357,19 @@ mod tests {
+         assert_eq!(asset_path, Path::new("my_crate/foo/the/asset.png"));
+     }
+ 
++    // A non-Windows target built on a Windows host: `file!()` keeps the host's `\`.
++    #[cfg(not(windows))]
++    #[test]
++    fn embedded_asset_path_from_windows_build_host() {
++        let asset_path = _embedded_asset_path(
++            "my_crate",
++            "src".as_ref(),
++            r"crates\my_crate\src\foo\plugin.rs".as_ref(),
++            "the/asset.png".as_ref(),
++        );
++        assert_eq!(asset_path, Path::new("my_crate/foo/the/asset.png"));
++    }
++
+     // A blank src_path removes the embedded's file path altogether only the
+     // asset path remains.
+     #[test]

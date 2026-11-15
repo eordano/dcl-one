@@ -1,0 +1,66 @@
+From beea7c35480bef5dbe28ebe7261f9ca54bbb95a7
+Subject: set fonts to immediate upload
+Origin: https://github.com/robtfm/bevy/commit/beea7c35480bef5dbe28ebe7261f9ca54bbb95a7
+Date: 2025-07-29T17:21:56+01:00
+
+---
+diff --git a/crates/bevy_core_pipeline/src/tonemapping/mod.rs b/crates/bevy_core_pipeline/src/tonemapping/mod.rs
+index 443b81327a8e6ec9a1dd1ad41640761ba6057e5b..a610523bff4307b763c9a8ca5bb90716ed225086 100644
+--- a/crates/bevy_core_pipeline/src/tonemapping/mod.rs
++++ b/crates/bevy_core_pipeline/src/tonemapping/mod.rs
+@@ -483,5 +483,6 @@ pub fn lut_placeholder() -> Image {
+         sampler: ImageSampler::Default,
+         texture_view_descriptor: None,
+         asset_usage: RenderAssetUsages::RENDER_WORLD,
++        immediate_upload: true,
+     }
+ }
+diff --git a/crates/bevy_image/src/image.rs b/crates/bevy_image/src/image.rs
+index 9679aa6f66633a1d2b420c026accd322c287492f..ecb8c0e9dd73139d393a51d6c2f0110e039aef3e 100644
+--- a/crates/bevy_image/src/image.rs
++++ b/crates/bevy_image/src/image.rs
+@@ -353,6 +353,7 @@ pub struct Image {
+     pub sampler: ImageSampler,
+     pub texture_view_descriptor: Option<TextureViewDescriptor<Option<&'static str>>>,
+     pub asset_usage: RenderAssetUsages,
++    pub immediate_upload: bool,
+ }
+ 
+ /// Used in [`Image`], this determines what image sampler to use when rendering. The default setting,
+@@ -750,6 +751,7 @@ impl Image {
+             sampler: ImageSampler::Default,
+             texture_view_descriptor: None,
+             asset_usage,
++            immediate_upload: false,
+         }
+     }
+ 
+diff --git a/crates/bevy_render/src/texture/gpu_image.rs b/crates/bevy_render/src/texture/gpu_image.rs
+index 551bd3ee02e0907b9f012164aae91e38368c2894..993e360ca58934751365b4d0c64538ab60c3d020 100644
+--- a/crates/bevy_render/src/texture/gpu_image.rs
++++ b/crates/bevy_render/src/texture/gpu_image.rs
+@@ -36,7 +36,11 @@ impl RenderAsset for GpuImage {
+ 
+     #[inline]
+     fn byte_len(image: &Self::SourceAsset) -> Option<usize> {
+-        image.data.as_ref().map(Vec::len)
++        if image.immediate_upload {
++            None
++        } else {
++            image.data.as_ref().map(Vec::len)
++        }
+     }
+ 
+     /// Converts the extracted image into a [`GpuImage`].
+diff --git a/crates/bevy_text/src/font_atlas.rs b/crates/bevy_text/src/font_atlas.rs
+index a10dee5923a322ca3c7982d1419601b53c983e6c..40cf9a03add6141130a037f0b88fc83929df6d77 100644
+--- a/crates/bevy_text/src/font_atlas.rs
++++ b/crates/bevy_text/src/font_atlas.rs
+@@ -52,6 +52,7 @@ impl FontAtlas {
+             // Need to keep this image CPU persistent in order to add additional glyphs later on
+             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+         );
++        image.immediate_upload = true;
+         if font_smoothing == FontSmoothing::None {
+             image.sampler = ImageSampler::nearest();
+         }

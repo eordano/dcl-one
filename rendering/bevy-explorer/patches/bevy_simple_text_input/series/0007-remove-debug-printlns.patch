@@ -1,0 +1,19 @@
+From 664b962dd53f889c16751c1d55d6c6f52e98e489
+Subject: remove debug printlns
+Origin: https://github.com/robtfm/bevy_simple_text_input/commit/664b962dd53f889c16751c1d55d6c6f52e98e489
+Date: 2025-06-20T16:06:16+01:00
+
+---
+diff --git a/src/lib.rs b/src/lib.rs
+index 89853f15c40bbd694775480a6a35665c70f7676a..67d13d0b38932d8a313cf8692c2bafba980b330b 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1025,8 +1025,6 @@ fn set_positions(
+         let cursor_position = IVec2::from(editor.editor.cursor_position().unwrap_or((0, 0)))
+             .as_vec2()
+             * inverse_scale_factor;
+-        println!("cursor: {:?}", editor.editor.cursor());
+-        println!("cursor position: {}", cursor_position);
+ 
+         let child_size = child_node.size();
+         let parent_size = parent_node.size();

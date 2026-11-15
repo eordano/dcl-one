@@ -291,6 +291,10 @@ pub async fn advance(
     Ok(updated.rows_affected() == 1)
 }
 
+/// A reported transaction hash, trimmed and lowercased, when it is `0x` plus
+/// 64 hex digits. Lowercasing comes first, so a `0X` prefix is accepted on
+/// purpose, unlike `types::normalize_tx_hash`: switching to that helper
+/// would start refusing execution reports this route accepts today.
 fn valid_hash(h: &str) -> Option<String> {
     let h = h.trim().to_ascii_lowercase();
     let hex = h.strip_prefix("0x")?;
@@ -1030,6 +1034,11 @@ mod tests {
         assert_eq!(
             valid_hash(&format!("0x{}", "AB".repeat(32))),
             Some(format!("0x{}", "ab".repeat(32)))
+        );
+        assert_eq!(
+            valid_hash(&format!("0X{}", "ab".repeat(32))),
+            Some(format!("0x{}", "ab".repeat(32))),
+            "a 0X prefix is accepted"
         );
         assert_eq!(valid_hash("0x12"), None);
         for kind in super::super::wire::ActionKind::ALL {

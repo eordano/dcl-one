@@ -10,17 +10,22 @@ cd "$(dirname "$0")/../services/catalyst"
 logs="${CARGO_TARGET_DIR:-target}/test-logs"
 mkdir -p "$logs"
 cargo test --locked "$@" --no-run --message-format=json-render-diagnostics | python3 -c '
-import json, sys
+import json, os, sys
 for line in sys.stdin:
     artifact = json.loads(line)
     if artifact.get("executable") and artifact.get("profile", {}).get("test"):
-        print(artifact["executable"])
+        target = artifact["target"]
+        print(os.path.relpath(target["src_path"]), ",".join(target["kind"]), artifact["executable"], sep="\t")
 ' > "$logs/binaries"
 [ -s "$logs/binaries" ] || { echo "catalyst-test: no test binaries found" >&2; exit 1; }
 shard="${CATALYST_TEST_SHARD:-1/1}"
 index="${shard%/*}" total="${shard#*/}"
 [[ "$shard" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] && [ "$index" -le "$total" ] || { echo "catalyst-test: CATALYST_TEST_SHARD must be i/n with i from 1 to n" >&2; exit 1; }
-sort "$logs/binaries" | awk -v i="$index" -v n="$total" 'NR % n == i % n' > "$logs/shard"
+# Every shard must cut the same list. The path of a binary holds a build hash and the order of plain
+# sort follows the locale, so the list is in byte order of the source file and kind of each target.
+same=$(cut -f1,2 "$logs/binaries" | LC_ALL=C sort | LC_ALL=C uniq -d)
+[ -z "$same" ] || { echo "catalyst-test: two test binaries have one source file and kind: $same" >&2; exit 1; }
+LC_ALL=C sort "$logs/binaries" | cut -f3- | awk -v i="$index" -v n="$total" 'NR % n == i % n' > "$logs/shard"
 cores=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
 jobs="${CATALYST_TEST_JOBS:-$(( cores < 16 ? cores : 16 ))}"
 [ "$jobs" -ge 1 ] || { echo "catalyst-test: CATALYST_TEST_JOBS must be at least 1" >&2; exit 1; }

@@ -1,0 +1,12 @@
+name       = "opener"
+upstream   = "https://github.com/Seeker14491/opener"
+commit     = "f0910951e84d4cca533d19efa17f0267f1a0d602"
+ref        = "v0.8.2"
+origin     = "https://github.com/robtfm/opener"
+origin_rev = "973658fe4501ad9d9b4338e4fe192036277ba0fb"
+license    = "(MIT OR Apache-2.0) AND MIT"
+paths      = ["."]
+exclude    = []
+base_tree  = "8deaa3cf81a500dbcfde9b0ee18239453fd1a8ba"
+tree       = "5d17479415a540477f8eed7e0c16a18d6c8eeeba"
+nix_hash   = "sha256-OcsNiHBN0I18Rc0uT575xrLm6dIRdGA7t9V6Q3rdgig="
