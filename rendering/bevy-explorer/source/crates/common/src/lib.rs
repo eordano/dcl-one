@@ -35,3 +35,4 @@ macro_rules! debug_panic {
 }
 
 pub mod client_login;
+// lab probe: wasm-pr-cache, deep
