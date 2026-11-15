@@ -4,7 +4,13 @@
 // scene, this app trusts its bundled bridge scene and Decentraland's own deployments.
 
 import { SERVICES, type ServiceDef } from '@explorer-core/engine/generated'
-import { BASE_DOMAIN, hostBaseDomain, isTrustedBaseDomain, normaliseServiceUrl } from './baseDomain'
+import {
+  BASE_DOMAIN,
+  derivedServiceUrl,
+  hostBaseDomain,
+  isTrustedBaseDomain,
+  normaliseServiceUrl
+} from './baseDomain'
 import { bootMode } from './bootMode'
 import { isTrustedSystemScene } from './systemScene'
 import { webParam } from '@explorer-core/lib/webParams'
@@ -80,12 +86,15 @@ function isTrustedServiceUrl(s: ServiceDef, value: string): boolean {
 // Every per-service override: worse than ?baseDomain= in that it can poison ONE service —
 // sign-in, profiles, comms — while everything else looks normal. Same rule as the content server,
 // and native is exempt the same way as the base domain (the shell injects the user's own flags).
-// Read normalised, like the base domain: a value the HUD discards is never put to the user.
+// Read normalised, like the base domain: a value the HUD discards is never put to the user. A value
+// equal to what this deployment derives by itself is no override at all: the engine writes its
+// effective options into the address bar, so every reload of a dcl-one deployment outside
+// Decentraland's own domains would otherwise stop here on its own urls.
 for (const s of SERVICES) {
   GATES[s.name] = {
     warning: `Points the Explorer's "${s.name}" backend service at this server, with everything else looking normal. Whoever runs it would see the requests and choose the answers.`,
     read: (native) => (native ? null : normaliseServiceUrl(s, new URLSearchParams(location.search).get(s.name))),
-    isTrusted: (value) => isTrustedServiceUrl(s, value)
+    isTrusted: (value) => value === derivedServiceUrl(s.name) || isTrustedServiceUrl(s, value)
   }
 }
 for (const name of Object.keys(GATES)) webParam(name)

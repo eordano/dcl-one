@@ -1,9 +1,11 @@
 const { execSync } = require('child_process');
 const path = require('path');
 
-// On PRs (dry-run) skip the slow .dmg build and ship only the unsigned .zip; electron-builder
-// already skips code signing on PRs, so this keeps a downloadable per-PR build for a fraction
-// of the time. Release builds (not dry-run) still produce the signed, notarized dmg + zip.
+// Every build but a release is a dry run: it skips the slow .dmg build and ships only the unsigned
+// .zip, so a pull request gets a downloadable build for a fraction of the time. electron-builder
+// skips code signing on a pull request by itself; `identity: null` makes it skip on the other dry
+// runs (main, manual), where it would stop on the empty certificate. Release builds (not dry-run)
+// still produce the signed, notarized dmg + zip.
 const isDryRun = process.env.DRY_RUN === 'true';
 
 const config = {
@@ -113,6 +115,7 @@ const config = {
     writeUpdateInfo: false,
   },
   mac: {
+    ...(isDryRun ? { identity: null } : {}),
     target: isDryRun
       ? [
           { target: 'zip', arch: 'arm64' },

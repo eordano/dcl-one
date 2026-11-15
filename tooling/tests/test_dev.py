@@ -375,6 +375,100 @@ class DevTest(unittest.TestCase):
         self.assertEqual(env['COMMS_V4_PULSE_WEBTRANSPORT_URL'], f'https://127.0.0.1:{dev.pulse_ports(self.config)[0]}')
         self.assertTrue(env['COMMS_V4_PULSE_AUDIENCE'])
 
+    def test_a_public_origin_is_what_the_realm_advertises(self):
+        config = {**self.config, 'public_origin': 'https://dev.example.test:5443'}
+        env = dev.runtime_env(config)
+        self.assertEqual(env['PUBLIC_URL'], 'https://dev.example.test:5443')
+        self.assertEqual(env['COMMS_FIXED_ADAPTER'], 'archipelago:wss://dev.example.test:5443/ws')
+        self.assertEqual(env['COMMS_ADAPTER'], 'fixed-adapter:' + env['COMMS_FIXED_ADAPTER'])
+        self.assertEqual(env['LIVEKIT_WS_URL'], 'wss://dev.example.test:5443', 'players reach LiveKit through the front')
+        self.assertEqual(env['LIVEKIT_HOST'], f'ws://127.0.0.1:{dev.livekit_ports(config)[0]}', 'the API still dials loopback')
+        self.assertEqual(env['DEV_ALLOWED_HOSTS'], '.dev.example.test', 'the host and its subdomains')
+        self.assertEqual(dev.runtime_env({**self.config, 'public_origin': 'http://10.0.0.5:5443'})['DEV_ALLOWED_HOSTS'],
+                         '10.0.0.5')
+        self.assertEqual(env['HTTP_TRUSTED_PROXY_CIDRS'], '127.0.0.1/32,::1/128', 'the front is the loopback peer')
+        self.assertEqual((env['HTTP_SERVER_HOST'], env['HOST']), ('127.0.0.1', '127.0.0.1'), 'the front is the only listener')
+        # The web Explorer dials Pulse at the page's host and port over UDP, which the front cannot carry.
+        self.assertEqual(dev.pulse_ports(config)[0], 5443)
+        about = dev.pulse_about_env(config)
+        self.assertEqual(about['COMMS_V4_PULSE_WEBTRANSPORT_URL'], 'https://dev.example.test:5443')
+        self.assertEqual(about['COMMS_V4_PULSE_AUDIENCE'], 'dev.example.test:5443')
+        self.assertEqual(dev.pulse_env(config, Path('c'), Path('k'))['PULSE_WT_BIND'], '0.0.0.0:5443')
+        portless = {**self.config, 'public_origin': 'http://dev.example.test'}
+        self.assertEqual(dev.pulse_ports(portless)[0], dev.WEB_PULSE_PORT, "the engine's default when the page has no port")
+        self.assertEqual(dev.runtime_env(portless)['COMMS_FIXED_ADAPTER'], 'archipelago:ws://dev.example.test/ws')
+        loopback = dev.runtime_env(self.config)
+        self.assertEqual(loopback['PUBLIC_URL'], f"http://127.0.0.1:{self.config['port'] + 2}")
+        self.assertNotIn('LIVEKIT_WS_URL', loopback)
+        self.assertNotIn('DEV_ALLOWED_HOSTS', loopback)
+        self.assertNotIn('HTTP_TRUSTED_PROXY_CIDRS', loopback)
+        self.assertEqual(dev.pulse_env(self.config, Path('c'), Path('k'))['PULSE_WT_BIND'],
+                         f"127.0.0.1:{self.config['port'] + 2}")
+
+    def test_the_public_origin_is_an_origin_taken_on_first_startup(self):
+        for bad in ('dev.example.test', 'https://dev.example.test/play', 'https://dev.example.test?x=1',
+                    'ftp://dev.example.test', 'https://user@dev.example.test'):
+            with self.assertRaisesRegex(ValueError, 'origin'):
+                dev.public_origin(bad)
+        self.assertEqual(dev.public_origin('https://dev.example.test/'), 'https://dev.example.test')
+        self.assertIsNone(dev.public_origin('local'))
+        self.assertIsNone(dev.public_origin(None))
+        self.assertIsNone(self.config.get('public_origin'), 'the default stack stays on loopback')
+        state = self.state / 'public'
+        state.mkdir()
+        with patch.object(dev, 'STATE', state), patch.object(dev, 'SETTINGS', state / 'settings.json'), \
+                patch.dict(os.environ, {'FOUNDATION_DEV_PUBLIC_ORIGIN': 'https://dev.example.test:5443',
+                                        'FOUNDATION_DEV_PORT': '6300'}):
+            self.assertEqual(dev.settings(create=True)['public_origin'], 'https://dev.example.test:5443')
+            self.assertEqual(json.loads((state / 'settings.json').read_text())['public_origin'],
+                             'https://dev.example.test:5443', 'the installed service has no environment')
+        with self.assertRaisesRegex(ValueError, 'go together'):
+            dev.origin_settings({'FOUNDATION_DEV_PUBLIC_ORIGIN': 'https://dev.example.test',
+                                 'FOUNDATION_DEV_TLS_CERT': '/unused'})
+        with self.assertRaisesRegex(ValueError, 'FOUNDATION_DEV_PUBLIC_ORIGIN'):
+            dev.origin_settings({'FOUNDATION_DEV_TLS_CERT': '/unused', 'FOUNDATION_DEV_TLS_KEY': '/unused'})
+
+    def test_a_developers_certificate_replaces_the_generated_pulse_pair(self):
+        certificate, key = self.state / 'dev.crt', self.state / 'dev.key'
+        config = {**self.config, 'public_origin': 'https://dev.example.test'}
+        with self.assertRaisesRegex(RuntimeError, 'missing'):
+            dev.origin_settings({}, 'https://dev.example.test', str(certificate), str(key))
+        certificate.write_text('cert'), key.write_text('key')
+        config.update(dev.origin_settings({}, 'https://dev.example.test', str(certificate), str(key)))
+        dev.save_json(dev.SETTINGS, config)
+        self.assertEqual(dev.pulse_certificate(config), (certificate, key))
+        self.assertFalse((self.state / 'pulse').exists(), 'nothing generated beside the given pair')
+        with patch.object(dev, 'started', return_value='start'), patch.object(dev.os, 'execve') as execve:
+            dev.task('pulse')
+        self.assertEqual(execve.call_args.args[2]['PULSE_WT_CERT_PATH'], str(certificate))
+        self.assertEqual(execve.call_args.args[2]['PULSE_WT_BIND'], f'0.0.0.0:{dev.WEB_PULSE_PORT}')
+        # Without one, the generated certificate names the public host so a pinned browser can match it.
+        generated, _ = dev.pulse_certificate({**self.config, 'public_origin': 'https://dev.example.test'})
+        text = subprocess.run(['openssl', 'x509', '-in', generated, '-noout', '-ext', 'subjectAltName'],
+                              capture_output=True, text=True, check=True).stdout
+        self.assertIn('DNS:dev.example.test', text)
+        self.assertIn('IP Address:127.0.0.1', text)
+
+    def test_the_origin_command_reconfigures_a_stopped_stack(self):
+        out = io.StringIO()
+        with patch.object(dev, 'supervisor_running', return_value=True), \
+                patch.object(dev.sys, 'argv', ['foundation-dev', 'origin', 'https://dev.example.test']):
+            with self.assertRaisesRegex(RuntimeError, 'foundation-dev down'):
+                dev.main()
+        with patch.object(dev, 'supervisor_running', return_value=False), contextlib.redirect_stdout(out), \
+                patch.object(dev.sys, 'argv', ['foundation-dev', 'origin', 'https://dev.example.test:5443']):
+            dev.main()
+        self.assertEqual(dev.settings()['public_origin'], 'https://dev.example.test:5443')
+        self.assertIn('https://dev.example.test:5443', out.getvalue())
+        with patch.object(dev.sys, 'argv', ['foundation-dev', 'env']), contextlib.redirect_stdout(out):
+            dev.main()
+        self.assertIn("FOUNDATION_DEV_PUBLIC_URL=https://dev.example.test:5443", out.getvalue())
+        with patch.object(dev, 'supervisor_running', return_value=False), contextlib.redirect_stdout(out), \
+                patch.object(dev.sys, 'argv', ['foundation-dev', 'origin', 'local']):
+            dev.main()
+        self.assertIsNone(dev.settings()['public_origin'])
+        self.assertEqual(dev.runtime_env(dev.settings())['PUBLIC_URL'], f"http://127.0.0.1:{self.config['port'] + 2}")
+
     @unittest.skipUnless(shutil.which('livekit-server'), 'livekit-server is supplied by nix develop')
     def test_livekit_server_starts_on_the_generated_config(self):
         signaling = dev.livekit_ports(self.config)[0]

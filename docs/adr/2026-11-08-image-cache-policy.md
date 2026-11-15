@@ -21,8 +21,14 @@ a miss. An exact main identity restored by a PR needs no duplicate save. A stale
 fallback must not prevent saving the replacement.
 
 Catalyst exports retain both compiled dependencies and vendored sources. Sites
-exports retain dependencies and the toolchain. API exports contain the runtime
-closure and use exact identities, without a stale prefix fallback.
+exports retain dependencies and the toolchain. API and Sites app exports contain the
+runtime closure and use exact identities, without a stale prefix fallback. The Sites
+app excludes the Explorer build and the docs media, which are assembled beside it, so
+its identity changes only with Sites sources and dependencies. Its entry holds the
+compiled app of every Sites image the build produces, so an exact hit leaves no Sites
+compile. A runtime closure
+restored under its exact identity makes that package's dependency restore redundant;
+the build skips it and saves no dependency entry it never restored.
 Stale Catalyst archives retain vendored sources but do not avoid recompiling a
 changed dependency derivation. The whole archive is transferred; this is a source
 availability fallback, not a claim of incremental compiled-artifact reuse.

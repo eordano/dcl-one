@@ -120,7 +120,7 @@ Then open the scene in Creator Hub (`npm run start` in `packages/creator-hub`) a
 
 Local tarball paths must never reach a pushed `package.json`. Before you push the js-sdk-toolchain branch:
 
-1. Open the monorepo PR first. Its CI posts a "Test @dcl/inspector package" comment with an `npm install "<url>"` line (and an asset-packs one when asset-packs changed). Read it with `gh pr view <number> --comments`.
+1. Open the monorepo PR first. Its CI posts a "Creator Hub test builds" comment whose Inspector section has an `npm install "<url>"` line (and an Asset packs section with its own when asset-packs changed). Read it with `gh pr view <number> --comments`.
 2. In `$TOOLCHAIN/packages/@dcl/sdk-commands`, run `npm install --save-exact "<inspector tarball url>"`, then `make build test` again.
 3. Push the toolchain branch and open its PR. In the body, link the monorepo PR and state that it merges first.
 4. After the monorepo PR lands on `main`, CI publishes `@dcl/inspector` to npm under `latest`. Replace the URL with that exact version (`npm install --save-exact @dcl/inspector@<version>`) before the toolchain PR merges.

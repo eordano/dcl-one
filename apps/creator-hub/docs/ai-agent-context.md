@@ -312,7 +312,7 @@ This project does not use a traditional database. Instead, it uses:
 - **Standalone**: Can be developed without Creator Hub using CLI WebSocket integration
 - **Hot Reload**: `npm start` watches and rebuilds on file changes
 - **Testing**: Component tests with React Testing Library, E2E with Playwright
-- **Preview**: Each PR's "Test @dcl/inspector package" comment links a preview served from the SDK S3 bucket (`creator-hub/branch/<branch>/inspector/index.html`)
+- **Preview**: Each PR's "Creator Hub test builds" comment links, in its Inspector section, a preview served from the SDK S3 bucket (`creator-hub/branch/<branch>/inspector/index.html`)
 
 ### Creator Hub Development
 

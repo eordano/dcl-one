@@ -65,6 +65,25 @@ class CargoMtimesTest(unittest.TestCase):
         for name in ('edited/kept.rs', 'grows/d.rs', 'same/a.rs'):
             self.assertEqual(self.time(name), OLD, name)
 
+    def test_a_file_edited_after_the_checkout_is_not_recorded_and_gets_no_recorded_time(self):
+        (self.root / 'same/deep/b.sql').write_text('edited by a build step')
+        self.set_all(OLD)
+        self.assertEqual(mtimes.record(self.root, self.target), 6)
+        now = OLD + 500 * 10**9
+        self.set_all(now)
+        mtimes.restore(self.root, self.target)
+        for name in ('same/deep/b.sql', 'same/deep', 'same'):
+            self.assertEqual(self.time(name), now, name)
+        self.assertEqual(self.time('same/a.rs'), OLD)
+        git(self.root, 'checkout', '-q', '--', 'same/deep/b.sql')
+        mtimes.record(self.root, self.target)
+        (self.root / 'edited/c.rs').write_text('edited before the restore')
+        self.set_all(now)
+        mtimes.restore(self.root, self.target)
+        for name in ('edited/c.rs', 'edited'):
+            self.assertEqual(self.time(name), now, name)
+        self.assertEqual(self.time('edited/kept.rs'), OLD)
+
     def test_no_manifest_changes_nothing(self):
         (self.target / mtimes.MANIFEST).unlink()
         now = OLD + 500 * 10**9

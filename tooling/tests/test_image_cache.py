@@ -37,7 +37,7 @@ class CachePlanTest(unittest.TestCase):
             self.assertNotEqual(pr[f'{group}-key'], main[f'{group}-key'])
             self.assertEqual(pr[f'{group}-main-key'], main[f'{group}-key'])
             self.assertEqual(main[f'{group}-main-prefix'], '')
-            if group == 'apis':
+            if group in cache.RUNTIME:
                 self.assertEqual(pr[f'{group}-main-prefix'], '')
             else:
                 self.assertTrue(main[f'{group}-key'].startswith(pr[f'{group}-main-prefix']))
@@ -68,7 +68,7 @@ class CachePlanTest(unittest.TestCase):
                     for group in cache.PACKAGES:
                         expected = (f'images-v2-main-{group}-{arch}-'
                                     if event == 'pull_request' and ref == 'refs/pull/93/merge'
-                                    and group != 'apis' else '')
+                                    and group not in cache.RUNTIME else '')
                         self.assertEqual(plan[f'{group}-main-prefix'], expected)
 
     def test_dependency_groups_change_independently_from_application_source(self):
@@ -85,6 +85,15 @@ class CachePlanTest(unittest.TestCase):
         self.derivations['sites-toolchain'] = '/nix/store/changed-sites-toolchain.drv'
         self.assertNotEqual(dependencies['sites-key'], self.plan()['sites-key'])
         self.assertNotEqual(self.plan()['sites-key'], self.plan(arch='amd64')['sites-key'])
+        self.assertEqual(before['sites-app-key'], self.plan()['sites-app-key'])
+        self.derivations['sites-app'] = '/nix/store/changed-sites-app.drv'
+        compiled = self.plan()
+        self.assertNotEqual(before['sites-app-key'], compiled['sites-app-key'])
+        self.assertEqual(self.plan(ref='refs/heads/main', event='push')['sites-app-main-prefix'], '')
+        self.assertEqual(compiled['sites-app-main-prefix'], '')
+        self.assertEqual(compiled['sites-key'], self.plan()['sites-key'])
+        self.derivations['sites-app-polygon-credits'] = '/nix/store/changed-sites-app-credits.drv'
+        self.assertNotEqual(compiled['sites-app-key'], self.plan()['sites-app-key'])
 
     def test_rejects_malformed_derivation_identity(self):
         self.derivations['catalyst'] = '/nix/store/abc-catalyst.drv\ninjected-key=anything'
@@ -225,33 +234,70 @@ class WorkflowSetupTest(unittest.TestCase):
                         self.assertEqual(calls.read_text().splitlines(), [
                             'rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup'])
 
-    def test_sequential_image_builds_follow_bevy_import_without_legacy_caches(self):
+    def test_one_image_build_follows_the_bevy_import_without_legacy_caches(self):
         self.assertNotIn('images-deps-node-all', self.build)
         self.assertNotIn('image-nix', self.build)
-        images = self.build.index("nix build --impure 'git+file:.?lfs=1#image-apis'")
-        self.assertLess(images, self.build.index("nix build --impure 'git+file:.?lfs=1#image-sites'"))
+        images = self.build.index("nix build --impure 'git+file:.?lfs=1#image-apis' 'git+file:.?lfs=1#image-sites'")
         self.assertLess(self.build.index('tooling/fetch-play.py --wait 0'), images)
+        self.assertEqual(self.build.count('nix build --impure'), 1)
         self.assertNotIn('nix build .#image-apis', self.build)
+        loads = self.build[images:self.build.index('tooling/image-smoke.py')]
+        self.assertIn('docker load --input .cache/images/apis.tar.gz &\n', loads)
+        self.assertIn("'git+file:.?lfs=1#image-sites-polygon-credits' --no-link", loads)
+        self.assertIn('docker load --input .cache/images/sites.tar.gz\n', loads)
+        self.assertIn('docker load --input .cache/images/sites-polygon-credits.tar.gz\n', loads)
+        self.assertIn('wait "$apis_load"', loads)
+
+    def test_exact_compiled_hits_skip_the_dependency_restores_and_builds(self):
+        compiled = self.build.index('id: compiled\n')
+        for group in ('apis', 'sites-app'):
+            self.assertLess(self.build.index(f'id: {group}-cache\n'), compiled)
+        for group, hit in (('catalyst', 'apis'), ('sites', 'sites-app')):
+            restore = self.build.index(f'id: {group}-cache\n')
+            self.assertLess(compiled, restore)
+            condition = self.build.rfind('        if: ', 0, restore)
+            self.assertEqual(self.build[condition:restore].split('\n', 1)[0],
+                             f"        if: steps.compiled.outputs.{hit} != 'true'")
+        toolchain = self.build.index('      - name: Build the complete Sites toolchain and dependencies\n')
+        self.assertIn("if: steps.compiled.outputs.sites-app != 'true'",
+                      self.build[toolchain:].split('      - name:', 2)[1])
+        self.assertIn('.cache/catalyst-nix .cache/sites-nix .cache/apis-nix .cache/sites-app-nix', self.build)
+        step = self.build.split('        id: compiled\n', 1)[1].split('      - name:', 1)[0]
+        script = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        for matched, expected in [('', 'false'), ('images-v2-pr-93-apis-amd64-abc', 'true'),
+                                  ('images-v2-main-apis-amd64-abc', 'true'),
+                                  ('images-v2-main-apis-amd64-old', 'false')]:
+            with self.subTest(matched=matched), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / 'outputs'
+                env = dict(os.environ, GITHUB_OUTPUT=str(output),
+                           APIS=f'images-v2-pr-93-apis-amd64-abc {matched}',
+                           SITES_APP=f'images-v2-pr-93-sites-app-amd64-abc {matched}')
+                subprocess.run(['bash', '-e', '-c', script], env=env, check=True, capture_output=True)
+                self.assertEqual(dict(line.split('=') for line in output.read_text().splitlines()),
+                                 {'apis': expected, 'sites-app': expected})
 
     def test_stale_dependency_hits_fall_back_to_the_newest_main_entry_and_still_save(self):
         for group in ('catalyst', 'sites'):
             restore = self.build.split(f'id: {group}-cache\n', 1)[1].split('      - name:', 1)[0]
             self.assertIn(f'${{{{ steps.cache-keys.outputs.{group}-main-key }}}}\n', restore)
             self.assertIn(f'${{{{ steps.cache-keys.outputs.{group}-main-prefix }}}}\n', restore)
-        self.assertNotIn('apis-main-prefix', self.build)
+        for group in cache.RUNTIME:
+            self.assertNotIn(f'{group}-main-prefix', self.build)
+            restore = self.build.split(f'id: {group}-cache\n', 1)[1].split('      - name:', 1)[0]
+            self.assertIn(f'restore-keys: ${{{{ steps.cache-keys.outputs.{group}-main-key }}}}\n', restore)
         self.assertNotIn("cache-matched-key == ''", self.build)
         decision = self.build.index('id: cache-saves')
-        self.assertLess(self.build.index('id: apis-cache'), decision)
-        self.assertLess(decision, self.build.index('Import cached store paths'))
-        for group in ('catalyst', 'sites', 'apis'):
+        for group in cache.PACKAGES:
+            self.assertLess(self.build.index(f'id: {group}-cache'), decision)
             self.assertEqual(self.build.count(f"steps.cache-saves.outputs.{group} == 'true'"), 2)
+        self.assertLess(decision, self.build.index('Import cached store paths'))
 
     def test_upload_guard_uses_pr_head_and_skips_reruns_superseded_heads_and_failed_queries(self):
         step = self.build.split('      - name: Allow cache uploads only from current first attempts\n', 1)[1]
         script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
         self.assertIn("if: steps.cache-keys.outputs.save == 'true'", step.split('        run:', 1)[0])
         self.assertLess(self.build.index('tooling/image-smoke.py'), self.build.index('id: cache-writer'))
-        self.assertEqual(self.build.count("steps.cache-writer.outputs.allowed == 'true'"), 6)
+        self.assertEqual(self.build.count("steps.cache-writer.outputs.allowed == 'true'"), 8)
         self.assertIn('PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}', step.split('        run:', 1)[0])
         cases = [('1', 'head', '0', True, True, 'head'),
                  ('2', 'head', '0', False, False, 'head'),
@@ -284,30 +330,37 @@ class WorkflowSetupTest(unittest.TestCase):
                         self.assertEqual((root / 'called').read_text().strip(),
                                          f'api repos/decentraland/dcl-one/git/ref/{checked_ref} --jq .object.sha')
 
-    def test_api_export_requires_matching_derivations_and_successful_evaluations(self):
-        step = self.build.split('      - name: Export the tested APIs package\n', 1)[1]
-        script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
-        for image_drv, failure, expected in [('same.drv', '', True), ('different.drv', '', False),
-                                              ('same.drv', '.#catalyst.drvPath', False),
-                                              ('same.drv', 'git+file:.?lfs=1#catalyst.drvPath', False)]:
-            with self.subTest(image_drv=image_drv, failure=failure), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                nix = root / 'nix'
-                nix.write_text('#!/usr/bin/env bash\n'
-                               'echo "$*" >> "$NIX_CALLS"\n'
-                               'if [[ "$1" == eval ]]; then\n'
-                               '  if [[ "${!#}" == "$FAIL_REF" ]]; then exit 1; fi\n'
-                               '  if [[ "${!#}" == .#catalyst.drvPath ]]; then echo same.drv; else echo "$IMAGE_DRV"; fi\n'
-                               'fi\n')
-                nix.chmod(0o755)
-                env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
-                           NIX_CALLS=str(root / 'calls'), FAIL_REF=failure, IMAGE_DRV=image_drv)
-                result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script],
-                                        cwd=root, env=env, capture_output=True, text=True)
-                self.assertEqual(result.returncode == 0, expected, result.stderr)
-                self.assertEqual(any(line.startswith('copy ') for line in (root / 'calls').read_text().splitlines()), expected)
-                if not failure:
-                    self.assertIn('eval --raw --impure git+file:.?lfs=1#catalyst.drvPath', (root / 'calls').read_text())
+    def test_compiled_exports_require_matching_derivations_and_successful_evaluations(self):
+        exports = {'Export the tested APIs package': 'apis', 'Export the tested Sites app': 'sites-app'}
+        for name, group in exports.items():
+            package = cache.PACKAGES[group][0]
+            step = self.build.split(f'      - name: {name}\n', 1)[1]
+            script = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
+            # The export copies every package its cache key names.
+            self.assertIn(' ' + ' '.join(f'.#{p}' for p in cache.PACKAGES[group]) + '\n', script)
+            for image_drv, failure, expected in [('same.drv', '', True), ('different.drv', '', False),
+                                                  ('same.drv', f'.#{package}.drvPath', False),
+                                                  ('same.drv', f'git+file:.?lfs=1#{package}.drvPath', False)]:
+                with self.subTest(package=package, image_drv=image_drv, failure=failure), \
+                        tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    nix = root / 'nix'
+                    nix.write_text('#!/usr/bin/env bash\n'
+                                   'echo "$*" >> "$NIX_CALLS"\n'
+                                   'if [[ "$1" == eval ]]; then\n'
+                                   '  if [[ "${!#}" == "$FAIL_REF" ]]; then exit 1; fi\n'
+                                   '  if [[ "${!#}" == .#*.drvPath ]]; then echo same.drv; else echo "$IMAGE_DRV"; fi\n'
+                                   'fi\n')
+                    nix.chmod(0o755)
+                    env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                               NIX_CALLS=str(root / 'calls'), FAIL_REF=failure, IMAGE_DRV=image_drv)
+                    result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', script],
+                                            cwd=root, env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, expected, result.stderr)
+                    calls = (root / 'calls').read_text()
+                    self.assertEqual(any(line.startswith('copy ') for line in calls.splitlines()), expected)
+                    if not failure:
+                        self.assertIn(f'eval --raw --impure git+file:.?lfs=1#{package}.drvPath', calls)
 
     def test_actual_save_script_handles_miss_exact_stale_and_main_digest_hits(self):
         step = self.build.split('      - name: Decide which caches a successful build saves\n', 1)[1]
@@ -316,14 +369,17 @@ class WorkflowSetupTest(unittest.TestCase):
         for matched, expected in [('', 'true'), ('images-v2-pr-93-catalyst-amd64-abc', 'false'),
                                   ('images-v2-main-catalyst-amd64-old', 'true'),
                                   ('images-v2-main-catalyst-amd64-abc', 'false')]:
-            with self.subTest(matched=matched), tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / 'outputs'
-                env = dict(os.environ, GITHUB_OUTPUT=str(output))
-                for group in ('CATALYST', 'SITES', 'APIS'):
-                    env[group] = f'images-v2-pr-93-catalyst-amd64-abc {matched}'
-                subprocess.run(['bash', '-e', '-c', script], env=env, check=True, capture_output=True)
-                self.assertEqual(dict(line.split('=') for line in output.read_text().splitlines()),
-                                 dict.fromkeys(('catalyst', 'sites', 'apis'), expected))
+            for skipped in ('', 'CATALYST', 'CATALYST SITES', ' SITES'):
+                with self.subTest(matched=matched, skipped=skipped), tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory) / 'outputs'
+                    env = dict(os.environ, GITHUB_OUTPUT=str(output), SKIPPED=skipped)
+                    for group in ('CATALYST', 'SITES', 'APIS', 'SITES_APP'):
+                        env[group] = f'images-v2-pr-93-catalyst-amd64-abc {matched}'
+                    subprocess.run(['bash', '-e', '-c', script], env=env, check=True, capture_output=True)
+                    decided = dict.fromkeys(('catalyst', 'sites', 'apis', 'sites-app'), expected)
+                    for group in skipped.split():
+                        decided[group.lower()] = 'false'
+                    self.assertEqual(dict(line.split('=') for line in output.read_text().splitlines()), decided)
 
 
 class ImageRetentionTest(unittest.TestCase):
@@ -354,7 +410,7 @@ class ImageRetentionTest(unittest.TestCase):
     def test_two_generations_per_group_architecture_and_ref(self):
         rows, expected = [], set()
         for scope in ('main', 'pr-93', 'pr-94'):
-            for group in ('catalyst', 'sites', 'apis'):
+            for group in ('catalyst', 'sites', 'apis', 'sites-app'):
                 for arch in ('amd64', 'arm64'):
                     start = len(rows) + 1
                     rows += [self.entry(i, scope, group, arch) for i in range(start, start + 3)]

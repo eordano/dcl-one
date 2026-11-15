@@ -17,8 +17,9 @@ SCENE_SUITE = 'apps/bevy-explorer/scene-tests.txt'
 SNAPSHOT_SCENES = ('52,-62', '52,-64', '52,-66')
 PRODUCERS = {'web': 'Web engine, HUD and bridge scene', 'headless': 'Headless Smoke'}
 LANES = ('clippy', 'test', 'headless', 'web')
-# These jobs use larger runners; on a draft they wait for ready for review or this label.
-HELD_ON_DRAFT = ('test', 'headless', 'web')
+# On a draft these jobs on larger runners wait for ready for review or this label. The web job is on a
+# larger runner too, but it is not held: the development smoke job and the images need its output.
+HELD_ON_DRAFT = ('test', 'headless')
 ENGINE_LABEL = 'ci:engine'
 NATIVE_JOBS = {'Test Suite (ubuntu-24.04)', 'Test Suite (windows-2025)', 'Test Suite (macos-15)'}
 GATEWAY_HUD_INPUTS = ('apps/ui3/src/play/lib/baseDomain.ts',
@@ -151,9 +152,9 @@ def event_pr_head():
 
 
 def hold_for_draft(result, pull_request):
-    """A draft runs the jobs on standard runners; the jobs on larger runners wait until it is ready or labelled.
+    """A draft does not run the held jobs; they wait until it is ready for review or labelled.
 
-    An unreadable event holds nothing. The web job is held too, so the images that read its output wait with it.
+    An unreadable event holds nothing.
     """
     try:
         draft = pull_request.get('draft') is True
@@ -163,9 +164,9 @@ def hold_for_draft(result, pull_request):
     held = [lane for lane in HELD_ON_DRAFT if result.get(lane) is True]
     if not draft or labelled or not held:
         return result
-    print(f'::notice::This draft does not run the engine jobs on larger runners ({", ".join(held)}). '
+    print(f'::notice::This draft does not run these engine jobs on larger runners: {", ".join(held)}. '
           f'Mark it ready for review, or add the {ENGINE_LABEL} label and push, to run them.')
-    return {**result, **dict.fromkeys((*HELD_ON_DRAFT, 'native-matrix'), False), 'held': True,
+    return {**result, **dict.fromkeys((*HELD_ON_DRAFT, 'native-matrix'), False),
             'reason': result['reason'] + '; draft: ' + ', '.join(held) + ' wait until it is ready for review'}
 
 

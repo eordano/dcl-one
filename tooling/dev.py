@@ -22,6 +22,7 @@ import sys
 import textwrap
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,49 @@ PROFILES = ('mirror', 'testnet', 'offline')
 DARWIN = platform.system() == 'Darwin'
 PROGRESS_SECONDS = 30
 ANSI = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))')
+# The web Explorer dials Pulse's WebTransport at the page's host and port; a page served without a port
+# (https://host) goes to the engine's default (bevy-explorer crates/comms/src/pulse/plugin.rs DEFAULT_PULSE_PORT).
+WEB_PULSE_PORT = 7743
+
+
+def public_origin(value):
+    """`FOUNDATION_DEV_PUBLIC_ORIGIN` checked: an http(s) origin and nothing more, or None for the loopback stack."""
+    if value is None or value.strip() == '' or value.strip() == 'local':
+        return None
+    url = urllib.parse.urlsplit(value.strip())
+    if url.scheme not in ('http', 'https') or not url.hostname or url.path not in ('', '/') or url.query \
+            or url.fragment or url.username or url.password:
+        raise ValueError('FOUNDATION_DEV_PUBLIC_ORIGIN must be an origin, https://host or https://host:port, '
+                         f'got {value!r}')
+    return f'{url.scheme}://{url.netloc}'
+
+
+def public(config):
+    """The origin the stack is served at, split: (scheme, host, netloc, explicit port or None); None when loopback."""
+    origin = config.get('public_origin')
+    if not origin:
+        return None
+    url = urllib.parse.urlsplit(origin)
+    return url.scheme, url.hostname, url.netloc, url.port
+
+
+def ip_literal(host):
+    try:
+        socket.inet_pton(socket.AF_INET6 if ':' in host else socket.AF_INET, host)
+        return True
+    except OSError:
+        return False
+
+
+def tls_files(config):
+    """The developer's certificate and key for the public host (`FOUNDATION_DEV_TLS_CERT`/`_KEY`), or None."""
+    if not config.get('tls_cert'):
+        return None
+    certificate, key = Path(config['tls_cert']), Path(config['tls_key'])
+    for path in (certificate, key):
+        if not path.is_file():
+            raise RuntimeError(f'TLS file {path} is missing; run foundation-dev origin again with --cert and --key.')
+    return certificate, key
 
 
 def backoff_delays(deadline, first=.1, maximum=2):
@@ -53,18 +97,20 @@ def save_json(path, value):
     temporary.replace(path)
 
 
-def ports_free(base):
+def ports_free(base, webtransport=None):
     sockets = []
     try:
         # TCP (the API's metrics on base+1, NATS on base+8 and +9), then the UDP ports: Pulse's WebTransport
-        # (the Sites port) and ENet ports, LiveKit's media.
-        for kind, port in [*((socket.SOCK_STREAM, port) for port in (base, base + 1, base + 2, base + 3, base + 4,
-                                                                      base + 5, base + 7, base + 8, base + 9)),
-                           *((socket.SOCK_DGRAM, port) for port in (base + 2, base + 6, base + 7))]:
+        # (the Sites port, or the public origin's port on every interface) and ENet ports, LiveKit's media.
+        for kind, port, address in [*((socket.SOCK_STREAM, port, '127.0.0.1') for port in (
+                                        base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 7,
+                                        base + 8, base + 9)),
+                                    *((socket.SOCK_DGRAM, port, '127.0.0.1') for port in (base + 2, base + 6, base + 7)),
+                                    *([(socket.SOCK_DGRAM, webtransport, '0.0.0.0')] if webtransport else [])]:
             sock = socket.socket(socket.AF_INET, kind)
             sockets.append(sock)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(('127.0.0.1', port))
+            sock.bind((address, port))
         return True
     except OSError as error:
         if error.errno == errno.EADDRINUSE:
@@ -132,9 +178,28 @@ def settings(create=False):
         raise ValueError('FOUNDATION_DEV_PROFILE must be mirror, testnet or offline')
     config = {'port': base, 'profile': profile, 'password': secrets.token_hex(24),
               'ENCRYPTION_KEY': secrets.token_hex(32), 'SESSION_SECRET': secrets.token_hex(32),
-              **missing_secrets({})}
+              **missing_secrets({}), **origin_settings(os.environ)}
     save_json(SETTINGS, config)
     return config
+
+
+def origin_settings(env, origin=None, certificate=None, key=None):
+    """The public-origin keys of settings.json from `FOUNDATION_DEV_PUBLIC_ORIGIN`, `_TLS_CERT` and `_TLS_KEY`
+    (or the `origin` command's arguments): the origin the stack is served at behind a developer's TLS front, and
+    the certificate Pulse's WebTransport presents for that host. Loopback by default."""
+    origin = public_origin(origin if origin is not None else env.get('FOUNDATION_DEV_PUBLIC_ORIGIN'))
+    certificate = certificate if certificate is not None else env.get('FOUNDATION_DEV_TLS_CERT')
+    key = key if key is not None else env.get('FOUNDATION_DEV_TLS_KEY')
+    if bool(certificate) != bool(key):
+        raise ValueError('FOUNDATION_DEV_TLS_CERT and FOUNDATION_DEV_TLS_KEY go together.')
+    if certificate and not origin:
+        raise ValueError('A TLS certificate needs FOUNDATION_DEV_PUBLIC_ORIGIN, the host it is for.')
+    settings = {'public_origin': origin}
+    if certificate:
+        settings.update(tls_cert=str(Path(certificate).expanduser().resolve()),
+                        tls_key=str(Path(key).expanduser().resolve()))
+        tls_files(settings)
+    return settings
 
 
 def database_url(config, database='catalyst'):
@@ -174,7 +239,11 @@ def livekit_yaml(config):
 def pulse_ports(config):
     # WebTransport (UDP) on the Sites port, the host:port the /play HUD hands the engine as its Pulse
     # server (apps/ui3/src/play/lib/baseDomain.ts); ENet (UDP) and /metrics (TCP) share base+7.
-    return config['port'] + 2, config['port'] + 7, config['port'] + 7
+    # Behind a public origin the page's port is the origin's (the TLS front holds it over TCP only, so
+    # UDP is free there), or the engine's default when the origin names none.
+    origin = public(config)
+    webtransport = config['port'] + 2 if origin is None else origin[3] or WEB_PULSE_PORT
+    return webtransport, config['port'] + 7, config['port'] + 7
 
 
 def nats_ports(config):
@@ -203,9 +272,15 @@ def pulse_spki():
     return base64.b64encode(hashlib.sha256(der).digest()).decode()
 
 
-def pulse_certificate():
-    """Pulse's WebTransport certificate: a key kept per stack, so its SPKI hash stays stable, and a fresh
-    self-signed certificate on every start, valid for 13 days."""
+def pulse_certificate(config=None):
+    """Pulse's WebTransport certificate: the developer's pair for the public host when given, else a key kept
+    per stack, so its SPKI hash stays stable, and a fresh self-signed certificate on every start, valid for
+    13 days, naming the public host beside localhost."""
+    if config is not None and (given := tls_files(config)):
+        return given
+    names = 'DNS:localhost,IP:127.0.0.1'
+    if config is not None and (origin := public(config)) and origin[1] not in ('localhost', '127.0.0.1'):
+        names = f"{'IP' if ip_literal(origin[1]) else 'DNS'}:{origin[1]},{names}"
     directory = STATE / 'pulse'
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     key = directory / 'key.pem'
@@ -217,22 +292,26 @@ def pulse_certificate():
         temporary.replace(key)
     certificate = directory / 'cert.pem'
     openssl('req', '-x509', '-new', '-key', key, '-out', certificate, '-days', '13', '-sha256',
-            '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1')
+            '-subj', '/CN=localhost', '-addext', f'subjectAltName={names}')
     return certificate, key
 
 
 def pulse_about_env(config):
     """The /about comms block that tells the /play HUD Pulse's WebTransport endpoint. The realm's adapter
     stays the archipelago one `runtime_env` sets."""
-    url = f'https://127.0.0.1:{pulse_ports(config)[0]}'
-    return {'COMMS_V4_PULSE_WEBTRANSPORT_URL': url, 'COMMS_V4_PULSE_AUDIENCE': f'http://127.0.0.1:{config["port"] + 2}'}
+    origin = public(config)
+    host, audience = ('127.0.0.1', f'http://127.0.0.1:{config["port"] + 2}') if origin is None else (origin[1], origin[2])
+    return {'COMMS_V4_PULSE_WEBTRANSPORT_URL': f'https://{host}:{pulse_ports(config)[0]}', 'COMMS_V4_PULSE_AUDIENCE': audience}
 
 
 def pulse_env(config, certificate, key):
     webtransport, enet, metrics = pulse_ports(config)
     env = {name: os.environ[name] for name in ('PATH', 'HOME', 'TMPDIR') if name in os.environ}
+    # WebTransport is UDP, which the TLS front cannot carry: behind a public origin the browser dials this
+    # machine directly, on every interface.
+    bind = '127.0.0.1' if public(config) is None else '0.0.0.0'
     return {**env, 'PULSE_BIND': f'127.0.0.1:{enet}', 'PULSE_METRICS_BIND': f'127.0.0.1:{metrics}',
-            'PULSE_WT_ENABLED': 'true', 'PULSE_WT_BIND': f'127.0.0.1:{webtransport}',
+            'PULSE_WT_ENABLED': 'true', 'PULSE_WT_BIND': f'{bind}:{webtransport}',
             'PULSE_WT_CERT_PATH': str(certificate), 'PULSE_WT_KEY_PATH': str(key),
             'PULSE_REPLAY_STATE_PATH': str(STATE / 'pulse/replay.tsv'), 'NO_COLOR': '1',
             # The cluster feed to the API's archipelago, and its engine.discovery heartbeat.
@@ -302,6 +381,24 @@ def runtime_env(config):
     })
     for domain in ('CONTENT', 'CREATE', 'DATA', 'SOCIAL', 'WORLDS', 'OPS'):
         env[f'{domain}_WRITES_ENABLED'] = 'true'
+    if origin := public(config):
+        # Served behind a developer's TLS front at this origin: the realm advertises it, not loopback. The
+        # front terminates TLS for Sites (which proxies the API routes), `/ws` to the API and `/rtc` to
+        # LiveKit's signaling; the API still reaches LiveKit and PostgreSQL over loopback.
+        scheme, host, netloc, _ = origin
+        ws = 'wss' if scheme == 'https' else 'ws'
+        env.update({
+            'PUBLIC_URL': f'{scheme}://{netloc}',
+            'COMMS_FIXED_ADAPTER': f'archipelago:{ws}://{netloc}/ws',
+            'COMMS_ADAPTER': f'fixed-adapter:archipelago:{ws}://{netloc}/ws',
+            'LIVEKIT_WS_URL': f'{ws}://{netloc}',
+            # Vite refuses an unknown Host header; the front forwards the origin's, and a front that also
+            # serves the node under subdomains (a leading dot allows them all).
+            'DEV_ALLOWED_HOSTS': host if ip_literal(host) else f'.{host}',
+            # The API binds loopback, so its only peer is the front on this host: trusting it gives the
+            # `/contents` rate limit and the deploy and referral quotas each client's own address again.
+            'HTTP_TRUSTED_PROXY_CIDRS': '127.0.0.1/32,::1/128',
+        })
     # Explicit development settings, without a production posture/restore gate.
     # Authentication and mirrored-row ownership checks still apply.
     if config['profile'] == 'offline':
@@ -753,7 +850,7 @@ def task(name):
         env = {key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR') if key in os.environ}
         os.execvpe('nats-server', nats_argv(config), env)
     elif name == 'pulse':
-        certificate, key = pulse_certificate()
+        certificate, key = pulse_certificate(config)
         binary = BACKEND / 'target/debug/catalyst'
         os.execve(binary, [str(binary), 'pulse'], pulse_env(config, certificate, key))
     elif name == 'index':
@@ -778,9 +875,13 @@ def status():
     print(f"Sites: http://127.0.0.1:{config['port'] + 2}   API: http://127.0.0.1:{config['port']}   "
           f"LiveKit: ws://127.0.0.1:{livekit_ports(config)[0]}   Pulse: https://127.0.0.1:{pulse_ports(config)[0]} (UDP)   "
           f"NATS: {nats_url(config)}")
-    if (STATE / 'pulse/key.pem').exists():
-        # The pinned web Explorer passes no serverCertificateHashes; Chrome honours an SPKI exception for WebTransport
-        # only with --webtransport-developer-mode, and the exception list only beside --user-data-dir.
+    if origin := public(config):
+        tls = tls_files(config)
+        print(f"Public: {config['public_origin']}   /ws and /rtc through the front; Pulse UDP {origin[1]}:{pulse_ports(config)[0]}"
+              + (f'   TLS: {tls[0]}' if tls else ''))
+    if (STATE / 'pulse/key.pem').exists() and not tls_files(config):
+        # The generated certificate is self-signed: Chrome honours an SPKI exception for WebTransport only with
+        # --webtransport-developer-mode, and the exception list only beside --user-data-dir.
         print(f'Pulse (avatars) needs Chrome run with --user-data-dir=<dir> --webtransport-developer-mode --ignore-certificate-errors-spki-list={pulse_spki()}')
     print(f"Data: {STATE}   Profile: {config['profile']}", flush=True)
     return pc('process', 'list', '--output', 'wide').returncode
@@ -794,7 +895,9 @@ def prepare_supervisor(postgres_only=False):
         if not postgres_only and set(running) == {'postgres'}:
             raise RuntimeError('PostgreSQL-only stack is running. Run foundation-dev down before starting the full stack.')
         return None
-    if not ports_free(config['port']):
+    # Behind a public origin without a port Pulse's WebTransport sits outside the block; it must be free too.
+    webtransport = pulse_ports(config)[0]
+    if not ports_free(config['port'], webtransport if webtransport != config['port'] + 2 else None):
         raise RuntimeError('Configured ports are occupied. Stop the conflicting service or edit .cache/dev/settings.json.')
     temporary = STATE / 'tmp'
     temporary.mkdir(exist_ok=True, mode=0o700)
@@ -1148,6 +1251,10 @@ def main():
     wait_parser.add_argument('--timeout', type=int, default=1800)
     wait_parser.add_argument('--postgres-only', action='store_true')
     commands.add_parser('profile').add_argument('profile', choices=PROFILES)
+    origin_parser = commands.add_parser('origin', help='Serve behind a TLS front at this origin (local: loopback)')
+    origin_parser.add_argument('origin', help='https://host[:port], or local')
+    origin_parser.add_argument('--cert', default='', help="PEM certificate for the origin's host, for Pulse's WebTransport")
+    origin_parser.add_argument('--key', default='', help='Its PEM private key')
     commands.add_parser('trades-snapshot', help="Write the mirrored trades to a gzipped SQL file").add_argument('out')
     commands.add_parser('_task', help='Internal supervised process').add_argument('task', choices=(
         'postgres', 'database-ready', 'api-build', 'api', 'api-run', 'web-install', 'sites', 'index', 'livekit', 'pulse', 'nats'))
@@ -1189,6 +1296,15 @@ def main():
         config['profile'] = args.profile
         save_json(SETTINGS, config)
         print(f'Profile set to {args.profile}; run foundation-dev up. Existing data is preserved.')
+    elif args.command == 'origin':
+        if supervisor_running():
+            raise RuntimeError('Run foundation-dev down before changing the public origin.')
+        config = settings()
+        for key in ('public_origin', 'tls_cert', 'tls_key'):
+            config.pop(key, None)
+        config.update(origin_settings({}, args.origin, args.cert, args.key))
+        save_json(SETTINGS, config)
+        print(f"Public origin set to {config['public_origin'] or 'loopback'}; run foundation-dev up.")
     elif args.command == 'env':
         # eval "$(foundation-dev env)" names the running stack for scripts and test suites.
         config = settings()
@@ -1196,7 +1312,8 @@ def main():
                            ('FOUNDATION_DEV_SITES_URL', f"http://127.0.0.1:{config['port'] + 2}"),
                            ('FOUNDATION_DEV_DATABASE_URL', database_url(config)),
                            ('FOUNDATION_DEV_TEST_DATABASE_URL', database_url(config, 'postgres')),
-                           ('FOUNDATION_DEV_STACK_PROFILE', config['profile'])):
+                           ('FOUNDATION_DEV_STACK_PROFILE', config['profile']),
+                           ('FOUNDATION_DEV_PUBLIC_URL', runtime_env(config)['PUBLIC_URL'])):
             print(f'{key}={shlex.quote(value)}')
     elif args.command == 'psql':
         os.execvpe('psql', ['psql', '-X'], psql_env(settings()))

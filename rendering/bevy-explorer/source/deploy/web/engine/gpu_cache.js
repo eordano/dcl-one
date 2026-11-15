@@ -32,18 +32,41 @@ const dbConfig = {
   },
 };
 
-var dbPromise;
-function openDB() {
-  if (dbPromise) {
-    return dbPromise;
-  }
-  dbPromise = new Promise((resolve, reject) => {
+function requestDB() {
+  return new Promise((resolve, reject) => {
     const request = indexedDB.open(dbConfig.name, dbConfig.version);
     request.onupgradeneeded = (event) => {
       dbConfig.onUpgrade(event.target.result);
     };
     request.onsuccess = (event) => resolve(event.target.result);
     request.onerror = (event) => reject(event.target.error);
+  });
+}
+
+function deleteDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(dbConfig.name);
+    request.onsuccess = resolve;
+    request.onblocked = resolve;
+    request.onerror = () => reject(request.error);
+  });
+}
+
+var dbPromise;
+function openDB() {
+  if (dbPromise) {
+    return dbPromise;
+  }
+  dbPromise = requestDB().catch(async (error) => {
+    // A newer build served on this origin left the database at a higher version; `open` refuses to
+    // downgrade (VersionError), which used to abort the whole render worker. The cache is disposable,
+    // so start it over.
+    if (error && error.name === "VersionError") {
+      console.warn(`gpu cache: ${error.message}; recreating ${dbConfig.name}`);
+      await deleteDB();
+      return requestDB();
+    }
+    throw error;
   });
   return dbPromise;
 }

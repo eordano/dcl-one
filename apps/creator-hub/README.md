@@ -314,7 +314,9 @@ The main workflow orchestrates all CI processes and runs on:
 4. **Drop Pre-release** - Create pre-release artifacts
 5. **Asset Packs Build** - Build, validate, and publish asset-packs package
 6. **Inspector Build** - Build and publish inspector package (depends on asset-packs)
-7. **Creator Hub Build** - Build and publish creator hub
+7. **Creator Hub Build** - Build the creator hub; publish it only on a release run
+
+A run on `main` publishes the installers only when the merged pull request has the `release:creator-hub` label, or when a manual run on `main` sets `release`. Every other run builds the unsigned test installers.
 
 ### Test Workflow (`tests.yml`)
 

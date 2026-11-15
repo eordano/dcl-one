@@ -4,6 +4,10 @@
 # bevy-explorer-ci-status composite action: Bevy Explorer / CI status (build, tests) and Bevy Explorer /
 # Benchmark (performance). Each writer's bot comment collapses into one.
 #
+# COMMENT=creator-hub writes the Creator Hub's comment instead, the same way: its own marker and
+# heading, and the sections desktop | inspector | asset-packs (the Creator Hub / CI jobs that
+# publish a test build of the pull request).
+#
 # The comment is keyed by the hidden <!-- bevy-explorer-ci-status --> marker and holds the $HEADER
 # heading plus one fenced block per section:
 #
@@ -20,8 +24,9 @@
 # duplicates (keeping the oldest), rewrites only its own section on that comment, then re-reads to
 # confirm the section landed and no duplicate slipped in, retrying otherwise.
 #
-# Environment: REPO (owner/name), PR_NUMBER, SECTION, and the body in SECTION_BODY or, for a body
-# too large to pass comfortably through the environment, in the file SECTION_BODY_FILE.
+# Environment: REPO (owner/name), PR_NUMBER, SECTION, COMMENT (bevy-explorer when unset), and the
+# body in SECTION_BODY or, for a body too large to pass comfortably through the environment, in
+# the file SECTION_BODY_FILE.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/retry.sh"
 
@@ -40,9 +45,9 @@ SECTION_BODY="${SECTION_BODY//$'\r'/}"
 # Truncation is fine for a status section that already links out to the full report.
 #
 # The cap is per section and blind to the others, so it only bounds the total if
-# (section count × CAP) stays under 65536 with headroom for the header and the fences. There are
-# 5 allowed sections (see below): 5 × 12000 = 60000, leaving about 5.5k. Re-derive this when a
-# section is added, or the ${#NEW_BODY} guard below is the only thing left between a big comment
+# (section count × CAP) stays under 65536 with headroom for the header and the fences. A comment
+# has at most 5 allowed sections (see below): 5 × 12000 = 60000, leaving about 5.5k. Re-derive
+# this when a section is added, or the ${#NEW_BODY} guard below is the only thing left between a big comment
 # and a 422.
 CAP=12000
 if [ "${#SECTION_BODY}" -gt "$CAP" ]; then
@@ -76,16 +81,32 @@ if [ "${#SECTION_BODY}" -gt "$CAP" ]; then
   SECTION_BODY="$TRUNCATED"
 fi
 
+# Each comment has its marker, its heading, its allowed sections, and the sections a fresh
+# comment starts with (SKELETON).
+case "${COMMENT:-bevy-explorer}" in
+  bevy-explorer)
+    MARKER="<!-- bevy-explorer-ci-status -->"
+    HEADER='### 🚦 Bevy Explorer CI'
+    SECTIONS='build tests performance automation inworld'
+    SKELETON='build tests performance'
+    ;;
+  creator-hub)
+    MARKER="<!-- creator-hub-test-builds -->"
+    HEADER='### 🧪 Creator Hub test builds'
+    SECTIONS='desktop inspector asset-packs'
+    SKELETON='desktop'
+    ;;
+  *) echo "::error::Unknown comment '${COMMENT:-}'."; exit 2 ;;
+esac
+
 # Fail fast on a section name outside the fence set: an unknown name would append a dead fence
 # to the shared comment and then wedge the survive check for 5 attempts, burning about 15 API
 # calls per write from then on.
-case "${SECTION:-}" in
-  build|tests|performance|automation|inworld) ;;
+case " $SECTIONS " in
+  *" ${SECTION:-} "*) ;;
   *) echo "::error::Unknown section '${SECTION:-}'."; exit 2 ;;
 esac
 
-MARKER="<!-- bevy-explorer-ci-status -->"
-HEADER='### 🚦 Bevy Explorer CI'
 BOT="github-actions[bot]"
 START="<!-- ci:${SECTION}:start -->"
 END="<!-- ci:${SECTION}:end -->"
@@ -99,6 +120,9 @@ section_default() {
     performance) printf '![Performance](https://img.shields.io/badge/Performance-Waiting-lightgrey?logo=speedtest&logoColor=white&style=for-the-badge)\n\n_Waiting for a passed CI run with the web app built: the benchmark then measures it against main in Chrome on the laptop fleet, and the report lands here._' ;;
     automation) printf '![Automation](https://img.shields.io/badge/Automation-Waiting-lightgrey?logo=github&logoColor=white&style=for-the-badge)\n\n_Waiting for the automation suite…_' ;;
     inworld) printf '![InWorld](https://img.shields.io/badge/InWorld-Waiting-lightgrey?logo=github&logoColor=white&style=for-the-badge)\n\n_Waiting for the InWorld suite…_' ;;
+    desktop) printf '![Desktop app](https://img.shields.io/badge/Desktop%%20app-Not%%20built-lightgrey?logo=electron&logoColor=white&style=for-the-badge)\n\n_To build the desktop app, add the `ci:desktop` label, then push or reopen._' ;;
+    inspector) printf '![Inspector](https://img.shields.io/badge/Inspector-Waiting-lightgrey?logo=npm&logoColor=white&style=for-the-badge)\n\n_Waiting for the inspector package…_' ;;
+    asset-packs) printf '![Asset packs](https://img.shields.io/badge/Asset%%20packs-Waiting-lightgrey?logo=npm&logoColor=white&style=for-the-badge)\n\n_Waiting for the asset packs package…_' ;;
   esac
 }
 
@@ -108,12 +132,14 @@ wrap_section() { printf '<!-- ci:%s:start -->\n%s\n<!-- ci:%s:end -->' "$1" "$2"
 # A fresh comment with every always-present section defaulted to waiting. automation and inworld
 # are deliberately absent: no suite writes them yet, and a permanent waiting row on every pull
 # request would be noise. The append-missing-fence path below adds one the first time it reports.
+# The Creator Hub's package sections are absent the same way: a pull request that changes no
+# package never writes them.
 skeleton() {
-  printf '%s\n%s\n\n%s\n\n%s\n\n%s\n' \
-    "$MARKER" "$HEADER" \
-    "$(wrap_section build "$(section_default build)")" \
-    "$(wrap_section tests "$(section_default tests)")" \
-    "$(wrap_section performance "$(section_default performance)")"
+  local section
+  printf '%s\n%s\n' "$MARKER" "$HEADER"
+  for section in $SKELETON; do
+    printf '\n%s\n' "$(wrap_section "$section" "$(section_default "$section")")"
+  done
 }
 
 # Emit the section body for this run to a file so awk can splice it verbatim, free of shell
@@ -122,7 +148,7 @@ skeleton() {
 # open or close a section fence, or it would scramble the comment structure and wedge the survive
 # check below.
 printf '%s\n' "$SECTION_BODY" \
-  | grep -vE '^[[:space:]]*<!-- (ci:[^>]*|bevy-explorer-ci-status) -->[[:space:]]*$' > section_body.md || true
+  | grep -vE '^[[:space:]]*<!-- (ci:[^>]*|bevy-explorer-ci-status|creator-hub-test-builds) -->[[:space:]]*$' > section_body.md || true
 WANT="$(cat section_body.md)"
 
 # Replace the content between START and END in $1 with section_body.md.

@@ -1,0 +1,81 @@
+name: Creator Hub test builds comment
+description: >-
+  Write one section (desktop | inspector | asset-packs) of the pull request's "Creator Hub test
+  builds" comment: the build and how to get it. The comment is one per pull request, and
+  each writer replaces only its section (.github/actions/bevy-explorer-ci-status keeps it). The
+  caller checks out this folder and that one.
+inputs:
+  pr-number:
+    description: Pull request number to comment on.
+    required: true
+  section:
+    description: 'Which section to write: one of desktop, inspector, asset-packs.'
+    required: true
+  github-token:
+    description: Token with pull-requests write.
+    required: true
+  base-url:
+    description: The base URL of the bucket that holds the pull request's builds.
+    required: true
+  package-key:
+    description: 'inspector and asset-packs: the bucket key of the package tarball.'
+    required: false
+    default: ''
+  preview-path:
+    description: 'inspector: the bucket path of the hosted preview.'
+    required: false
+    default: ''
+  version:
+    description: The version of the build. For desktop, the version in the installers' file names.
+    required: true
+  branch:
+    description: 'desktop: the pull request''s branch, the bucket folder of its installers.'
+    required: false
+    default: ''
+  macos:
+    description: 'desktop: `uploaded` when the macOS build is in the bucket.'
+    required: false
+    default: ''
+  windows:
+    description: 'desktop: `uploaded` when the Windows build is in the bucket.'
+    required: false
+    default: ''
+  macos-seconds:
+    description: 'desktop: how long the macOS build took, in seconds.'
+    required: false
+    default: ''
+  windows-seconds:
+    description: 'desktop: how long the Windows build took, in seconds.'
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Write the section
+      shell: bash
+      env:
+        SECTION: ${{ inputs.section }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        BASE_URL: ${{ inputs.base-url }}
+        PACKAGE_KEY: ${{ inputs.package-key }}
+        PREVIEW_PATH: ${{ inputs.preview-path }}
+        VERSION: ${{ inputs.version }}
+        BRANCH: ${{ inputs.branch }}
+        MACOS: ${{ inputs.macos }}
+        WINDOWS: ${{ inputs.windows }}
+        MACOS_SECONDS: ${{ inputs.macos-seconds }}
+        WINDOWS_SECONDS: ${{ inputs.windows-seconds }}
+      run: bash "$GITHUB_ACTION_PATH/section.sh" > "$RUNNER_TEMP/creator-hub-section.md"
+    - name: Upsert the comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        COMMENT: creator-hub
+        SECTION: ${{ inputs.section }}
+        SECTION_BODY_FILE: ${{ runner.temp }}/creator-hub-section.md
+      run: bash "$GITHUB_ACTION_PATH/../bevy-explorer-ci-status/upsert-ci-status.sh"

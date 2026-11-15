@@ -15,7 +15,9 @@ every run. A build script that watches a folder reads the folder's own time too.
                         checkout's time, so Cargo rebuilds what depends on it
 
 A folder's tree id changes when any file below it changes, so a watched folder with one
-changed file keeps the checkout's time. Without a manifest restore changes nothing.
+changed file keeps the checkout's time. A file that a step changed after the checkout is
+not the content its blob id names: it and the folders above it are never recorded and
+never get a recorded time. Without a manifest restore changes nothing.
 """
 import argparse
 import json
@@ -30,7 +32,7 @@ SECOND = 10**9
 
 
 def entries(root):
-    """{path: object id} for every tracked file and folder of the checked-out commit."""
+    """{path: object id} for every tracked file and folder that still holds the checked-out commit's content."""
     out = subprocess.check_output(['git', 'ls-tree', '-r', '-t', '-z', 'HEAD'], cwd=root)
     result = {}
     for record in filter(None, out.split(b'\0')):
@@ -39,6 +41,12 @@ def entries(root):
         # A submodule entry is a commit, not content of this checkout; a link's time is its own.
         if kind in (b'blob', b'tree') and mode != b'120000':
             result[path.decode('utf-8')] = oid.decode('ascii')
+    changed = subprocess.check_output(['git', 'diff', '--name-only', '-z', 'HEAD'], cwd=root)
+    for path in filter(None, changed.split(b'\0')):
+        path = path.decode('utf-8')
+        while path:
+            result.pop(path, None)
+            path = path.rpartition('/')[0]
     return result
 
 

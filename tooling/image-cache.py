@@ -13,7 +13,11 @@ PACKAGES = {
     'catalyst': ('catalyst-deps', 'catalyst-vendor'),
     'sites': ('sites-deps', 'sites-runtime-deps', 'sites-toolchain'),
     'apis': ('catalyst',),
+    'sites-app': ('sites-app', 'sites-app-polygon-credits'),
 }
+# Compiled runtime closures restore under exact identities only; a stale entry
+# would not spare a single build step.
+RUNTIME = ('apis', 'sites-app')
 
 
 def cache_plan(arch, event, ref, derivations):
@@ -33,7 +37,7 @@ def cache_plan(arch, event, ref, derivations):
         result[f'{group}-key'] = f'images-v2-{scope}-{suffix}'
         result[f'{group}-main-key'] = f'images-v2-main-{suffix}'
         result[f'{group}-main-prefix'] = (
-            f'images-v2-main-{group}-{arch}-' if pr_scope and group != 'apis' else '')
+            f'images-v2-main-{group}-{arch}-' if pr_scope and group not in RUNTIME else '')
     return result
 
 

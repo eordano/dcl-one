@@ -23,7 +23,11 @@ Sites bundles our Bevy web build under `/play/`; no other engine is used.
 - `--production` imports only a fully successful main CI artifact and rejects `--from-build`.
 - Dev and PR images may import once the web job uploads its artifact, or `--from-build` a local `make bevy-web`.
 - A PR that changes no engine input (engine source, protos, HUD, build scripts) takes the newest main build that uploaded its web app and has not failed, validated against the commit that built it (`--trust-inputs` in the PR image build); a PR that does gets its own Bevy run and waits for that exact build. The bindings must match the tree either way.
-- `PLAY_WEB_DIR` is a build input only.
+- `PLAY_WEB_DIR` is a build input only. The imported files must carry no Nix store
+  references: a WASM compiled inside a Nix shell embeds its toolchain's store paths, and
+  imported from the store those paths would add the Rust closure (4 GiB) to the Sites
+  image. The import refuses such an artifact; build it outside the store or with
+  `--remap-path-prefix`.
 - Image CI runs `--prepare-production RECEIPT`, then `--verify-production RECEIPT` before publishing.
 - Rerun both PR workflows on the same merge SHA.
 - Expired artifacts (main 90 days, PRs 7): `gh workflow run bevy-explorer-ci.yml --ref main`.
@@ -50,8 +54,15 @@ python3 tooling/image-smoke.py
   compiles, the build builds the Sites dependencies, so those failures report
   within minutes.
 - Image caches separate Catalyst dependencies, Sites dependencies/toolchain and
-  the compiled API runtime closure, keyed by exact Nix derivation identities and
-  architecture. Container revision labels are still rebuilt for each commit.
+  the compiled API and Sites app runtime closures, keyed by exact Nix derivation
+  identities and architecture. The Sites app (`sites-app`) is the compiled server and
+  client with their production dependencies; the Explorer build and the docs media are
+  assembled beside it as their own store paths, so neither changes its identity or its
+  image layer. Its cache entry also holds the app of `image-sites-polygon-credits`
+  (`sites-app-polygon-credits`), so an exact hit leaves neither Sites build to compile.
+  A compiled closure restored under its exact identity skips that
+  package's dependency restore, import and toolchain build: nothing is left to compile.
+  Container revision labels are still rebuilt for each commit.
 - Successful main builds save trusted caches. PR builds save only their explicit
   PR namespace and merge-ref scope after image smoke tests. PR dependency caches
   may fall back from an exact main identity to the newest main entry of the group;
@@ -59,7 +70,7 @@ python3 tooling/image-smoke.py
   A stale Catalyst hit reuses vendored sources; changed dependency derivations still
   compile from scratch. The fallback downloads the whole dependency archive.
   Main and tag builds require exact main identities and never select PR namespaces.
-  The APIs runtime cache requires an exact identity for every event.
+  The APIs and Sites app runtime caches require an exact identity for every event.
 - A Sites cache miss rebuilds the pnpm dependency sets; the Node toolchain
   substitutes from cache.nixos.org on both architectures.
   Fully cold ARM64 main/tag dependency builds have not been timed. They retain the
@@ -71,13 +82,14 @@ python3 tooling/image-smoke.py
   the runner starts with less than 50 GiB free. Smaller hosted disks still need
   that cleanup; larger runners skip it. Jobs log disk space before and after
   this check, memory before checkout, and disk space after cache import and image
-  loads. After the Bevy artifact import, the APIs and Sites images build sequentially
-  with `--impure` evaluation.
+  loads. After the Bevy artifact import, one `--impure` evaluation builds the three images;
+  the APIs archive is written while Sites compiles, and it loads into Docker beside
+  the Sites archives.
   Cache keys and export (`.`) and image builds (`git+file:.?lfs=1`) must resolve the
-  same Catalyst derivation. The Catalyst fileset includes `library/`, including
-  LFS-tracked files outside the checkout's fetch filter. Before API export, the job
-  evaluates both references, using the image build's `--impure` mode for its ref.
-  A mismatch or evaluation failure stops export before a second compilation.
+  same Catalyst and Sites app derivations. The Catalyst fileset includes `library/`,
+  including LFS-tracked files outside the checkout's fetch filter. Before each export,
+  the job evaluates both references, using the image build's `--impure` mode for its
+  ref. A mismatch or evaluation failure stops export before a second compilation.
 
 - Closing a PR removes caches for its merge ref through a workflow that never
   checks out PR code. An hourly trusted sweep also removes uploads that finish

@@ -46,6 +46,8 @@ docker run --rm --network dcl-one --read-only --cap-drop ALL --security-opt no-n
 | `GATEWAY_SITES_UPSTREAMS` | `sites:5212` | Sites destinations |
 | `GATEWAY_ADMIN_CIDRS` | empty | Operator networks; empty denies all |
 | `GATEWAY_TRUSTED_PROXY_CIDRS` | empty | Proxies trusted for client IP and scheme |
+| `GATEWAY_READ_RATE` | `100` | Requests per second per client outside the content, storage, worlds and deploy zones |
+| `GATEWAY_READ_BURST` | `300` | Burst allowed above `GATEWAY_READ_RATE` (a web explorer boot is ~150 requests in its first second) |
 | `GATEWAY_TRUSTED_SYNC_PEER_IPS` | empty | Sync peers exempt from the `read` and `content` request limits; list the API's `TRUSTED_SYNC_PEER_IPS` |
 | `GATEWAY_STORAGE_TRUSTED_CIDRS` | empty | Client networks (such as scene-host egress) with a higher, bounded storage budget |
 | `GATEWAY_RESOLVERS` | resolv.conf | DNS servers |
@@ -56,7 +58,7 @@ docker run --rm --network dcl-one --read-only --cap-drop ALL --security-opt no-n
 - Never trust arbitrary client networks as proxies; a trusted proxy must set `X-Forwarded-For` and `X-Forwarded-Proto`.
 - The gateway overwrites client IP, forwarding, `X-Catalyst-Admin-Gate` and `x-original-path` headers and removes `True-Client-IP`.
 - `/internal/pulse` and `/metrics` are not public; internal callers use the APIs' private address.
-- Limits: bodies 1 MiB (content deployments 248, worlds deployments 360, world settings 12, world storage 529,408 bytes (the service's largest body plus slack), builder 21, reports 11); 30 r/s per client (content 100, Segment webhooks under `/events-notifier` 300 with a burst of 600, deployments 5 with a burst of 200 for content and 4 for worlds); 10 deployment uploads in flight per client, then 429; `%3F` in paths returns 400, except in a `/world-storage` path forwarded unrewritten.
+- Limits: bodies 1 MiB (content deployments 248, worlds deployments 360, world settings 12, world storage 529,408 bytes (the service's largest body plus slack), builder 21, reports 11); 100 r/s per client with a burst of 300 (`GATEWAY_READ_RATE`, `GATEWAY_READ_BURST`; content 100, worlds writes and admin routes 30, Segment webhooks under `/events-notifier` 300 with a burst of 600, deployments 5 with a burst of 200 for content and 4 for worlds); 10 deployment uploads in flight per client, then 429; `%3F` in paths returns 400, except in a `/world-storage` path forwarded unrewritten.
 - World storage keys: a `storage.<domain>`, `world-storage.<domain>` or `gateway.<domain>/storage` request is forwarded from the path as the client sent it, under `/world-storage`, so `%2F` and `%3F` in a key reach the service; a path with dot or empty segments takes the normalized rewrite instead. The storage body cap answers the service's JSON 413.
 - `/world-storage` (after host rewriting): reads 100 r/s per client (burst 400), writes also 30 r/s (burst 60). Each client address in `GATEWAY_STORAGE_TRUSTED_CIDRS` gets a separate 1000 r/s budget (burst 1000); the allowance is per address, not per CIDR, and never disables limiting. Startup rejects overlaps with `GATEWAY_TRUSTED_PROXY_CIDRS`.
 

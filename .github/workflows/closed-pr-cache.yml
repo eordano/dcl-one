@@ -60,7 +60,7 @@ jobs:
                                  + r'-(Linux|macOS)-(X64|ARM64)-'
                                  r'|^v0-rust-.+?-(Linux|Darwin|Windows_NT)-(x64|arm64)-')
           image_namespace = re.compile(
-              r'images-v2-(main|pr-[1-9][0-9]*)-(catalyst|sites|apis)-(amd64|arm64)-[0-9a-f]{64}')
+              r'images-v2-(main|pr-[1-9][0-9]*)-(catalyst|sites|apis|sites-app)-(amd64|arm64)-[0-9a-f]{64}')
           for cache in caches:
               cache_ref = cache.get('ref', '')
               if targeted:

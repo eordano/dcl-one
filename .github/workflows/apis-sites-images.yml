@@ -113,7 +113,42 @@ jobs:
       - name: Identify exact Nix cache inputs
         id: cache-keys
         run: python3 tooling/image-cache.py keys --arch '${{ matrix.arch }}'
+      - name: Restore the compiled APIs package
+        id: apis-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/apis-nix
+          # Exact source/compiler/flags identity; only the runtime closure is
+          # cached, not a new multi-gigabyte Cargo target tree on each commit.
+          key: ${{ steps.cache-keys.outputs.apis-key }}
+          restore-keys: ${{ steps.cache-keys.outputs.apis-main-key }}
+      - name: Restore the compiled Sites app
+        id: sites-app-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/sites-app-nix
+          # The compiled server and client of both Sites builds with their production
+          # dependencies. The Explorer build and the docs media are assembled beside
+          # them, not inside them.
+          key: ${{ steps.cache-keys.outputs.sites-app-key }}
+          restore-keys: ${{ steps.cache-keys.outputs.sites-app-main-key }}
+      - name: Decide which dependency caches this build still needs
+        id: compiled
+        env:
+          APIS: ${{ steps.cache-keys.outputs.apis-key }} ${{ steps.apis-cache.outputs.cache-matched-key }}
+          SITES_APP: ${{ steps.cache-keys.outputs.sites-app-key }} ${{ steps.sites-app-cache.outputs.cache-matched-key }}
+        run: |
+          # A compiled closure restored under its exact derivation digest leaves Nix nothing
+          # to build for that package, so its dependency archive would only cost transfer time.
+          exact() { [ -n "$2" ] && [ "${2##*-}" = "${1##*-}" ] && echo true || echo false; }
+          for group in APIS SITES_APP; do
+            read -r primary matched <<< "${!group}"
+            name=${group,,}
+            echo "${name//_/-}=$(exact "$primary" "$matched")" >> "$GITHUB_OUTPUT"
+          done
+          cat "$GITHUB_OUTPUT"
       - name: Restore Catalyst dependency cache
+        if: steps.compiled.outputs.apis != 'true'
         id: catalyst-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -125,6 +160,7 @@ jobs:
             ${{ steps.cache-keys.outputs.catalyst-main-key }}
             ${{ steps.cache-keys.outputs.catalyst-main-prefix }}
       - name: Restore Sites dependency cache
+        if: steps.compiled.outputs.sites-app != 'true'
         id: sites-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -133,32 +169,31 @@ jobs:
           restore-keys: |
             ${{ steps.cache-keys.outputs.sites-main-key }}
             ${{ steps.cache-keys.outputs.sites-main-prefix }}
-      - name: Restore the compiled APIs package
-        id: apis-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/apis-nix
-          # Exact source/compiler/flags identity; only the runtime closure is
-          # cached, not a new multi-gigabyte Cargo target tree on each commit.
-          key: ${{ steps.cache-keys.outputs.apis-key }}
-          restore-keys: ${{ steps.cache-keys.outputs.apis-main-key }}
       - name: Decide which caches a successful build saves
         id: cache-saves
         env:
           CATALYST: ${{ steps.cache-keys.outputs.catalyst-key }} ${{ steps.catalyst-cache.outputs.cache-matched-key }}
           SITES: ${{ steps.cache-keys.outputs.sites-key }} ${{ steps.sites-cache.outputs.cache-matched-key }}
           APIS: ${{ steps.cache-keys.outputs.apis-key }} ${{ steps.apis-cache.outputs.cache-matched-key }}
+          SITES_APP: ${{ steps.cache-keys.outputs.sites-app-key }} ${{ steps.sites-app-cache.outputs.cache-matched-key }}
+          # A dependency archive skipped for an exact compiled hit was neither restored nor built.
+          SKIPPED: ${{ steps.compiled.outputs.apis == 'true' && 'CATALYST' || '' }} ${{ steps.compiled.outputs.sites-app == 'true' && 'SITES' || '' }}
         run: |
           # An entry is saved when the restored one, if any, is not this exact derivation set.
           saves() { [ "${2##*-}" != "${1##*-}" ] && echo true || echo false; }
-          for group in CATALYST SITES APIS; do
+          for group in CATALYST SITES APIS SITES_APP; do
             read -r primary matched <<< "${!group}"
-            echo "${group,,}=$(saves "$primary" "$matched")" >> "$GITHUB_OUTPUT"
+            case " $SKIPPED " in
+              *" $group "*) save=false ;;
+              *) save=$(saves "$primary" "$matched") ;;
+            esac
+            name=${group,,}
+            echo "${name//_/-}=$save" >> "$GITHUB_OUTPUT"
           done
           cat "$GITHUB_OUTPUT"
       - name: Import cached store paths
         run: |
-          for cache in .cache/catalyst-nix .cache/sites-nix .cache/apis-nix; do
+          for cache in .cache/catalyst-nix .cache/sites-nix .cache/apis-nix .cache/sites-app-nix; do
             if [ -f "$cache/nix-cache-info" ]; then
               # Import canonical names; --all can enumerate hash-x aliases.
               shopt -s nullglob
@@ -176,6 +211,7 @@ jobs:
           done
           df -h /
       - name: Build the complete Sites toolchain and dependencies
+        if: steps.compiled.outputs.sites-app != 'true'
         # runtime-deps, unlike the fixed-output sites-deps, rebuilds when the lockfile changes.
         run: nix build .#sites-toolchain .#sites-runtime-deps --no-link -L
       - name: Import the matching tested Bevy build for Sites
@@ -193,17 +229,19 @@ jobs:
         env:
           PLAY_ALLOW_UNOPTIMIZED: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: |
-          apis=$(nix build --impure 'git+file:.?lfs=1#image-apis' --no-link --print-out-paths -L)
-          sites=$(nix build --impure 'git+file:.?lfs=1#image-sites' --no-link --print-out-paths -L)
-          # The Sites build for dcl-one's Polygon CreditsManager (infra/containers/images.nix).
-          sites_credits=$(nix build --impure 'git+file:.?lfs=1#image-sites-polygon-credits' --no-link --print-out-paths -L)
-          images="$apis $sites $sites_credits"
+          # One evaluation and one build graph: the APIs image is archived while Sites
+          # compiles, and its archive loads into Docker beside the Sites ones. The third image
+          # is the Sites build for dcl-one's Polygon CreditsManager (infra/containers/images.nix).
+          images=$(nix build --impure 'git+file:.?lfs=1#image-apis' 'git+file:.?lfs=1#image-sites' \
+            'git+file:.?lfs=1#image-sites-polygon-credits' --no-link --print-out-paths -L)
           for image in $images; do
             cp -L "$image" ".cache/images/${image##*-foundation-}"
           done
-          docker load --input .cache/images/apis.tar.gz
+          docker load --input .cache/images/apis.tar.gz &
+          apis_load=$!
           docker load --input .cache/images/sites.tar.gz
           docker load --input .cache/images/sites-polygon-credits.tar.gz
+          wait "$apis_load"
           df -h /
       - name: Test the exact images before publication
         run: |
@@ -276,6 +314,27 @@ jobs:
         with:
           path: .cache/apis-nix
           key: ${{ steps.cache-keys.outputs.apis-key }}
+      - name: Export the tested Sites app
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.sites-app == 'true'
+        run: |
+          cache_drv=$(nix eval --raw .#sites-app.drvPath)
+          image_drv=$(nix eval --raw --impure 'git+file:.?lfs=1#sites-app.drvPath')
+          if [ "$cache_drv" != "$image_drv" ]; then
+            echo '::error::Sites app derivation differs between cache and image refs'
+            exit 1
+          fi
+          mkdir -p .cache/sites-app-nix
+          # Runtime closures only: both compiled apps, their production dependencies and Node.
+          # The Polygon credits app differs from the compared one by build environment alone.
+          nix copy --to "file://$PWD/.cache/sites-app-nix?compression=zstd&compression-level=3" \
+            .#sites-app .#sites-app-polygon-credits
+          du -sh .cache/sites-app-nix
+      - name: Save the tested Sites app
+        if: steps.cache-writer.outputs.allowed == 'true' && steps.cache-saves.outputs.sites-app == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/sites-app-nix
+          key: ${{ steps.cache-keys.outputs.sites-app-key }}
       - name: Upload tested images
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

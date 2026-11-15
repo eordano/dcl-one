@@ -9,8 +9,18 @@ name: Creator Hub / CI
 #
 # Pull requests build the desktop app (macOS and Windows) only with the `ci:desktop` label: add the
 # label, then push or reopen. Main and manual runs always build it.
+#
+# A run publishes the installers as a pre-release only on main, and only when it is asked to: a
+# push whose pull request has the `release:creator-hub` label, or a manual run with `release` set.
+# Every other run builds the unsigned test installers and publishes nothing, so it needs no signing
+# secret. The npm packages do not use the label: they publish on every push to main.
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish the installers as a pre-release (main only)
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -34,8 +44,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       creator-hub: ${{ steps.diff.outputs.creator-hub }}
+      release: ${{ steps.release.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
@@ -61,6 +73,27 @@ jobs:
           else
             echo "creator-hub=false" >> "$GITHUB_OUTPUT"
           fi
+      # A push is one merged pull request, so its labels are read from the pushed commit. The
+      # labels are read when the job runs: a run started again after the label is added releases.
+      - name: Does this run release the installers?
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL: ${{ inputs.release }}
+        run: |
+          release=false
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+              release=$([ "$MANUAL" = true ] && echo true || echo false)
+            elif [ "$GITHUB_EVENT_NAME" = push ]; then
+              release=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+                --jq 'any(.[]; .merged_at != null and any(.labels[]; .name == "release:creator-hub"))')
+              if [ "$release" != true ]; then
+                echo "::notice::This run does not publish the installers. To publish them, add the release:creator-hub label to a pull request before it merges, or start this workflow on main with release set."
+              fi
+            fi
+          fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
   build:
     needs: [ changes ]
     if: needs.changes.outputs.creator-hub == 'true'
@@ -84,13 +117,13 @@ jobs:
       E2E_PRIVATE_KEY: ${{ secrets.E2E_PRIVATE_KEY }}
   drop_pre_release:
     name: drop pre-release
-    needs: [ lint, typechecking, tests ]
+    needs: [ changes, lint, typechecking, tests ]
     uses: ./.github/workflows/creator-hub-drop.yml
     secrets:
       CREATOR_HUB_RELEASES_APP_PRIVATE_KEY: ${{ secrets.CREATOR_HUB_RELEASES_APP_PRIVATE_KEY }}
     with:
-      # dry-run == false only if we are on main branch and the event is a push or workflow_dispatch
-      dry-run: ${{ !((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == 'main') }}
+      # dry-run == false only on a release run (`changes` decides)
+      dry-run: ${{ needs.changes.outputs.release != 'true' }}
       # Before the build only unfinished pre-releases go (no `creator-hub@X.Y.Z` tag here), so this
       # run can rebuild that version. A finished one, possibly awaiting promote approval, stays.
       unfinished-only: true
@@ -114,7 +147,7 @@ jobs:
       asset_packs_version: ${{ needs.asset-packs.outputs.version }}
       asset_packs_changed: ${{ needs.asset-packs.outputs.changed == 'true' }}
   creator-hub:
-    needs: [ inspector ]
+    needs: [ changes, inspector ]
     # The macOS and Windows builds, and the test builds they attach to a pull request.
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop')
     uses: ./.github/workflows/creator-hub-desktop.yml
@@ -138,8 +171,8 @@ jobs:
       VITE_SEGMENT_INSPECTOR_API_KEY: ${{ secrets.VITE_SEGMENT_INSPECTOR_API_KEY }}
       WINDOWS_CREDENTIAL_ID_SIGNER: ${{ secrets.WINDOWS_CREDENTIAL_ID_SIGNER }}
     with:
-      # dry-run == false only if we are on main branch and the event is a push or workflow_dispatch
-      dry-run: ${{ !((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == 'main') }}
+      # dry-run == false only on a release run (`changes` decides)
+      dry-run: ${{ needs.changes.outputs.release != 'true' }}
       inspector_s3_bucket_key: ${{ needs.inspector.outputs.s3_bucket_key }}
       inspector_version: ${{ needs.inspector.outputs.version }}
       inspector_changed: ${{ needs.inspector.outputs.changed == 'true' }}
@@ -147,12 +180,12 @@ jobs:
   # that fails part-way leaves the previous pre-release in place, still promotable.
   prune_pre_releases:
     name: prune pre-releases
-    needs: [ creator-hub ]
+    needs: [ changes, creator-hub ]
     uses: ./.github/workflows/creator-hub-drop.yml
     secrets:
       CREATOR_HUB_RELEASES_APP_PRIVATE_KEY: ${{ secrets.CREATOR_HUB_RELEASES_APP_PRIVATE_KEY }}
     with:
-      dry-run: ${{ !((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == 'main') }}
+      dry-run: ${{ needs.changes.outputs.release != 'true' }}
       keep: ${{ needs.creator-hub.outputs.version }}
   # The one required check. It stands for lint, typecheck, unit tests, both e2e suites and the
   # macOS and Windows builds (the checks decentraland/creator-hub required), plus the package jobs

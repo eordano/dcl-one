@@ -29,6 +29,7 @@ monitor +9. An occupied saved port fails startup.
 | `logs`, `restart <service>` | After lockfile changes restart `web-install`, then `sites` |
 | `up`, `down` | Start or attach, stop (`--postgres-only`) |
 | `profile mirror\|testnet\|offline` | Switch profile while stopped |
+| `origin https://host[:port] [--cert … --key …]`, `origin local` | Serve behind a TLS front while stopped (below) |
 | `service install\|uninstall` | Login service (WSL: `systemd=true`) |
 | `trades-snapshot <file>` | Snapshot for `FOUNDATION_DEV_TRADES_SNAPSHOT` |
 | `env` | App URLs, `FOUNDATION_DEV_TEST_DATABASE_URL`, `FOUNDATION_DEV_STACK_PROFILE` |
@@ -117,6 +118,33 @@ gh workflow run bevy-explorer-ci.yml --ref main   # no matching or expired artif
 See [production rules](../infra/containers/README.md#sites-explorer-build-input).
 `/play/app.html?mock=1` runs the HUD without the WebGPU engine.
 
+## Serving over HTTPS
+
+The stack listens on loopback and advertises loopback. To reach it as other
+browsers and the native Explorer do, put a TLS front on its own origin:
+
+```sh
+FOUNDATION_DEV_PUBLIC_ORIGIN=https://dev.example.test:5443 \
+FOUNDATION_DEV_TLS_CERT=~/certs/dev.example.test.pem FOUNDATION_DEV_TLS_KEY=~/certs/dev.example.test-key.pem \
+foundation-dev up        # first startup; later: foundation-dev origin … while stopped
+```
+
+The front terminates TLS on the origin's port and forwards, with WebSocket
+upgrades: `/ws` to the API (+0), `/rtc` to LiveKit (+4), everything else to
+Sites (+2), whose dev server proxies the API routes and serves `/play`. The
+realm then advertises the origin (`PUBLIC_URL`, the comms adapter, LiveKit's
+client URL), and Vite accepts the origin's host and its subdomains. Pulse's WebTransport is UDP,
+which the front cannot carry: the web Explorer dials the page's host on the
+origin's port (7743 when the origin names none), so Pulse listens there on every
+interface, presenting the given certificate and key (mkcert, or the front's
+own). Without them it presents its self-signed certificate for the host, and
+`status` prints the Chrome flags. `foundation-dev env` adds
+`FOUNDATION_DEV_PUBLIC_URL`. The API trusts the forwarded client address from
+the front, its loopback peer (`HTTP_TRUSTED_PROXY_CIDRS`, see
+[the gateway](../infra/gateway/README.md)), so the `/contents` rate limit and the
+deploy and referral quotas count per client; a front that drops
+`X-Forwarded-For` leaves every client sharing one bucket.
+
 ## Validation
 
 ```sh
@@ -150,10 +178,12 @@ the Rust job goes on that list in the change that adds it; pushes to `main`
 always run the Rust tests. Two more labels work the same way:
 `ci:desktop` builds the Creator Hub desktop app on a PR and attaches its test
 builds, and `ci:preview` publishes the Explorer web preview that the CI status
-comment links. A draft PR does not run the Explorer jobs that use larger runners
-(the test suite, the headless smoke test and the web build); they start when
-the PR is marked ready for review, or on the next push with the `ci:engine`
-label (`tooling/bevy-ci.py`). The smoke job restores the newest `main` build of the
-API and gives each unchanged file the time it had in that build
-(`tooling/cargo-mtimes.py`), so Cargo compiles only the crates that a changed
-file reaches.
+comment links. `release:creator-hub` is read after the merge: the push to
+`main` publishes the Creator Hub installers as a pre-release only when its PR
+has the label. A draft PR does not run the Explorer test suite and the headless
+smoke test; they start when the PR is marked ready for review, or on the next
+push with the `ci:engine` label (`tooling/bevy-ci.py`). A draft still builds
+the web engine, because the smoke job and the images need it. The smoke job
+restores the newest `main` build of the API and gives each unchanged file the
+time it had in that build (`tooling/cargo-mtimes.py`), so Cargo compiles only
+the crates that a changed file reaches.

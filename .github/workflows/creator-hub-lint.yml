@@ -19,6 +19,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the test builds comment script
+        working-directory: .
+        run: bash .github/actions/creator-hub-test-builds/test-section.sh
       - uses: ./.github/actions/creator-hub-setup
         id: setup
 

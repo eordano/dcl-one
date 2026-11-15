@@ -76,4 +76,6 @@ in {
         "org.decentraland.shop.credits-manager" = sitesPolygonCredits.shopSettlement.creditsManager;
       };
     });
+  # Its compiled app, saved with the plain one in the `sites-app` image cache (tooling/image-cache.py).
+  sites-app-polygon-credits = sitesPolygonCredits.app;
 }

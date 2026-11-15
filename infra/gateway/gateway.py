@@ -62,6 +62,12 @@ def words(value):
     return [word for word in re.split(r"[\s,]+", value.strip()) if word]
 
 
+def count(value, name):
+    if not re.fullmatch(r"[1-9][0-9]{0,5}", value.strip()):
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
+
+
 def networks(value):
     result = []
     for word in words(value):
@@ -127,8 +133,15 @@ def settings(env, resolv_conf="/etc/resolv.conf"):
            for proxy in trusted for caller in storage_trusted
            if ipaddress.ip_network(proxy).version == ipaddress.ip_network(caller).version):
         raise ValueError("GATEWAY_STORAGE_TRUSTED_CIDRS must not overlap GATEWAY_TRUSTED_PROXY_CIDRS")
+    # Per-client budget for everything outside the content, storage, worlds and deploy zones. A web
+    # explorer boot is about 150 same-origin requests in its first second (shell, engine
+    # modules for every worker, profile, realm), so the defaults let one boot through and
+    # still bound a single address.
+    read_rate = count(env.get("GATEWAY_READ_RATE", "100"), "GATEWAY_READ_RATE")
+    read_burst = count(env.get("GATEWAY_READ_BURST", "300"), "GATEWAY_READ_BURST")
     return {
         "domain": domain, "hosts": aliases, "resolvers": " ".join(resolvers),
+        "read_rate": read_rate, "read_burst": read_burst,
         "apis": [upstream(value) for value in words(env.get("GATEWAY_APIS_UPSTREAMS", "apis:5210"))],
         "sites": [upstream(value) for value in words(env.get("GATEWAY_SITES_UPSTREAMS", "sites:5212"))],
         "admins": networks(env.get("GATEWAY_ADMIN_CIDRS", "")),
@@ -174,6 +187,7 @@ def render(table, cfg, mime):
                        if target else f'"~^{name}:" "";')
     apex_hosts = " ".join(f'{host} "";' for host in [cfg["domain"], *cfg["hosts"]])
     domain_names = " ".join(dict.fromkeys([cfg["domain"], "~^[a-z0-9-]+\\." + domain + "$", *cfg["hosts"]]))
+    read_rate, read_burst = cfg["read_rate"], cfg["read_burst"]
     admin_geo = " ".join(f'{net} "admitted";' for net in cfg["admins"])
     trusted_geo = " ".join(f"{net} 1;" for net in cfg["trusted"])
     sync_peer_geo = " ".join(f"{net} 1;" for net in cfg["sync_peers"])
@@ -462,7 +476,7 @@ http {{
     limit_req_zone $storage_write_key zone=storage_write:10m rate=30r/s;
     limit_req_zone $storage_trusted_key zone=storage_trusted:10m rate=1000r/s;
     # Requests with an empty key are not counted: worlds reads are not limited, while
-    # writes and the admin routes (admin networks only) keep the read zone's rate per address.
+    # writes and the admin routes (admin networks only) get 30 r/s per address.
     map "$request_method:$uri" $worlds_limit_key {{
         default $binary_remote_addr;
         "~^[^:]+:/worlds-content-server/(admin|gc|reprocess-ab)(/|$)" $binary_remote_addr;
@@ -470,7 +484,7 @@ http {{
     }}
     limit_req_zone $worlds_limit_key zone=worlds:10m rate=30r/s;
     limit_conn_zone $worlds_limit_key zone=worlds_uploads:10m;
-    limit_req_zone $binary_remote_addr zone=read:10m rate=30r/s;
+    limit_req_zone $binary_remote_addr zone=read:10m rate={read_rate}r/s;
     limit_req_zone $binary_remote_addr zone=webhook:10m rate={WEBHOOK_RATE}r/s;
     limit_req_zone $content_limit_key zone=content:10m rate=100r/s;
     limit_req_zone $storage_limit_key zone=storage:10m rate=100r/s;
@@ -511,7 +525,7 @@ http {{
         if ($internal_path) {{ return 404; }}
         if ($operator_denied) {{ return 403; }}
         client_max_body_size 1m;
-        limit_req zone=read burst=60 nodelay;
+        limit_req zone=read burst={read_burst} nodelay;
         {locations}
     }}
 }}

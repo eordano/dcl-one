@@ -201,3 +201,22 @@ def eval_product(term):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadRateLimitTest(unittest.TestCase):
+    def test_defaults_let_one_explorer_boot_through(self):
+        text = render()
+        self.assertIn("limit_req_zone $binary_remote_addr zone=read:10m rate=100r/s;", text)
+        self.assertIn("limit_req zone=read burst=300 nodelay;", text)
+
+    def test_rate_and_burst_are_configurable(self):
+        text = render(GATEWAY_READ_RATE="40", GATEWAY_READ_BURST="80")
+        self.assertIn("limit_req_zone $binary_remote_addr zone=read:10m rate=40r/s;", text)
+        self.assertIn("limit_req zone=read burst=80 nodelay;", text)
+
+    def test_rejects_anything_but_a_positive_integer(self):
+        for value in ["0", "-1", "abc", "1.5", "", "1000000"]:
+            with self.assertRaises(ValueError, msg=f"rate {value!r}"):
+                render(GATEWAY_READ_RATE=value)
+            with self.assertRaises(ValueError, msg=f"burst {value!r}"):
+                render(GATEWAY_READ_BURST=value)

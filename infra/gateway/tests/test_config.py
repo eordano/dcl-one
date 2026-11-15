@@ -75,7 +75,7 @@ class ConfigurationTest(unittest.TestCase):
         text = gateway.render({"sites": [], "internal": [], "node": [], "aliases": [], "deploy": []},
                               cfg, "/mime.types")
         self.assertIn("geo $sync_peer { default 0; 203.0.113.7/32 1; 2001:db8::1/128 1; }", text)
-        self.assertIn("limit_req_zone $binary_remote_addr zone=read:10m rate=30r/s;", text)
+        self.assertIn("limit_req_zone $binary_remote_addr zone=read:10m rate=100r/s;", text)
         self.assertIn("limit_req_zone $content_limit_key zone=content:10m rate=100r/s;", text)
         key_map = re.search(r'map "\$sync_peer:\$request_method:\$uri" \$content_limit_key \{(.*?)\}', text, re.S)[1]
         exempt = re.search(r'"(~[^"]+)" ""', key_map)[1][1:]

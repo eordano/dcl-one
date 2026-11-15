@@ -292,7 +292,7 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         label = "contains(github.event.pull_request.labels.*.name, 'ci:desktop')"
         # main always builds; a skipped build is not a failure for the required check.
         self.assertIn(f"    if: github.event_name != 'pull_request' || {label}\n", found['creator-hub'])
-        self.assertIn('    needs: [ creator-hub ]\n', found['prune_pre_releases'])
+        self.assertIn('    needs: [ changes, creator-hub ]\n', found['prune_pre_releases'])
         self.assertIn('creator-hub, prune_pre_releases ]', found['result'])
         self.assertIn('any(.value.result == "failure" or .value.result == "cancelled")', found['result'])
         # No other job reads the label: the checks every pull request needs stay unconditional.
@@ -301,6 +301,22 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                          ['creator-hub'])
         self.assertIn(f'          DESKTOP: ${{{{ {label} }}}}\n', found['changes'])
         self.assertIn('Add the ci:desktop label', found['changes'])
+
+    def test_creator_hub_installers_release_only_when_asked(self):
+        source = CREATOR_HUB.read_text().split('jobs:\n', 1)[1]
+        found = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)', source))
+        # One decision, on main only: the merged pull request's label, or the manual run's input.
+        self.assertIn('if [ "$GITHUB_REF" = refs/heads/main ]; then', found['changes'])
+        self.assertIn('any(.labels[]; .name == "release:creator-hub")', found['changes'])
+        self.assertIn('          MANUAL: ${{ inputs.release }}\n', found['changes'])
+        # Every job that publishes, or deletes a published pre-release, follows that decision.
+        dry_run = "      dry-run: ${{ needs.changes.outputs.release != 'true' }}\n"
+        self.assertEqual([name for name, job in found.items() if 'dry-run:' in job],
+                         ['drop_pre_release', 'creator-hub', 'prune_pre_releases'])
+        for name in ('drop_pre_release', 'creator-hub', 'prune_pre_releases'):
+            with self.subTest(name=name):
+                self.assertIn(dry_run, found[name])
+                self.assertRegex(found[name], r'(?m)^    needs: \[ changes, ')
 
     def test_only_unit_suites_are_gated_by_web_selection(self):
         web = jobs()['web']

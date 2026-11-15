@@ -158,9 +158,17 @@ export const SERVICE_OVERRIDES: Readonly<Record<string, string>> = {}
  * "https://places.decentraland.org".
  */
 export function serviceUrl(name: string): string {
+  return SERVICE_OVERRIDES[name] ?? derivedServiceUrl(name)
+}
+
+/**
+ * The url this deployment composes for a service on its own, ignoring the entry url's override:
+ * what the Explorer uses when the link says nothing. The engine writes its effective options back
+ * into the address bar (deploy/web/engine/boot.js set_url_params), so a reloaded or copied link
+ * carries every service explicitly; one that merely repeats this value changes nothing.
+ */
+export function derivedServiceUrl(name: string): string {
   const s = service(name)
-  const override = SERVICE_OVERRIDES[name]
-  if (override != null) return override
   if (BASE_DOMAIN === ONE_GATEWAY_HOST && !NOT_THROUGH_GATEWAY.has(s.sub)) {
     const prefix = GATEWAY_PREFIXES[s.sub]
     if (prefix == null) throw new Error(`serviceUrl: '${name}' (${s.sub}) has no gateway prefix`)

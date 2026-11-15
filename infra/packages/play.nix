@@ -32,6 +32,10 @@ let
 in runCommand "foundation-built-play-web" {
   src = artifact;
   nativeBuildInputs = [ python3 ];
+  # Static files only. A WASM compiled inside a Nix shell embeds its toolchain's store
+  # paths; imported from the store, those become references and Sites would ship the
+  # 4 GiB Rust closure. Refuse that here instead of in a production image.
+  allowedReferences = [ ];
 } ''
   if [ -z "''${src:-}" ]; then
     echo 'Sites requires our Bevy artifact. Run tooling/fetch-play.py, then build with PLAY_WEB_DIR and --impure; see infra/containers/README.md.' >&2
