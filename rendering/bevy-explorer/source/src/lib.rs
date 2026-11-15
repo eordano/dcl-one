@@ -748,7 +748,7 @@ impl DecentralandApp {
         app.add_console_command::<SceneThreadsCommand, _>(scene_threads);
         app.add_console_command::<FpsCommand, _>(set_fps);
         app.add_console_command::<SessionGraphicsCommand, _>(session_graphics);
-        debug_panel::register(&mut app);
+        app.add_plugins(debug_panel::MemoryDebugPanelPlugin);
 
         app
     }

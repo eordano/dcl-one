@@ -30,9 +30,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::market::readers::{self, GraphPage, Ttl, seconds_to_ms};
-use super::market::sales::{SUMMARY_MAX_SALES, parse_summary_filters};
+use super::market::sales::{bounded_sales_rows, parse_summary_filters};
 use super::market::wire::{ApiError, ChainId, Network, Params};
-use super::market::{MarketplaceState, SharedState, Source, graph, unavailable};
+use super::market::{MarketplaceState, SharedState};
 
 const PROCEEDS_FIELDS: &str = "id type buyer seller price feesCollectorCut royaltiesCut timestamp txHash searchContractAddress searchItemId searchTokenId";
 const ROUTE_LIST: &str = "/v1/proceeds";
@@ -258,51 +258,22 @@ pub fn summarize(
     }
 }
 
-async fn all_rows(
-    state: &MarketplaceState,
-    where_: Value,
-    route: &'static str,
-) -> Result<Vec<(graph::Network, Value)>, Response> {
-    let mut out = Vec::new();
-    for (network, url) in readers::require_both_collections(state)? {
-        let page = GraphPage {
-            entity: "sales",
-            filter_type: "Sale_filter",
-            fields: PROCEEDS_FIELDS,
-            where_: where_.clone(),
-            order_by: "timestamp",
-            direction: "desc",
-            first: 0,
-            skip: 0,
-        };
-        let rows = readers::top_rows(state, network, url, Ttl::M5, &page, SUMMARY_MAX_SALES + 1)
-            .await
-            .map_err(|e| readers::upstream_failed(route, &e))?;
-        if rows.len() as i64 > SUMMARY_MAX_SALES {
-            return Err(unavailable(
-                Source::CollectionsSubgraph(network),
-                &format!(
-                    "this seller has more than {SUMMARY_MAX_SALES} sales on {}, more than the bounded reader summarises",
-                    network.db_name()
-                ),
-            ));
-        }
-        out.extend(rows.into_iter().map(|r| (network, r)));
-    }
-    Ok(out)
-}
-
 pub async fn proceeds_summary(
     state: &MarketplaceState,
     f: &ProceedsFilters,
 ) -> Result<ProceedsSummary, Response> {
     let seller = f.seller.to_lowercase();
-    let own: Vec<ProceedsRow> = all_rows(state, json!({ "seller": seller }), ROUTE_SUMMARY)
-        .await?
-        .iter()
-        .map(|(n, s)| row_from_graph(s, Network::from(*n)))
-        .collect();
-    let creator_resales: Vec<Value> = all_rows(state, json!({ "type_in": ["order", "bid"], "item_": { "creator": seller }, "seller_not": seller }), ROUTE_SUMMARY).await?.into_iter().map(|(_, s)| s).collect();
+    let own: Vec<ProceedsRow> = bounded_sales_rows(
+        state,
+        json!({ "seller": seller }),
+        PROCEEDS_FIELDS,
+        ROUTE_SUMMARY,
+    )
+    .await?
+    .iter()
+    .map(|(n, s)| row_from_graph(s, Network::from(*n)))
+    .collect();
+    let creator_resales: Vec<Value> = bounded_sales_rows(state, json!({ "type_in": ["order", "bid"], "item_": { "creator": seller }, "seller_not": seller }), PROCEEDS_FIELDS, ROUTE_SUMMARY).await?.into_iter().map(|(_, s)| s).collect();
     Ok(summarize(&seller, &own, &creator_resales, f.from, f.to))
 }
 

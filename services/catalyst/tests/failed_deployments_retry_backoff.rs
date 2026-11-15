@@ -4,10 +4,10 @@
 //! properties live in SQL, so they are asserted against a real postgres
 //! (CATALYST_TEST_DATABASE_URL; one scratch database per test).
 
-use catalyst::content::sync::retry_failed::prune_failed_deployments;
+use catalyst::content::failed_deployments_store::LiveFailedDeploymentsStore;
+use catalyst::content::failed_deployments_store::prune_failed_deployments;
 use catalyst::content::sync::{AuthChain, AuthLink, AuthLinkType};
 use catalyst::content::sync::{FailedDeployment, FailureReason};
-use catalyst::content::sync_deployer::LiveFailedDeploymentsStore;
 
 #[path = "support/db.rs"]
 mod db;
@@ -303,7 +303,7 @@ async fn the_prune_takes_only_records_older_than_the_ttl() {
 
 // ── the bounded due query (DATABASE.md follow-up: retries) ─────────────────
 
-use catalyst::content::sync_deployer::DueCursor;
+use catalyst::content::failed_deployments_store::DueCursor;
 
 const NOW_MS: i64 = 1_800_000_000_000;
 const CAP: u32 = 10;

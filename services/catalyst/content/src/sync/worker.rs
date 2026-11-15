@@ -18,6 +18,7 @@ use tokio::sync::{RwLock, watch};
 use crate::batch_deployer::{BatchDeployer, BatchDeployerConfig};
 use crate::bloom_filter::BloomFilter;
 use crate::config::Config;
+use crate::failed_deployments_store::LiveFailedDeploymentsStore;
 use crate::jobs::{JobContext, Jobs};
 use crate::storage::Storage;
 use crate::sync::dao::{self, DaoSource};
@@ -30,9 +31,7 @@ use crate::sync::{
     RetryFailedDeployments, SyncOrchestrator, SyncOrchestratorConfig, SyncState, SyncStatus,
     names_a_source, parse_entity_types, parse_sync_sources,
 };
-use crate::sync_deployer::{
-    LiveFailedDeploymentsStore, LiveSyncDeployer, SyncMemoryLimits, SyncValidation,
-};
+use crate::sync_deployer::{LiveSyncDeployer, SyncMemoryLimits, SyncValidation};
 
 /// The memory limits `SyncSettings::from_config` validated, read back by [`start`]. They ride
 /// beside `SyncSettings` rather than in it: the integration tests build the settings by

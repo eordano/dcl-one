@@ -2,7 +2,7 @@ use super::{
     SharedState,
     chain_walk::{self, ChainIndex, ChainNet, INDEXER_MANA, LogGroup},
 };
-use crate::land_authz::indexer::{RpcLog, hex_to_i64};
+use crate::chain_index::rpc::{RpcLog, hex_to_i64};
 use alloy_primitives::{Address, U256};
 use anyhow::{Context, ensure};
 use axum::{

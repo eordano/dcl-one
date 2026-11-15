@@ -5,6 +5,7 @@
 //! mirror's snapshot columns are.
 
 pub mod attendees;
+mod audit;
 pub mod categories;
 pub mod foundation;
 pub mod handlers;

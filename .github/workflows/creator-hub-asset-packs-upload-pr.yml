@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: verify PR is from trusted source
         id: pr
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const { data: pr } = await github.rest.pulls.get({
@@ -86,7 +86,7 @@ jobs:
         run: make build-asset-packs
 
       - name: AWS role for the development asset CDN
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.CREATOR_HUB_ASSETS_DEV_ROLE_ARN }}
           aws-region: us-east-1

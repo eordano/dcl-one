@@ -22,13 +22,17 @@ struct Relay {
     event_seq: u32,
 }
 
-pub(crate) fn register(app: &mut App) {
-    app.add_systems(
-        Update,
-        relay_photo_mode
-            .in_set(SceneSets::Input)
-            .after(crate::mode::apply_photo_mode_requests),
-    );
+pub(crate) struct PhotoModeRelayPlugin;
+
+impl Plugin for PhotoModeRelayPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            relay_photo_mode
+                .in_set(SceneSets::Input)
+                .after(crate::mode::apply_photo_mode_requests),
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]

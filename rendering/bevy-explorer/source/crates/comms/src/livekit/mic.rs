@@ -67,7 +67,7 @@ impl Plugin for MicPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.init_non_send_resource::<MicStream>();
 
-        debug::register(app);
+        app.add_plugins(debug::MicDebugPlugin);
         app.init_state::<MicrophoneAvailability>();
         app.init_state::<MicrophonePermission>();
         app.init_state::<MicrophoneState>();

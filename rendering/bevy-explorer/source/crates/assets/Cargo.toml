@@ -5,10 +5,6 @@ edition = "2021"
 
 [lib]
 
-[features]
-# the headless renderer the other crates' pipeline-compile tests share
-test-support = []
-
 [dependencies]
 bevy = { workspace = true }
 

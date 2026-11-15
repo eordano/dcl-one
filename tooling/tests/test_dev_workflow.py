@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 WORKFLOW = Path(__file__).parents[2] / '.github/workflows/development.yml'
 CLEANUP = WORKFLOW.with_name('closed-pr-cache.yml')
+CREATOR_HUB = WORKFLOW.with_name('creator-hub-ci.yml')
 
 
 def jobs():
@@ -20,18 +21,54 @@ def jobs():
     return dict(re.findall(r'(?ms)^  (\w+):\n(.*?)(?=^  \w+:|\Z)', source))
 
 
+def disk_steps():
+    """The script of each disk step in the three workflows' Rust jobs, by job."""
+    found = {}
+    sources = {name: body for name, body in jobs().items() if name in ('rust', 'smoke')}
+    sources['social-voice-release'] = WORKFLOW.with_name('social-voice-release.yml').read_text()
+    for name, body in sources.items():
+        step = re.search(r"(?ms)^      - name: Reserve disk space for the Rust test build\n"
+                         r"        if: runner\.os == 'Linux'\n        run: \|\n(.*?)(?=^      - )", body)
+        found[name] = (textwrap.dedent(step.group(1)), body.index(step.group(0)) < body.index('uses: actions/checkout@'))
+    return found
+
+
 class DevelopmentWorkflowTest(unittest.TestCase):
+    def test_the_disk_step_deletes_the_unused_sdks_only_at_25_gb_free_or_less(self):
+        steps = disk_steps()
+        self.assertEqual(set(steps), {'rust', 'smoke', 'social-voice-release'})
+        with tempfile.TemporaryDirectory() as temp:
+            stubs = Path(temp)
+            # df prints the header and the free space as the real one does; sudo records its arguments.
+            (stubs / 'df').write_text('#!/bin/sh\n[ "$1" = --output=avail ] && printf \' Avail\\n%5sG\\n\' "$FREE_GB"\nexit 0\n')
+            (stubs / 'sudo').write_text('#!/bin/sh\necho "$@" >> "$SUDO_LOG"\n')
+            for stub in stubs.iterdir():
+                stub.chmod(0o755)
+            for name, (script, first) in steps.items():
+                self.assertTrue(first, f'{name}: the step runs before the checkout fills the disk')
+                for free, deletes in (('5', True), ('25', True), ('26', False), ('112', False), ('', True)):
+                    log = stubs / f'{name}-{free or "unknown"}.log'
+                    env = {'PATH': f'{stubs}{os.pathsep}{os.environ["PATH"]}', 'FREE_GB': free, 'SUDO_LOG': str(log)}
+                    subprocess.run(['bash', '-euc', script], env=env, check=True, capture_output=True)
+                    self.assertEqual(log.exists(), deletes, f'{name} with {free or "unknown"} GB free')
+                    if deletes:
+                        self.assertEqual(log.read_text(), 'rm -rf /usr/local/lib/android /usr/share/dotnet '
+                                         '/usr/share/swift /opt/ghc /usr/local/.ghcup\n')
+
     def test_rust_caches_dependencies_only_and_smoke_keeps_a_snapshot_on_both_platforms(self):
         rust, smoke = jobs()['rust'], jobs()['smoke']
         for job in (rust, smoke):
             # Both platforms on main; PRs add macOS with the ci:macos label.
             self.assertRegex(job, r'os: (\[ubuntu-26\.04, macos-26\]|.*"ubuntu-26\.04", "macos-26")')
+        # The shards cover every test executable: the matrix lists 1 to n and the script gets i/n.
+        self.assertIn('        shard: [1, 2, 3]\n', rust)
+        self.assertIn('      CATALYST_TEST_SHARD: ${{ matrix.shard }}/3\n', rust)
         # The dependency cache: the action prunes workspace output before saving, main writes, PRs read.
         self.assertNotIn('actions/cache', rust)
         cache = re.search(r'(?ms)^      - name: Restore the Rust dependency cache\n(.*?)(?=^      - |\Z)', rust).group(1)
         self.assertIn('uses: Swatinem/rust-cache@', cache)
         self.assertIn('workspaces: services/catalyst', cache)
-        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}", cache)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' && matrix.shard == 1 }}", cache)
         self.assertIn('cache-on-failure: true', cache)
         self.assertLess(rust.index('Put the Nix Rust toolchain on PATH'), rust.index('Swatinem/rust-cache@'))
         self.assertLess(rust.index('Swatinem/rust-cache@'), rust.index('bash tooling/dev-test.sh rust'))
@@ -48,6 +85,25 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         self.assertIn('steps.rust-cache.outputs.cache-primary-key', saves[0])
         self.assertIn('bash tooling/dev-smoke.sh', smoke)
         self.assertIn('bash tooling/dev-test.sh e2e', smoke)
+
+    def test_smoke_gives_unchanged_sources_the_snapshot_file_times(self):
+        # Cargo decides by file time. The snapshot is of no use to Cargo unless the checkout's
+        # unchanged files get the times they had when the snapshot was built.
+        smoke = jobs()['smoke']
+        restore = '        run: python3 tooling/cargo-mtimes.py restore services/catalyst/target\n'
+        record = '        run: python3 tooling/cargo-mtimes.py record services/catalyst/target\n'
+        self.assertEqual(smoke.count(restore), 1)
+        self.assertEqual(smoke.count(record), 1)
+        self.assertLess(smoke.index('- name: Restore Rust build cache\n'), smoke.index(restore))
+        self.assertLess(smoke.index(restore), smoke.index('bash tooling/dev-smoke.sh'))
+        self.assertLess(smoke.index('bash tooling/dev-test.sh e2e'), smoke.index(record))
+        self.assertLess(smoke.index(record), smoke.index('- name: Save successful smoke build snapshot\n'))
+        # The manifest is written only into a snapshot that the next step saves.
+        steps = {step.split('\n', 1)[0]: step for step in re.split(r'(?m)^      - name: ', smoke)}
+        condition = lambda name: re.search(r'(?m)^        if: (.+)$', steps[name]).group(1)
+        self.assertEqual(condition('Record the source file times in the snapshot'),
+                         condition('Save successful smoke build snapshot'))
+        self.assertNotIn('        if:', steps['Give unchanged sources the file times of the snapshot'])
 
     def test_every_nix_job_restores_the_store_snapshot_before_its_first_shell(self):
         policy = WORKFLOW.parents[2] / 'tooling/repo-actions-policy.sh'
@@ -67,7 +123,9 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                     self.assertTrue(snapshot.startswith('uses: nix-community/cache-nix-action@'), name)
                     self.assertIn('primary-key: ' + key + "${{ hashFiles('flake.nix', 'flake.lock', ", snapshot)
                     self.assertIn('restore-prefixes-first-match: ' + key + '\n', snapshot)
-                    self.assertIn("save: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}", snapshot)
+                    # One Rust test shard saves; the other jobs save from every main run.
+                    self.assertIn("save: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1'"
+                                  + (' && matrix.shard == 1 }}' if 'shard: [' in job else ' }}'), snapshot)
                     self.assertIn('gc-max-store-size: 0', snapshot)
                     self.assertIn('mkdir -p .cache/nix-roots\n', roots)
                     self.assertIn('nix develop ' + ('.#ci ' if shell == 'ci' else '') + '--profile .cache/nix-roots/env --command true', roots)
@@ -227,6 +285,22 @@ class DevelopmentWorkflowTest(unittest.TestCase):
                     current = fingerprint()
                     self.assertNotEqual(previous, current)
                     previous = current
+
+    def test_creator_hub_desktop_builds_need_the_label_on_pull_requests(self):
+        source = CREATOR_HUB.read_text().split('jobs:\n', 1)[1]
+        found = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)', source))
+        label = "contains(github.event.pull_request.labels.*.name, 'ci:desktop')"
+        # main always builds; a skipped build is not a failure for the required check.
+        self.assertIn(f"    if: github.event_name != 'pull_request' || {label}\n", found['creator-hub'])
+        self.assertIn('    needs: [ creator-hub ]\n', found['prune_pre_releases'])
+        self.assertIn('creator-hub, prune_pre_releases ]', found['result'])
+        self.assertIn('any(.value.result == "failure" or .value.result == "cancelled")', found['result'])
+        # No other job reads the label: the checks every pull request needs stay unconditional.
+        conditions = {name: re.findall(r'(?m)^    if: (.*)$', job) for name, job in found.items()}
+        self.assertEqual([name for name, lines in conditions.items() if any('ci:desktop' in line for line in lines)],
+                         ['creator-hub'])
+        self.assertIn(f'          DESKTOP: ${{{{ {label} }}}}\n', found['changes'])
+        self.assertIn('Add the ci:desktop label', found['changes'])
 
     def test_only_unit_suites_are_gated_by_web_selection(self):
         web = jobs()['web']

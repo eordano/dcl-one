@@ -14,7 +14,7 @@ use crate::credits::SharedState;
 use crate::credits::admin::validate_positive_amount;
 use crate::credits::admin_store::GrantRequest;
 use crate::credits::errors::ApiError;
-use crate::credits::packs::PackRow;
+use crate::credits::packs::{PackRow, validate_sku};
 use crate::shared::signed_fetch::AUTH_TIMESTAMP_HEADER;
 
 #[derive(Debug, Serialize)]
@@ -87,20 +87,6 @@ pub async fn unity_list_packs(
     Ok(Json(UnityCreditPacksResponse {
         packs: rows.iter().filter_map(unity_pack).collect(),
     }))
-}
-
-fn validate_sku(raw: &str) -> Result<String, ApiError> {
-    let s = raw.trim();
-    if s.is_empty() || s.len() > 100 {
-        return Err(ApiError::bad_request("invalid sku"));
-    }
-    if !s
-        .chars()
-        .all(|c| c.is_ascii_graphic() && c != '/' && c != '\\')
-    {
-        return Err(ApiError::bad_request("invalid sku"));
-    }
-    Ok(s.to_string())
 }
 
 fn intent_idempotency_key(signer: &str, pack: &PackRow, auth_ts: &str) -> String {
@@ -435,6 +421,15 @@ mod tests {
     #[test]
     fn validates_sku() {
         assert_eq!(validate_sku(" pack_100 ").unwrap(), "pack_100");
+        assert_eq!(validate_sku(&"x".repeat(100)).unwrap(), "x".repeat(100));
+        assert_eq!(validate_sku("pack_!.-@").unwrap(), "pack_!.-@");
+        for invalid in ["bad\tpack", "bad\npack", "é", "a/b", "a\\b"] {
+            assert_eq!(
+                validate_sku(invalid).unwrap_err().to_string(),
+                "invalid sku"
+            );
+        }
+
         assert!(validate_sku("").is_err());
         assert!(validate_sku("   ").is_err());
         assert!(validate_sku("a/b").is_err());

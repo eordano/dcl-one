@@ -26,35 +26,39 @@ use crate::{
     SceneUpdates,
 };
 
-pub(super) fn add_debug_section(app: &mut App) {
-    app.add_console_command::<InstantiationState, _>(instantiation_state)
-        .add_debug_section(DebugSection {
-            title: "Instantiation",
-            query: "/instantiation_state",
-            fields: &[
-                ("Slice per frame (ms)", "slice"),
-                ("Kept for glTF processing (ms)", "processingShare"),
-                (
-                    "Charged by primitives and materials, last frame (ms)",
-                    "charged",
-                ),
-                ("Scene spawner per frame, smoothed (ms)", "spawner"),
-                ("glTF processing per frame, smoothed (ms)", "processing"),
-                ("Scene instances queued", "queued"),
-                (
-                    "Instance being written (entities written / in all)",
-                    "writing",
-                ),
-                ("glTF models spawning or being processed", "models"),
-                ("Primitives waiting for the slice", "primitivesWaiting"),
-                (
-                    "First materials waiting (slice, primitive or source)",
-                    "materialsWaiting",
-                ),
-            ],
-            actions: &[],
-            inputs: &[],
-        });
+pub(super) struct InstantiationDebugPanelPlugin;
+
+impl Plugin for InstantiationDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<InstantiationState, _>(instantiation_state)
+            .add_debug_section(DebugSection {
+                title: "Instantiation",
+                query: "/instantiation_state",
+                fields: &[
+                    ("Slice per frame (ms)", "slice"),
+                    ("Kept for glTF processing (ms)", "processingShare"),
+                    (
+                        "Charged by primitives and materials, last frame (ms)",
+                        "charged",
+                    ),
+                    ("Scene spawner per frame, smoothed (ms)", "spawner"),
+                    ("glTF processing per frame, smoothed (ms)", "processing"),
+                    ("Scene instances queued", "queued"),
+                    (
+                        "Instance being written (entities written / in all)",
+                        "writing",
+                    ),
+                    ("glTF models spawning or being processed", "models"),
+                    ("Primitives waiting for the slice", "primitivesWaiting"),
+                    (
+                        "First materials waiting (slice, primitive or source)",
+                        "materialsWaiting",
+                    ),
+                ],
+                actions: &[],
+                inputs: &[],
+            });
+    }
 }
 
 #[derive(clap::Parser, ConsoleCommand)]

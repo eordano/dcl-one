@@ -46,7 +46,7 @@ pub struct LoginPlugin;
 
 impl Plugin for LoginPlugin {
     fn build(&self, app: &mut App) {
-        client_login::register(app);
+        app.add_plugins(client_login::ClientLoginPlugin);
         app.add_event::<LoginType>().add_systems(
             Update,
             (

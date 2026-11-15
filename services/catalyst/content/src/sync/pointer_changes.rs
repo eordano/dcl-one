@@ -720,7 +720,8 @@ mod tests {
     ) -> (Timestamp, std::sync::Arc<DeploymentReport>) {
         use crate::batch_deployer::BatchDeployerConfig;
         use crate::bloom_filter::BloomFilter;
-        use crate::sync_deployer::{LiveFailedDeploymentsStore, LiveSyncDeployer};
+        use crate::failed_deployments_store::LiveFailedDeploymentsStore;
+        use crate::sync_deployer::LiveSyncDeployer;
         use std::sync::Arc;
 
         let (storage, tmp) = crate::sync_test_support::temp_storage("pointer-changes").await;

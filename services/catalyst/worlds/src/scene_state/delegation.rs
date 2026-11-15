@@ -332,103 +332,10 @@ pub async fn renewal_loop(
     }
 }
 
-/// The storage routes' side of the contract (the old
-/// `verify_storage_delegation`), kept as the oracle the host's tests check
-/// their headers against until the storage routes' own verifier lands.
-#[cfg(test)]
-pub(crate) mod verify {
-    use super::*;
-
-    pub struct StorageDelegationTarget<'a> {
-        pub signer: &'a str,
-        pub world: &'a str,
-        pub scene_id: &'a str,
-        pub parcel: &'a str,
-        pub trusted_signers: &'a [String],
-    }
-
-    pub fn verify_storage_delegation(
-        scope_header: &str,
-        target: &StorageDelegationTarget<'_>,
-    ) -> Result<(), &'static str> {
-        verify_storage_delegation_at(scope_header, target, Utc::now())
-    }
-
-    pub fn verify_storage_delegation_at(
-        scope_header: &str,
-        target: &StorageDelegationTarget<'_>,
-        now: DateTime<Utc>,
-    ) -> Result<(), &'static str> {
-        if target.trusted_signers.is_empty() {
-            return Err("no trusted authoritative signers configured");
-        }
-        if scope_header.len() > MAX_SCOPE_HEADER_LENGTH {
-            return Err("scope header too large");
-        }
-        let decoded = BASE64
-            .decode(scope_header.trim())
-            .map_err(|_| "malformed scope header")?;
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&decoded).map_err(|_| "malformed scope header")?;
-        let obj = parsed.as_object().ok_or("malformed scope header")?;
-        let (Some(payload), Some(signature)) = (
-            obj.get("payload").and_then(|v| v.as_str()),
-            obj.get("signature").and_then(|v| v.as_str()),
-        ) else {
-            return Err("scope missing payload or signature");
-        };
-        let mut lines = payload.split('\n');
-        if lines.next() != Some(STORAGE_DELEGATION_PREFIX) {
-            return Err("unparseable claim");
-        }
-        const FIELDS: [&str; 5] = ["Ephemeral:", "World:", "SceneId:", "Parcel:", "Expiration:"];
-        let mut values: [Option<&str>; 5] = [None; 5];
-        for line in lines {
-            let idx = FIELDS
-                .iter()
-                .position(|p| line.starts_with(p))
-                .ok_or("unparseable claim")?;
-            if values[idx].is_some() {
-                return Err("unparseable claim");
-            }
-            values[idx] = Some(line[FIELDS[idx].len()..].trim());
-        }
-        let [ephemeral, world, scene_id, parcel, expiration] =
-            values.map(|v| v.filter(|s| !s.is_empty()));
-        let expiration = DateTime::parse_from_rfc3339(expiration.ok_or("unparseable claim")?)
-            .map_err(|_| "unparseable claim")?;
-        if ephemeral.ok_or("unparseable claim")?.to_lowercase() != target.signer.to_lowercase() {
-            return Err("claim ephemeral does not match request signer");
-        }
-        if world.ok_or("unparseable claim")?.to_lowercase() != target.world.to_lowercase() {
-            return Err("claim world does not match target world");
-        }
-        if scene_id.ok_or("unparseable claim")? != target.scene_id {
-            return Err("claim sceneId does not match target scene");
-        }
-        if parcel.ok_or("unparseable claim")? != target.parcel {
-            return Err("claim parcel does not match target parcel");
-        }
-        if expiration.with_timezone(&Utc) <= now {
-            return Err("delegation expired");
-        }
-        let recovered = crate::auth::recover_address(payload.as_bytes(), signature)
-            .map_err(|_| "claim not signed by a trusted authoritative address")?;
-        if target
-            .trusted_signers
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case(&recovered))
-        {
-            return Ok(());
-        }
-        Err("claim not signed by a trusted authoritative address")
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::verify::{StorageDelegationTarget, verify_storage_delegation};
     use super::*;
+    use crate::storage::delegation::{StorageDelegationTarget, verify_storage_delegation};
     use chrono::Duration;
 
     const AUTHORITATIVE_KEY: &str =
@@ -621,8 +528,21 @@ mod tests {
             Utc::now(),
         )
         .unwrap();
-        let raw: serde_json::Value =
-            serde_json::from_slice(&BASE64.decode(&encoded).unwrap()).unwrap();
+        let decoded = BASE64.decode(&encoded).unwrap();
+        assert_eq!(BASE64.encode(&decoded), encoded);
+        let raw: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+        let expiration = raw["scope"]["payload"]
+            .as_str()
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("Expiration: "))
+            .unwrap();
+        assert_eq!(
+            DateTime::parse_from_rfc3339(expiration)
+                .unwrap()
+                .to_rfc3339(),
+            expiration
+        );
         assert_eq!(raw["v"], 1);
         assert!(
             raw["ephemeral"]["publicKey"]
@@ -631,6 +551,10 @@ mod tests {
                 .starts_with("0x04")
         );
         let d = parse_storage_delegation(&encoded).unwrap();
+        assert_eq!(
+            BASE64.encode(BASE64.decode(&d.scope_header).unwrap()),
+            d.scope_header
+        );
         assert_eq!(
             (d.world.as_str(), d.scene_id.as_str(), d.parcel.as_str()),
             (WORLD, SCENE_ID, PARCEL)

@@ -6,28 +6,32 @@ use serde_json::{json, Value};
 use super::{BevyVariants, ManifestState};
 use crate::IpfsResource;
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<BevyVariantsCommand, _>(bevy_variants_state)
-        .add_debug_section(DebugSection {
-            title: "Optimized variants",
-            query: "/bevy_variants",
-            fields: &[
-                ("Variants base url", "base"),
-                ("State", "state"),
-                ("Formats taken", "formats"),
-                (
-                    "Scene manifests (loaded / none / failed / not eligible / pending)",
-                    "manifestCounts",
-                ),
-                ("Scene manifests", "manifests"),
-                ("Variants served (downloaded / from cache)", "served"),
-                ("Variants served by format", "servedByFormat"),
-                ("Fallbacks to the original", "fallbacks"),
-                ("Recent fallbacks", "recentFallbacks"),
-            ],
-            actions: &[],
-            inputs: &[],
-        });
+pub(super) struct BevyVariantsDebugPanelPlugin;
+
+impl Plugin for BevyVariantsDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<BevyVariantsCommand, _>(bevy_variants_state)
+            .add_debug_section(DebugSection {
+                title: "Optimized variants",
+                query: "/bevy_variants",
+                fields: &[
+                    ("Variants base url", "base"),
+                    ("State", "state"),
+                    ("Formats taken", "formats"),
+                    (
+                        "Scene manifests (loaded / none / failed / not eligible / pending)",
+                        "manifestCounts",
+                    ),
+                    ("Scene manifests", "manifests"),
+                    ("Variants served (downloaded / from cache)", "served"),
+                    ("Variants served by format", "servedByFormat"),
+                    ("Fallbacks to the original", "fallbacks"),
+                    ("Recent fallbacks", "recentFallbacks"),
+                ],
+                actions: &[],
+                inputs: &[],
+            });
+    }
 }
 
 /// The abgen Bevy variants client: base url, per-scene manifests, variants served, fallbacks.

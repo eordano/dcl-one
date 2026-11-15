@@ -18,6 +18,7 @@ catalyst-content = { path = "../content" }
 catalyst-explore = { path = "../explore" }
 tokio.workspace = true
 axum.workspace = true
+tower = { version = "0.5", features = ["util"] }
 tower-http.workspace = true
 sqlx.workspace = true
 serde.workspace = true
@@ -70,7 +71,6 @@ catalyst-content = { path = "../content", features = ["test-support"] }
 catalyst-explore = { path = "../explore", features = ["test-support"] }
 catalyst-db = { path = "../db", features = ["scratch"] }
 tokio = { workspace = true, features = ["test-util"] }
-tower = { version = "0.5", features = ["util"] }
 alloy = { version = "2", default-features = false, features = ["std", "signer-local"] }
 tokio-tungstenite.workspace = true
 proptest = "1.11.0"

@@ -12,7 +12,8 @@
     "test": "node --test \"test/**/*.test.ts\"",
     "e2e": "node scripts/e2e.ts",
     "build-scenes": "node scripts/build-scenes.ts",
-    "gpu-probe": "node scripts/gpu-probe.ts"
+    "gpu-probe": "node scripts/gpu-probe.ts",
+    "check:environment": "node scripts/check-environment.ts"
   },
   "dependencies": {
     "@noble/curves": "2.4.0",

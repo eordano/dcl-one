@@ -4,36 +4,40 @@ use bevy_console::ConsoleCommand;
 use common::structs::{AppConfig, SceneLoadDistance};
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 
-pub(super) fn register(app: &mut App) {
-    app.init_resource::<LodOutlines>()
-        .add_console_command::<LodOutlinesCommand, _>(set_lod_outlines)
-        .add_systems(
-            Update,
-            draw_lod_outlines.run_if(|show: Res<LodOutlines>| show.0),
-        )
-        .add_console_command::<LodState, _>(lod_state)
-        .add_debug_section(DebugSection {
-            title: "LOD",
-            query: "/lod_state",
-            fields: &[
-                ("Distant scene rendering", "enabled"),
-                ("Imposter LOD thresholds (m)", "distances"),
-                ("Scene load radius (m)", "load"),
-                ("Imposter load radius (m)", "range"),
-                ("Imposter multisampling", "multisample"),
-                ("Ready tiles", "ready"),
-                ("Pending tiles", "pending"),
-                ("Cached imposter assets", "assets"),
-                ("Imposter VRAM (bytes)", "vram"),
-            ],
-            actions: &[],
-            inputs: &[DebugInput {
-                label: "Color LOD tile outlines",
-                field: "outlines",
-                command: "/lod_outlines {value}",
-                kind: DebugInputKind::Toggle,
-            }],
-        });
+pub(super) struct LodDebugPanelPlugin;
+
+impl Plugin for LodDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<LodOutlines>()
+            .add_console_command::<LodOutlinesCommand, _>(set_lod_outlines)
+            .add_systems(
+                Update,
+                draw_lod_outlines.run_if(|show: Res<LodOutlines>| show.0),
+            )
+            .add_console_command::<LodState, _>(lod_state)
+            .add_debug_section(DebugSection {
+                title: "LOD",
+                query: "/lod_state",
+                fields: &[
+                    ("Distant scene rendering", "enabled"),
+                    ("Imposter LOD thresholds (m)", "distances"),
+                    ("Scene load radius (m)", "load"),
+                    ("Imposter load radius (m)", "range"),
+                    ("Imposter multisampling", "multisample"),
+                    ("Ready tiles", "ready"),
+                    ("Pending tiles", "pending"),
+                    ("Cached imposter assets", "assets"),
+                    ("Imposter VRAM (bytes)", "vram"),
+                ],
+                actions: &[],
+                inputs: &[DebugInput {
+                    label: "Color LOD tile outlines",
+                    field: "outlines",
+                    command: "/lod_outlines {value}",
+                    kind: DebugInputKind::Toggle,
+                }],
+            });
+    }
 }
 
 #[derive(Resource, Default)]

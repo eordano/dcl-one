@@ -137,8 +137,8 @@ impl Plugin for AvatarPlugin {
         app.add_plugins(GhostAvatarPlugin);
         app.add_plugins(FootIkPlugin);
         app.add_plugins(HeadIkPlugin);
-        ik_debug::register(app);
-        debug_avatars::register(app);
+        app.add_plugins(ik_debug::IkDebugPlugin);
+        app.add_plugins(debug_avatars::DebugAvatarsPlugin);
         app.add_plugins(PointAtIkPlugin);
         app.add_plugins(PointAtMarkerPlugin);
         app.add_plugins(JumpMarkerPlugin);
@@ -176,7 +176,7 @@ impl Plugin for AvatarPlugin {
         );
 
         app.add_preview_console_command::<DebugDumpAvatar, _>(debug_dump_avatar);
-        avatar_state::register(app);
+        app.add_plugins(avatar_state::AvatarStatePlugin);
 
         app.add_observer(add_attach_points_to_avatar_shape);
         app.add_observer(remove_attach_points_from_avatar_shape);

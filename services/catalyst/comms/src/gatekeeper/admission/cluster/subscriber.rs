@@ -14,6 +14,7 @@
 //! Idle without a configured link (`NATS_URL`): it subscribes to nothing, ignores announcements
 //! and is indistinguishable from the component not existing.
 
+use crate::gatekeeper::admission::cluster::safety::DispatchState;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -40,11 +41,9 @@ use crate::gatekeeper::livekit::Removal;
 use crate::rooms::island_room_name;
 
 const RECOVERY_DEADLINE: Duration = Duration::from_secs(10);
-// LiveKit protocol's verifier accepts an expired JWT for one minute to match go-jose's former
-// DefaultLeeway. The extra two seconds cover NumericDate's whole-second precision and scheduling
-// across the expiry boundary. Keep the real-server regression in island_ownership_live aligned.
-const LIVEKIT_TOKEN_LEEWAY: Duration = Duration::from_secs(60);
-const TOKEN_EXPIRY_SAFETY: Duration = Duration::from_secs(2);
+#[cfg(test)]
+use super::safety::LIVEKIT_TOKEN_LEEWAY;
+use super::safety::TOKEN_EXPIRY_SAFETY;
 
 mod recovery;
 #[cfg(test)]
@@ -1548,7 +1547,7 @@ impl ClusterSubscriber {
                 else {
                     return false;
                 };
-                if dispatch.state == "quarantine" {
+                if dispatch.state == DispatchState::Quarantine {
                     let Ok(Some(final_dispatch)) =
                         store.begin_quarantine_final(dispatch.dispatch_id).await
                     else {
@@ -1563,34 +1562,29 @@ impl ClusterSubscriber {
                         .gateway
                         .remove_participant(&room, &expected.wallet, Some(dispatch.cutoff as i64))
                         .await;
-                    let settlement = match outcome {
-                        Ok(_)
-                            if self.config.self_hosted_token_quarantine
-                                && dispatch.phase == "initial"
-                                && operation.displaced_cluster_id == expected.cluster_id =>
-                        {
-                            Settlement::Quarantine(
-                                MAX_ISLAND_TOKEN_TTL_SECONDS
-                                    + LIVEKIT_TOKEN_LEEWAY.as_secs()
-                                    + TOKEN_EXPIRY_SAFETY.as_secs(),
-                            )
-                        }
-                        Ok(_)
-                            if !self.config.self_hosted_token_quarantine
-                                && self.admission_now_ms().saturating_add(1000)
-                                    >= dispatch.cutoff.saturating_mul(1000) =>
-                        {
-                            Settlement::SettledLate
-                        }
-                        Ok(_) => Settlement::Confirmed,
-                        Err(GatewayError::Unknown) => return false,
+                    use super::safety::{QuarantinePolicy, RemovalOutcome, classify_removal};
+                    let classified = match outcome {
+                        Ok(_) => RemovalOutcome::Positive,
+                        Err(GatewayError::Unknown) => RemovalOutcome::Unknown,
                         Err(GatewayError::DefiniteRejection | GatewayError::RoomMissing) => {
-                            if dispatch.phase == "quarantine_final" {
-                                Settlement::SettledLate
-                            } else {
-                                Settlement::Rejected
-                            }
+                            RemovalOutcome::Rejected
                         }
+                    };
+                    let quarantine = if self.config.self_hosted_token_quarantine {
+                        QuarantinePolicy::Enabled {
+                            applies: operation.displaced_cluster_id == expected.cluster_id,
+                        }
+                    } else {
+                        QuarantinePolicy::Disabled
+                    };
+                    let Some(settlement) = classify_removal(
+                        classified,
+                        dispatch.phase,
+                        quarantine,
+                        self.admission_now_ms(),
+                        dispatch.cutoff,
+                    ) else {
+                        return false;
                     };
                     if !matches!(
                         store.settle(dispatch.dispatch_id, settlement).await,
@@ -1603,7 +1597,7 @@ impl ClusterSubscriber {
                         return false;
                     }
                     match settlement {
-                        Settlement::Confirmed => dispatch.state = "confirmed".into(),
+                        Settlement::Confirmed => dispatch.state = DispatchState::Confirmed,
                         Settlement::Quarantine(_) => return false,
                         Settlement::Rejected => {
                             if matches!(outcome, Err(GatewayError::RoomMissing)) && !created {
@@ -1631,7 +1625,9 @@ impl ClusterSubscriber {
                         }
                     }
                 }
-                if dispatch.state != "confirmed" || guard.is_some_and(RecoveryGuard::cancelled) {
+                if dispatch.state != DispatchState::Confirmed
+                    || guard.is_some_and(RecoveryGuard::cancelled)
+                {
                     return false;
                 }
                 confirmed = Some(dispatch);

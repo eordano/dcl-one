@@ -7,25 +7,29 @@ use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddCo
 
 use super::{marker_opacity, marker_scale, JumpMarker, JumpMarkerEnabled};
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<JumpMarkerCommand, _>(jump_marker_command)
-        .add_debug_section(DebugSection {
-            title: "Jump marker",
-            query: "/jump_marker",
-            fields: &[
-                ("Shown", "shown"),
-                ("Ground distance (m)", "ground_distance"),
-                ("Opacity", "opacity"),
-                ("Blob scale", "scale"),
-            ],
-            actions: &[],
-            inputs: &[DebugInput {
-                label: "Enable jump marker",
-                field: "enabled",
-                command: "/jump_marker {value}",
-                kind: DebugInputKind::Toggle,
-            }],
-        });
+pub(super) struct JumpMarkerDiagnosticsPlugin;
+
+impl Plugin for JumpMarkerDiagnosticsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<JumpMarkerCommand, _>(jump_marker_command)
+            .add_debug_section(DebugSection {
+                title: "Jump marker",
+                query: "/jump_marker",
+                fields: &[
+                    ("Shown", "shown"),
+                    ("Ground distance (m)", "ground_distance"),
+                    ("Opacity", "opacity"),
+                    ("Blob scale", "scale"),
+                ],
+                actions: &[],
+                inputs: &[DebugInput {
+                    label: "Enable jump marker",
+                    field: "enabled",
+                    command: "/jump_marker {value}",
+                    kind: DebugInputKind::Toggle,
+                }],
+            });
+    }
 }
 
 /// Read the jump marker's state, or enable or disable it.

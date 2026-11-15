@@ -96,7 +96,7 @@ impl Plugin for ReactHudCefPlugin {
             JsEmitEventPlugin::<PageEnvelope>::default(),
         ));
         app.add_plugins(automation::HudAutomationPlugin);
-        diagnostics::register(app);
+        app.add_plugins(diagnostics::CefHudDiagnosticsPlugin);
         app.add_systems(Startup, spawn_hud);
         app.add_systems(
             Update,

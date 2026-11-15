@@ -26,10 +26,11 @@ use tower::ServiceExt;
 
 use super::events::*;
 use super::indexer::{
-    self, ReplayStart, Rpc, begin_replay, cursor, fold, insert_events, mark_folded, set_cursor,
+    self, ReplayStart, begin_replay, cursor, fold, insert_events, mark_folded, set_cursor,
 };
 use super::routes::SOURCE_HEADER;
 use super::*;
+use crate::chain_index::rpc::{HEADER_BATCH, Rpc, hex_to_i64};
 use crate::jobs::{JobContext, Jobs};
 
 const LAND: &str = LAND_REGISTRY_MAINNET;
@@ -1646,7 +1647,7 @@ async fn rpc(
     chain.requests.fetch_add(1, Ordering::SeqCst);
     if let Some(batch) = body.as_array() {
         if batch.iter().any(|request| {
-            indexer::hex_to_i64(request["params"][0].as_str().unwrap()).unwrap() as u64
+            hex_to_i64(request["params"][0].as_str().unwrap()).unwrap() as u64
                 >= chain.header_block_from.load(Ordering::SeqCst)
         }) {
             chain.header_started.notify_one();
@@ -1660,10 +1661,10 @@ async fn rpc(
         }
         let mut replies: Vec<Value> = batch
             .iter()
-            .filter(|request| indexer::hex_to_i64(request["params"][0].as_str().unwrap()).unwrap() as u64 != chain.batch_omit.load(Ordering::SeqCst))
+            .filter(|request| hex_to_i64(request["params"][0].as_str().unwrap()).unwrap() as u64 != chain.batch_omit.load(Ordering::SeqCst))
             .take(chain.batch_limit.load(Ordering::SeqCst))
             .map(|request| {
-                let number = indexer::hex_to_i64(request["params"][0].as_str().unwrap()).unwrap();
+                let number = hex_to_i64(request["params"][0].as_str().unwrap()).unwrap();
                 json!({"jsonrpc": "2.0", "id": request["id"], "result": {
                     "number": format!("0x{number:x}"), "hash": format!("0x{:064x}", number),
                     "timestamp": format!("0x{:x}", if chain.header_time.load(Ordering::SeqCst) == u64::MAX { 1_500_000_000 + number as u64 * 12 } else { chain.header_time.load(Ordering::SeqCst) })
@@ -1682,7 +1683,7 @@ async fn rpc(
             if chain.headers_missing.load(Ordering::SeqCst) {
                 return reply(Value::Null).into_response();
             }
-            let number = indexer::hex_to_i64(body["params"][0].as_str().unwrap()).unwrap();
+            let number = hex_to_i64(body["params"][0].as_str().unwrap()).unwrap();
             if number as u64 >= chain.header_block_from.load(Ordering::SeqCst) {
                 chain.header_started.notify_one();
                 chain.header_release.notified().await;
@@ -3007,10 +3008,18 @@ async fn live_rpc_reads_and_decodes_the_first_land_logs() {
     };
     let http = crate::http::Outbound::new(crate::http::HttpClientCfg::default()).unwrap();
     let settings = Settings::for_tests();
-    let rpc = Rpc::new(&http, &url, &settings);
+    let rpc = Rpc::at(&http, &url);
     let head = rpc.head_block().await.unwrap();
     assert!(head > START + 1_000_000, "head {head}");
-    let (logs, reached, requests) = rpc.get_logs(START, START + 20_000).await.unwrap();
+    let (logs, reached, requests) = rpc
+        .get_logs_matching(
+            START,
+            START + 20_000,
+            &json!([settings.land_registry, settings.estate_registry]),
+            &json!([ALL_TOPICS]),
+        )
+        .await
+        .unwrap();
     assert!(
         reached >= START && requests <= 3,
         "reached {reached} in {requests} requests"
@@ -3865,7 +3874,7 @@ async fn transient_partial_batches_recover_without_restarting_the_indexer() {
         assert_eq!(out.requests, 2);
     }
     let recovered = indexer::run_pass(&state, &ctx).await.unwrap();
-    assert_eq!(recovered.events_written, indexer::HEADER_BATCH);
+    assert_eq!(recovered.events_written, HEADER_BATCH);
     assert_eq!(
         recovered.requests, 2,
         "batch throughput recovers on the same state"

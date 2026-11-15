@@ -310,7 +310,7 @@ impl Signed {
     ) -> Result<i64, DeployFailure> {
         let mut uploads = vec![self.entity.clone()];
         uploads.extend(self.files.iter().cloned());
-        WriteDeployer::with_optional_eip1654(pool.clone(), storage.clone(), None)
+        WriteDeployer::with_partial_validation_for_tests(pool.clone(), storage.clone(), None)
             .with_forwarder(forward.cloned())
             .deploy_entity(uploads, &self.entity_id, self.chain.clone(), "LOCAL")
             .await
@@ -424,8 +424,12 @@ impl Lab {
         state.attach_writes(
             writes,
             Arc::new(
-                WriteDeployer::with_optional_eip1654(self.pool.clone(), self.storage.clone(), None)
-                    .with_forwarder(forwarding.then(|| self.forwarder.clone())),
+                WriteDeployer::with_partial_validation_for_tests(
+                    self.pool.clone(),
+                    self.storage.clone(),
+                    None,
+                )
+                .with_forwarder(forwarding.then(|| self.forwarder.clone())),
             ),
         );
         super::super::build_router(Arc::new(state))
@@ -1002,7 +1006,7 @@ async fn a_locally_refused_deploy_is_never_queued() {
         .deploy(&lab.pool, &lab.storage, Some(&lab.forwarder))
         .await
         .unwrap_err();
-    assert!(matches!(err, DeployFailure::Rejected(_)), "{err:?}");
+    assert!(matches!(err, DeployFailure::Rejected(_, _)), "{err:?}");
     assert!(lab.row(&refused.entity_id).await.is_none());
 
     // An entity older than the pointer's current one.
@@ -1013,7 +1017,13 @@ async fn a_locally_refused_deploy_is_never_queued() {
         .deploy(&lab.pool, &lab.storage, Some(&lab.forwarder))
         .await
         .unwrap_err();
-    assert!(matches!(err, DeployFailure::Rejected(_)), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            DeployFailure::Rejected(crate::write_deployer::RejectionKind::Superseded, _)
+        ),
+        "{err:?}"
+    );
     assert!(lab.row(&older.entity_id).await.is_none());
     assert!(
         lab.row(&newer.entity_id).await.is_none(),

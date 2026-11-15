@@ -130,10 +130,14 @@ impl RoomConnections<'_, '_> {
     }
 }
 
-pub(super) fn register(app: &mut App) {
-    if client_can_control(app.world().contains_resource::<NoRenderApp>()) {
-        app.add_observer(close_paused_room)
-            .add_systems(Update, discard_paused_messages);
+pub(super) struct RoomControlPlugin;
+
+impl Plugin for RoomControlPlugin {
+    fn build(&self, app: &mut App) {
+        if client_can_control(app.world().contains_resource::<NoRenderApp>()) {
+            app.add_observer(close_paused_room)
+                .add_systems(Update, discard_paused_messages);
+        }
     }
 }
 

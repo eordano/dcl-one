@@ -80,6 +80,32 @@ pub async fn load<'e, E: PgExecutor<'e>>(executor: E) -> sqlx::Result<Vec<String
     Ok(ids)
 }
 
+/// One `content.denylist` row, `added_at` in Unix milliseconds (UTC).
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct Row {
+    pub id: String,
+    pub added_by: String,
+    pub added_at_ms: i64,
+}
+
+/// Every listed row, newest first, at most [`MAX_ENTRIES`].
+pub async fn rows<'e, E: PgExecutor<'e>>(executor: E) -> sqlx::Result<Vec<Row>> {
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, added_by, \
+                (EXTRACT(EPOCH FROM added_at) * 1000)::bigint AS added_at_ms \
+         FROM content.denylist ORDER BY added_at DESC, id LIMIT $1",
+    )
+    .bind(MAX_ENTRIES + 1)
+    .fetch_all(executor)
+    .await?;
+    if rows.len() as i64 > MAX_ENTRIES {
+        return Err(sqlx::Error::Protocol(format!(
+            "content.denylist holds more than {MAX_ENTRIES} rows; refusing to serve it"
+        )));
+    }
+    Ok(rows)
+}
+
 /// Inserts `id`; `false` when it was already listed. `actor` is the console
 /// wallet recorded with the row.
 pub async fn add<'e, E: PgExecutor<'e>>(executor: E, id: &str, actor: &str) -> sqlx::Result<bool> {

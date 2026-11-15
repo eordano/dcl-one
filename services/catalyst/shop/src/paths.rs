@@ -33,6 +33,8 @@ pub const PREFIX: &str = "/shop-api";
 /// `POST /v1/payments/verify`.
 pub const ALIASES: &[&str] = &[
     "POST /shop-api/v1/users /credits/users",
+    "DELETE /shop-api/v1/users/{address} /credits/users/{address}",
+    "GET /shop-api/v1/users/{address}/status /credits/users/{address}/status",
     "GET /shop-api/v1/users/{address}/progress /credits/users/{address}/progress",
     "GET /shop-api/v1/users/{address}/credits /credits/users/{address}/credits",
     "GET /shop-api/v1/users/{address}/purchases /credits/users/{address}/purchases",
@@ -64,6 +66,7 @@ pub const ALIASES: &[&str] = &[
     "GET /shop-api/v1/checkouts/{id} /credits/checkout/{id}",
     "POST /shop-api/v1/credit-quotes /credits/prices/quote",
     "GET /shop-api/v1/credit-program/seasons /credits/seasons",
+    "GET /shop-api/v1/credit-program/season /credits/season",
     "GET /shop-api/v1/captcha /credits/captcha",
     "POST /shop-api/v1/captcha /credits/captcha",
     "POST /shop-api/dev/packs/{sku}/mock-purchase /credits/packs/{sku}/mock-purchase",
@@ -245,7 +248,7 @@ pub const CREDIT_PATHS: &[CreditPath] = &[
 ];
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use axum::Router;
@@ -273,10 +276,6 @@ mod tests {
     async fn mounted(storage_root: &std::path::Path) -> Router {
         let pool = lazy_pool();
         let http = Outbound::for_tests();
-        let market = market::tests::support::state_without_db();
-        let economy = Arc::new(
-            evm::State::new(pool.clone(), http.clone(), evm::Settings::for_tests()).unwrap(),
-        );
         let credits = Arc::new(credits::State::new(
             pool.clone(),
             http.clone(),
@@ -288,6 +287,27 @@ mod tests {
             },
             None,
         ));
+        mounted_with_credits(storage_root, credits)
+            .await
+            .route_layer(from_fn(|_: Request, _: Next| async {
+                StatusCode::NO_CONTENT
+            }))
+            // `route_layer` also wraps each path's wrong-method fallback; this
+            // puts a bare 405 back in its place.
+            .method_not_allowed_fallback(|| async { StatusCode::METHOD_NOT_ALLOWED })
+    }
+
+    /// Build the whole production Shop tree with real Credits handlers.
+    pub(crate) async fn mounted_with_credits(
+        storage_root: &std::path::Path,
+        credits: credits::SharedState,
+    ) -> Router {
+        let pool = credits.credits.pool.clone();
+        let http = Outbound::for_tests();
+        let market = market::tests::support::state_without_db();
+        let economy = Arc::new(
+            evm::State::new(pool.clone(), http.clone(), evm::Settings::for_tests()).unwrap(),
+        );
         let signatures = Arc::new(rentals::State::new(
             pool.clone(),
             Some(market.clone()),
@@ -356,12 +376,6 @@ mod tests {
             .merge(rentals::router(signatures.clone()))
             .nest("/signatures-api", rentals::router(signatures))
             .nest("/credits", credits::router(credits))
-            .route_layer(from_fn(|_: Request, _: Next| async {
-                StatusCode::NO_CONTENT
-            }))
-            // `route_layer` also wraps each path's wrong-method fallback; this
-            // puts a bare 405 back in its place.
-            .method_not_allowed_fallback(|| async { StatusCode::METHOD_NOT_ALLOWED })
     }
 
     /// `method path` for every request the mounted trees do not route.

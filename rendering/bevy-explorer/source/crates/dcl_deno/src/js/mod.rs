@@ -52,6 +52,9 @@ pub fn create_runtime(
     preview: bool,
     kill_flag: KillFlag,
 ) -> (JsRuntime, Option<InspectorServer>) {
+    #[cfg(test)]
+    crate::test_platform();
+
     // add fetch stack
     let net = deno_net::deno_net::init_ops_and_esm::<NP>(None, None);
     let web = deno_web::deno_web::init_ops_and_esm::<TP>(

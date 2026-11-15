@@ -1,6 +1,7 @@
 """Engine selection uses committed inputs; publication requires explicit producers."""
 import importlib.util
 import fnmatch
+import shlex
 import re
 import json
 import os
@@ -34,6 +35,23 @@ class WorkflowTest(unittest.TestCase):
         for path in paths:
             with self.subTest(path=path):
                 self.assertTrue(any(fnmatch.fnmatchcase(path.lstrip('/'), pattern) for pattern in ci.IMAGES_INPUTS))
+
+    def test_the_windows_ffmpeg_archive_is_accepted_only_with_its_pinned_digest(self):
+        # The desktop package ships the libraries of this archive, and a release tag can get a new file.
+        pins = set()
+        for name in ('bevy-explorer-ci.yml', 'bevy-explorer-desktop.yml'):
+            workflow = (ci.ROOT / '.github/workflows' / name).read_text()
+            step = workflow.split('$ffUrl = ', 1)[1].split('shell: pwsh', 1)[0]
+            with self.subTest(workflow=name):
+                self.assertEqual(workflow.count('$ffUrl = '), 1)
+                pin = re.search(r'\$ffSha256 = "([0-9a-f]{64})"\n', step)
+                self.assertIsNotNone(pin)
+                pins.add(pin.group(1))
+                check = step.index('if ($ffActual -ne $ffSha256) { throw ')
+                self.assertLess(step.index('Invoke-WebRequest $ffUrl'), step.index('Get-FileHash ffmpeg-6.0-full_build-shared.7z -Algorithm SHA256'))
+                self.assertLess(step.index('Get-FileHash ffmpeg-6.0-full_build-shared.7z -Algorithm SHA256'), check)
+                self.assertLess(check, step.index('7z x ffmpeg-6.0-full_build-shared.7z'))
+        self.assertEqual(len(pins), 1)
 
     def test_shared_reader_and_fixture_changes_schedule_both_workflow_events(self):
         workflow = (ci.ROOT / ci.WORKFLOW).read_text()
@@ -79,6 +97,69 @@ class WorkflowTest(unittest.TestCase):
                       "github.event.pull_request.number) || github.ref }}\n", block)
         self.assertIn("  cancel-in-progress: ${{ github.event_name == 'pull_request' || "
                       "github.ref != 'refs/heads/main' }}\n", block)
+
+    def test_the_build_jobs_start_beside_the_guards_and_a_failed_check_stops_them(self):
+        workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
+        jobs = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)', workflow.split('\njobs:\n', 1)[1]))
+        closed = "    if: github.event.action != 'closed'\n"
+        # A closed PR runs only the cleanup: the guards, the format checks and the plan skip it themselves.
+        for name in ('source', 'changes', 'fmt', 'toml'):
+            self.assertIn(closed, jobs[name], name)
+            self.assertNotIn('needs:', jobs[name], name)
+
+        def needs(name):
+            found = re.search(r'(?m)^    needs:(?: \[([^\]]*)\]|((?:\n      - \S+)+))', jobs[name])
+            return set(re.findall(r'[A-Za-z][\w-]*', found.group(1) or found.group(2)))
+
+        readers = [name for name, job in jobs.items() if 'needs.changes.' in job]
+        self.assertGreaterEqual(len(readers), 6)
+        for name in readers:
+            self.assertIn('changes', needs(name), name)
+        # The build jobs do not wait for the guards; the jobs that package or publish still do.
+        for name in ('test', 'headless-smoke', 'clippy', 'build-deploy-web'):
+            self.assertEqual(needs(name), {'changes'}, name)
+        for name in ('headless-packages', 'images', 'publish-web'):
+            self.assertIn('source', needs(name), name)
+        # The rollout reads the published package, so it waits for the guards through publish-web.
+        self.assertEqual(needs('rollout-web'), {'publish-web'})
+        stop = jobs['stop-builds']
+        self.assertEqual(needs('stop-builds'), {'source', 'fmt', 'toml'})
+        self.assertIn("    if: failure() && github.event_name == 'pull_request' && "
+                      "github.event.pull_request.head.repo.full_name == github.repository\n", stop)
+        self.assertIn('    permissions:\n      actions: write\n', stop)
+        self.assertIn('gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}"\n', stop)
+        # No other job may cancel a run.
+        self.assertEqual(workflow.count('actions: write'), 1)
+        self.assertEqual(workflow.count('gh run cancel'), 1)
+
+    def test_the_headless_smoke_runs_for_thirty_seconds(self):
+        workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
+        job = workflow.split('\n  headless-smoke:\n', 1)[1].split('\n  fmt:\n', 1)[0]
+        # Scenes tick within 11 s of the start; the assert step needs a first tick and a later, higher one.
+        self.assertIn(' --location 52,-52 --server-mode --preview --timeout 30 ', job)
+
+    def test_a_pull_request_publishes_a_preview_only_with_the_label(self):
+        workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
+        job = workflow.split('\n  build-deploy-web:\n', 1)[1].split('\n  headless-packages:\n', 1)[0]
+        self.assertIn("      BEVY_WEB_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || "
+                      "(github.event_name == 'workflow_dispatch' && inputs.publish-tag != '') || "
+                      "(github.event_name == 'pull_request' && "
+                      "github.event.pull_request.head.repo.full_name == github.repository && "
+                      "github.head_ref != 'main' && github.head_ref != 'master' && "
+                      "contains(github.event.pull_request.labels.*.name, 'ci:preview')) }}\n", job)
+        self.assertIn('      publish: ${{ env.BEVY_WEB_PUBLISH }}\n', job)
+        # The package upload and the publish job read only that answer.
+        self.assertIn("      - name: Upload the stamped package for publication\n"
+                      "        if: env.BEVY_WEB_PUBLISH == 'true'\n", job)
+        self.assertIn("\n  publish-web:\n    if: needs.build-deploy-web.outputs.publish == 'true'\n", workflow)
+        notice = job[job.index('      - name: Say how to get a preview\n'):
+                     job.index('      - name: Upload the stamped package for publication\n')]
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository && "
+                      "env.BEVY_WEB_PUBLISH != 'true'\n", notice)
+        self.assertIn('Add the ci:preview label, then push or reopen', notice)
+        # A closed pull request removes its tag with or without the label.
+        cleanup = workflow.split('\n  preview-cleanup:\n', 1)[1].split('\n    name:', 1)[0]
+        self.assertNotIn('labels', cleanup)
 
     def test_pr_web_builds_skip_wasm_opt_only_while_the_benchmark_is_off(self):
         workflow = (ci.ROOT / ci.WORKFLOW).read_text(encoding='utf-8')
@@ -351,10 +432,10 @@ class SelectionTest(unittest.TestCase):
         self.git('merge', '-q', '--no-ff', '-m', f'Merge {pr} into {tip}', pr)
         return tip, pr, self.git('rev-parse', 'HEAD')
 
-    def run_main(self, command, head, base, pr_head):
+    def run_main(self, command, head, base, pr_head, **pull_request):
         with tempfile.TemporaryDirectory() as temporary:
             output, event = Path(temporary) / 'output', Path(temporary) / 'event.json'
-            event.write_text(json.dumps({'pull_request': {'head': {'sha': pr_head}}}))
+            event.write_text(json.dumps({'pull_request': {'head': {'sha': pr_head}, **pull_request}}))
             env = {'GITHUB_EVENT_NAME': 'pull_request', 'GITHUB_EVENT_PATH': str(event), 'BASE_SHA': base,
                    'GH_REPO': '', 'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': ''}
             with patch.dict(os.environ, env), patch('sys.argv', ['bevy-ci.py', command, '--head', head]), \
@@ -378,6 +459,40 @@ class SelectionTest(unittest.TestCase):
         _, pr, merge = self.pr_merge('apps/sites/main-only.ts', 'rendering/bevy-explorer/source/src/lib.rs')
         values = self.run_main('plan', merge, self.base, pr)
         self.assertEqual((values['test'], values['web']), ('true', 'true'))
+
+    def test_a_draft_holds_the_jobs_on_larger_runners_until_ready_or_labelled(self):
+        _, pr, merge = self.pr_merge('apps/sites/main-only.ts', 'rendering/bevy-explorer/source/src/lib.rs')
+        held = self.run_main('plan', merge, self.base, pr, draft=True, labels=[{'name': 'ci:macos'}])
+        self.assertEqual([held[lane] for lane in ('clippy', 'test', 'headless', 'web', 'native-matrix')],
+                         ['true', 'false', 'false', 'false', 'false'])
+        self.assertEqual(held['held'], 'true')
+        self.assertIn('draft: test, headless, web wait until it is ready for review', held['reason'])
+        for pull_request in ({'draft': False}, {'draft': True, 'labels': [{'name': 'ci:engine'}]}, {},
+                             {'draft': 'true'}, {'draft': True, 'labels': 'ci:engine'}):
+            values = self.run_main('plan', merge, self.base, pr, **pull_request)
+            self.assertEqual([values[lane] for lane in ('clippy', 'test', 'headless', 'web')], ['true'] * 4, pull_request)
+            self.assertNotIn('held', values)
+
+    def test_a_draft_with_no_held_job_selected_reports_nothing(self):
+        _, pr, merge = self.pr_merge('apps/sites/main-only.ts', 'docs/only-docs.md')
+        values = self.run_main('plan', merge, self.base, pr, draft=True)
+        self.assertNotIn('held', values)
+        self.assertNotIn('draft', values['reason'])
+
+    def test_the_draft_hold_names_every_job_on_a_larger_runner(self):
+        workflow = (Path(__file__).parents[2] / ci.WORKFLOW).read_text(encoding='utf-8')
+        jobs = dict(re.findall(r'(?ms)^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)', workflow.split('\njobs:\n', 1)[1]))
+        larger = {name for name, body in jobs.items() if re.search(r'runs-on: .*(16core|xlarge)', body)}
+        conditions = {'test': 'test', 'headless-smoke': 'headless', 'build-deploy-web': 'web'}
+        self.assertEqual(larger, set())  # lab: this repository maps the larger runners to standard ones
+        self.assertEqual(set(conditions.values()), set(ci.HELD_ON_DRAFT))
+        for name, lane in conditions.items():
+            self.assertRegex(jobs[name], rf"if: .*needs\.changes\.outputs\.{lane} == 'true'")
+        # Marking a draft ready starts the run that the hold skipped.
+        self.assertIn('    types: [opened, synchronize, reopened, ready_for_review, closed]\n', workflow)
+        # The images read the web job's output, so they wait with it.
+        self.assertIn("      held: ${{ steps.plan.outputs.held }}\n", jobs['changes'])
+        self.assertIn("needs.changes.outputs.held != 'true' &&", jobs['images'])
 
     def test_pr_base_falls_back_unless_github_merged_the_pr_head(self):
         self.write('rendering/bevy-explorer/source/src/lib.rs', 'changed')
@@ -444,7 +559,8 @@ class SelectionTest(unittest.TestCase):
     def test_image_only_change_selects_consumer_without_engine(self):
         self.write('apps/sites/server.ts', 'changed')
         head = self.commit()
-        self.assertTrue(ci.consumer_plan('pull_request', self.base, head, '')['images'])
+        self.assertTrue(ci.consumer_changed(self.base, head, 'images'))
+        self.assertFalse(ci.consumer_plan('pull_request', self.base, head, '')['images'])
         self.assertFalse(any(ci.select(self.base, head)[lane] for lane in ci.LANES))
 
     def test_docs_only_change_skips_image_consumer(self):
@@ -459,7 +575,9 @@ class SelectionTest(unittest.TestCase):
         result = ci.select(self.base, head)
         self.assertFalse(any(result[lane] for lane in (*ci.LANES, 'native-matrix', 'scenes')))
         self.write('services/catalyst/explore/src/lib.rs', 'source')
-        self.assertTrue(ci.consumer_plan('pull_request', self.base, self.commit(), '')['images'])
+        head = self.commit()
+        self.assertTrue(ci.consumer_changed(self.base, head, 'images'))
+        self.assertFalse(ci.consumer_plan('pull_request', self.base, head, '')['images'])
 
     def test_docs_source_embedded_data_and_published_content_rebuild_images(self):
         for name in ('apps/sites/src/features/docs/DocsPage.tsx',
@@ -474,7 +592,8 @@ class SelectionTest(unittest.TestCase):
                 self.write(name, 'changed')
                 head = self.commit()
                 self.assertTrue(ci.consumer_changed(before, head, 'images'))
-                self.assertTrue(ci.consumer_plan('pull_request', before, head, '')['images'])
+                self.assertEqual(ci.consumer_plan('pull_request', before, head, '')['images'],
+                                 any(fnmatch.fnmatchcase(name, pattern) for pattern in ci.IMAGES_PACKAGING))
                 with patch.object(ci, 'api', return_value={'workflow_runs': [{'head_sha': before, 'id': 1}]}), \
                         patch.object(ci, 'trusted_run', return_value=True), \
                         patch.object(ci, 'run_jobs', return_value=[]), \
@@ -482,6 +601,31 @@ class SelectionTest(unittest.TestCase):
                     result = ci.consumer_plan('push', before, head, 'example/project')
                 self.assertTrue(result['images'])
                 self.assertEqual(result['reason'], 'Image consumer inputs changed')
+
+    def test_a_pull_request_builds_images_for_packaging_only(self):
+        for name, built in (('services/catalyst/src/new.rs', False), ('apps/sites/src/new.ts', False),
+                            ('infra/containers/new.nix', True), ('tooling/image-new.py', True),
+                            ('services/catalyst/Cargo.lock', True), ('services/catalyst/new/Cargo.toml', True),
+                            ('services/catalyst/rust-toolchain.toml', True), ('.cargo/config.toml', True),
+                            ('library/new/Cargo.toml', True), ('apps/sites/pnpm-lock.yaml', True),
+                            ('apps/sites/package.json', True), ('apps/sites/.npmrc', True)):
+            with self.subTest(path=name):
+                before = self.git('rev-parse', 'HEAD')
+                self.write(name, 'changed')
+                head = self.commit()
+                self.assertEqual(ci.consumer_plan('pull_request', before, head, '')['images'], built)
+                self.assertTrue(ci.consumer_changed(before, head, 'images'))
+
+    def test_the_architecture_choice_reads_packaging_inputs_only(self):
+        workflow = (Path(__file__).parents[2] / '.github/workflows/apis-sites-images.yml').read_text()
+        listed = workflow.split('git diff --quiet HEAD^1 HEAD -- \\\n', 1)[1].split('; then', 1)[0]
+        specs = shlex.split(listed.replace('\\\n', ' '))
+        self.assertIn('apps/sites/pnpm-lock.yaml', specs)
+        for spec in specs:
+            sample = spec.replace('*', 'a')
+            with self.subTest(spec=spec):
+                self.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in ci.IMAGES_PACKAGING
+                                    for path in (sample, sample + '/a')))
 
     def test_source_renamed_to_documentation_still_selects_builds(self):
         (self.root / 'rendering/bevy-explorer/source/src/lib.rs').rename(

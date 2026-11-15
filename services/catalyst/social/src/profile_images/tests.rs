@@ -794,7 +794,18 @@ async fn concurrent_first_requests_share_one_fetch() {
         return;
     };
     let _rows = PROFILE_IMAGE_ROWS.lock().await;
-    let (addr, calls) = scripted_origin(vec![], std::time::Duration::from_millis(300)).await;
+    let (release, held) = tokio::sync::watch::channel(false);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let addr = spawn_origin(get(move || {
+        let (seen, mut held) = (seen.clone(), held.clone());
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            let _ = held.wait_for(|released| *released).await;
+            (StatusCode::OK, Bytes::from_static(PNG))
+        }
+    }))
+    .await;
     let (app, state) = app_state(
         pool,
         scratch.storage("single").await,
@@ -802,7 +813,21 @@ async fn concurrent_first_requests_share_one_fetch() {
     );
     let entity = fake_cid();
     let path = format!("/entities/{entity}/face.png");
-    let answers = futures::future::join_all((0..10).map(|_| get_image(&app, &path))).await;
+    let counters = &state.producer.counters;
+    let readers = futures::future::join_all((0..10).map(|_| get_image(&app, &path)));
+    let mut readers = std::pin::pin!(readers);
+    // The origin answers once all ten readers are in the production: one
+    // that came after the image was stored would read it from the store and
+    // share nothing. The readers run only inside this poll, so the check
+    // after it sees each of them arrive.
+    let answers = std::future::poll_fn(|cx| {
+        let polled = readers.as_mut().poll(cx);
+        if count(&counters.produced) + count(&counters.joined) == 10 {
+            release.send_replace(true);
+        }
+        polled
+    })
+    .await;
     for (status, _, _, bytes) in answers {
         assert_eq!((status, &bytes[..]), (StatusCode::OK, PNG));
     }

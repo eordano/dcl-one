@@ -1,9 +1,9 @@
 (dcl-scene-cli golden v1 smart-item production)
-TOOLCHAIN sdk=7.29.1-34986384248.commit-bb45080 ecs=7.29.1-34986384248.commit-bb45080 bundler=rolldown-1.3.2 blob=sha256:d8ff1c6a32532743
-SCENE_COMPILED_JS_SIZE_PROD=656.2k bytes
+TOOLCHAIN sdk=7.29.1-34986384248.commit-bb45080 ecs=7.29.1-34986384248.commit-bb45080 bundler=rolldown-1.3.2 blob=sha256:50abfae7d8f97207
+SCENE_COMPILED_JS_SIZE_PROD=703.1k bytes
   ARTIFACT bin/index.js               6436 sha256=a43b03471a172000
   ARTIFACT bin/scene.js               1876 sha256=c22d2907c0387685
-  ARTIFACT bin/sdk-runtime.js       497454 sha256=9322b30b0877230b
+  ARTIFACT bin/sdk-runtime.js       544367 sha256=c0d3801b784a536a
   ARTIFACT bin/sdk-smart-items.js   150450 sha256=9ec86f8a544a2874
 LOADER sdk=bin/sdk-runtime.js smart=bin/sdk-smart-items.js scene=bin/scene.js max_composite_entity=512
 ENTRYPOINT .dcl-one/entrypoint.ts main=guarded composites=0 script-utils=stub
@@ -91,11 +91,11 @@ ENTITY_NAMES assets/scene/entity-names.ts
     Counter_Box = "Counter Box",
   } 
 MAIN_CRDT main.crdt 235 bytes sha256=6c587977670027c8 (native, 1 composite)
-DEPLOY entity=bafkreihqgfw7dpgu33ybkyjhp6veypeyj7u5nfio5bg74altgzdsqmnnv4 files=7 total=658.8k bytes
+DEPLOY entity=bafkreiahfubmhgy5by3gea2yznmhcedih7mta7ljpmg3nlbdxeoesbaedm files=7 total=705.8k bytes
   bafkreifcxq62bje63i3khsvr45s3bkmtbvdutbhwehvfhc3yvspj6jrvda scene.json 167 bytes
   bafkreidmlb4xozyae7ejrd7tnw6qct7ppr3j6w4s4qpdrvzahvgvbsekca main.crdt 235 bytes
   bafkreie6zbxyuvckfb2bnwkspsfe5yqnannwr3tn3bak3xci6uhyjaqsaa bin/sdk-smart-items.js 150450 bytes
-  bafybeihojtsshznnhpf2jd4t2ahrlb5sti26rxsnprt4brtczo2ba7twmu bin/sdk-runtime.js 497454 bytes
+  bafybeibfr2sxal44eim7pczfhqwwxig2d2aczsr44xzjsigmi7q6rxsvle bin/sdk-runtime.js 544367 bytes
   bafkreigcfuuqpqbyo2c3pul4xsjayjnbzgwigy6qftsnp3jidgt3vkcjtq bin/scene.js 1876 bytes
   bafkreifehmbuogqxeaaeykmzgierwhki7azrfq3meco5smuzlyd2szbo3u bin/index.js 6436 bytes
   bafkreidxhlr4biomfortriklj6fnne7kzhvayixkmd6ynx2dlsoswh654a assets/scene/main.composite 2230 bytes

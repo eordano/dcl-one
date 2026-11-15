@@ -17,11 +17,11 @@ use serde_json::{Value as JsonValue, json};
 use crate::credits::SharedState;
 use crate::credits::admin::{
     FlagBody, RequireAdmin, normalize_address, paginate, validate_currency, validate_escrow_ref,
-    validate_idempotency_key, validate_positive_amount, validate_price_cents, validate_sku,
-    validated_reason,
+    validate_idempotency_key, validate_positive_amount, validate_price_cents, validated_reason,
 };
 use crate::credits::admin_store::{GrantRequest, PackAdminRow, PackSpec};
 use crate::credits::errors::ApiError;
+use crate::credits::packs::validate_sku;
 use crate::credits::reconcile::ReconcileReport;
 
 pub fn router() -> Router<SharedState> {

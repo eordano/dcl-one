@@ -34,7 +34,7 @@ use super::readers::{self, Ttl, cached, int_of, str_of};
 use super::shop::{MAX_USD_WEI, SHOP_SORT_VALUES, ShopSortBy};
 use super::wire::{
     ApiError, ChainId, DataTotal, NETWORK_VALUES, NFT_CATEGORY_VALUES, Network, NftCategory,
-    Params, clamp_first, clamp_skip, fix_urn,
+    Params, body_shapes_for_genders, clamp_first, clamp_skip, emote_play_mode_clause, fix_urn,
 };
 use super::{MarketplaceState, SharedState};
 
@@ -423,27 +423,6 @@ pub struct CreditCatalogItem {
 
 pub fn is_address_zero(addr: &str) -> bool {
     addr.is_empty() || addr.eq_ignore_ascii_case("0x0000000000000000000000000000000000000000")
-}
-
-fn body_shapes_for_genders(genders: &[String]) -> Option<Vec<String>> {
-    let has_unisex = genders.iter().any(|g| g == "unisex");
-    let has_male = has_unisex || genders.iter().any(|g| g == "male");
-    let has_female = has_unisex || genders.iter().any(|g| g == "female");
-    let mut out = Vec::new();
-    if has_male {
-        out.push("BaseMale".to_string());
-    }
-    if has_female {
-        out.push("BaseFemale".to_string());
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-pub(crate) fn emote_play_mode_clause(modes: &[String]) -> Option<bool> {
-    if modes.is_empty() || modes.len() == 2 {
-        return None;
-    }
-    Some(modes.iter().any(|m| m == "loop"))
 }
 
 /// The credit price, a bare expression the WHERE and ORDER BY reuse so the

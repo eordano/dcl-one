@@ -41,7 +41,7 @@ pub struct PageQuery {
 impl PageQuery {
     pub fn page(&self) -> Result<Page, ApiError> {
         match &self.cursor {
-            None => Ok(Page::Offset(self.offset.min(i64::MAX as u64) as i64)),
+            None => Ok(Page::Offset(self.offset as i64)),
             Some(raw) if raw.is_empty() => Ok(Page::After(None)),
             Some(raw) => Cursor::decode(raw)
                 .map(|c| Page::After(Some(c)))

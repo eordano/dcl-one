@@ -37,7 +37,7 @@ impl Plugin for SceneUtilPlugin {
         app.insert_resource(ConsoleRelay { send, recv });
         app.add_preview_console_command::<DebugDumpScene, _>(debug_dump_scene);
         app.add_console_command::<ReloadCommand, _>(reload_command);
-        rapid_reload::register(app);
+        app.add_plugins(rapid_reload::RapidReloadPlugin);
         app.add_preview_console_command::<ClearStoreCommand, _>(clear_store_command);
         app.add_systems(Update, (console_relay, handle_preview_command));
     }

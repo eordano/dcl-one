@@ -12,9 +12,8 @@ use serde::Deserialize;
 
 use crate::SharedState;
 use crate::dto::{GetWearableImagesResponse, Image};
-use crate::extract::Query;
 use crate::handlers::{capped_limit, default_limit, default_offset};
-use crate::http::ApiError;
+use crate::http::{ApiError, Query};
 
 #[derive(Deserialize, Debug)]
 pub struct GetWearableImagesQuery {
@@ -51,15 +50,26 @@ pub async fn get_wearable_images(
         ));
     }
 
-    let offset = q.offset.min(i64::MAX as u64) as i64;
-    let found = state
+    let offset = q.offset as i64;
+    let found = match state
         .db
         .get_wearable_images_page(&item, offset, capped_limit(q.limit))
         .await
-        .map_err(|e| {
-            tracing::error!("failed to fetch the images of item {item}: {e}");
-            ApiError::Internal("failed to fetch the images of the item".to_string())
-        })?;
+    {
+        Ok(found) => found,
+        Err(error) => {
+            tracing::error!("failed to fetch the images of item {item}: {error}");
+            // The successful path obtains rows and count together. On failure,
+            // distinguish an unavailable count from a row/pagination failure so
+            // clients receive the same endpoint-specific error in either case.
+            let message = if state.db.get_wearable_images_count(&item).await.is_err() {
+                "failed to count the images of the item"
+            } else {
+                "failed to fetch the images of the item"
+            };
+            return Err(ApiError::Internal(message.to_string()));
+        }
+    };
 
     let images = found.images.into_iter().map(Image::from).collect();
     Ok((

@@ -9,51 +9,55 @@ const MIN_INTERVAL: f64 = 0.1;
 const MAX_INTERVAL: f64 = 60.0;
 const LOAD_TIMEOUT: f64 = 30.0;
 
-pub(super) fn register(app: &mut App) {
-    if app.world().contains_resource::<NoRenderApp>()
-        || !app
-            .world()
-            .get_resource::<PreviewMode>()
-            .is_some_and(|p| p.is_preview)
-    {
-        return;
-    }
-    app.init_resource::<RapidReload>()
-        .add_preview_console_command::<RapidReloadCommand, _>(command)
-        .add_systems(
-            Update,
-            tick.after(command)
-                .run_if(|reload: Res<RapidReload>| reload.target.is_some()),
-        )
-        .add_debug_section(DebugSection {
-            title: "Rapid Scene Reload",
-            query: "/rapid_scene_reload",
-            fields: &[
-                ("Status", "status"),
-                ("Target scene", "hash"),
-                ("Reload cycles", "cycles"),
-                ("Seconds until next reload", "remaining"),
-            ],
-            actions: &[],
-            inputs: &[
-                DebugInput {
-                    label: "Rapid reload",
-                    field: "enabled",
-                    command: "/rapid_scene_reload enabled {value}",
-                    kind: DebugInputKind::Toggle,
-                },
-                DebugInput {
-                    label: "Interval (seconds)",
-                    field: "interval",
-                    command: "/rapid_scene_reload interval {value}",
-                    kind: DebugInputKind::Number {
-                        min: MIN_INTERVAL,
-                        max: MAX_INTERVAL,
-                        step: 0.1,
+pub(super) struct RapidReloadPlugin;
+
+impl Plugin for RapidReloadPlugin {
+    fn build(&self, app: &mut App) {
+        if app.world().contains_resource::<NoRenderApp>()
+            || !app
+                .world()
+                .get_resource::<PreviewMode>()
+                .is_some_and(|p| p.is_preview)
+        {
+            return;
+        }
+        app.init_resource::<RapidReload>()
+            .add_preview_console_command::<RapidReloadCommand, _>(command)
+            .add_systems(
+                Update,
+                tick.after(command)
+                    .run_if(|reload: Res<RapidReload>| reload.target.is_some()),
+            )
+            .add_debug_section(DebugSection {
+                title: "Rapid Scene Reload",
+                query: "/rapid_scene_reload",
+                fields: &[
+                    ("Status", "status"),
+                    ("Target scene", "hash"),
+                    ("Reload cycles", "cycles"),
+                    ("Seconds until next reload", "remaining"),
+                ],
+                actions: &[],
+                inputs: &[
+                    DebugInput {
+                        label: "Rapid reload",
+                        field: "enabled",
+                        command: "/rapid_scene_reload enabled {value}",
+                        kind: DebugInputKind::Toggle,
                     },
-                },
-            ],
-        });
+                    DebugInput {
+                        label: "Interval (seconds)",
+                        field: "interval",
+                        command: "/rapid_scene_reload interval {value}",
+                        kind: DebugInputKind::Number {
+                            min: MIN_INTERVAL,
+                            max: MAX_INTERVAL,
+                            step: 0.1,
+                        },
+                    },
+                ],
+            });
+    }
 }
 
 #[derive(Resource)]

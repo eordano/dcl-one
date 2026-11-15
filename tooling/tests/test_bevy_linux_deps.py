@@ -101,6 +101,7 @@ class LinuxDependenciesTest(unittest.TestCase):
         for call in run.call_args_list:
             self.assertTrue(call.kwargs['check'])
             self.assertEqual(call.kwargs['env']['DEBIAN_FRONTEND'], 'noninteractive')
+            self.assertEqual(call.kwargs['env']['NEEDRESTART_SUSPEND'], '1')
 
     def test_failed_update_never_installs_from_stale_indexes(self):
         with patch.object(deps.subprocess, 'run', side_effect=subprocess.CalledProcessError(100, 'apt-get')) as run:

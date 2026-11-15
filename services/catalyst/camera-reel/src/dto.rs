@@ -1,7 +1,6 @@
-//! The wire shapes of camera-reel-service (`library/catalyst-api/camera-reel`
-//! is generated from them by the `ts` feature). `Image.url`/`thumbnailUrl`
-//! are rendered from the stored hashes by [`super::db`] as
-//! `<api_url>/api/images/<hash>`.
+//! Camera Reel response shapes. Image URLs contain the photo UUID and retained
+//! upload basename; rows without a basename keep hash URLs. The database renders
+//! both forms under the configured public API URL.
 
 use serde::{Deserialize, Serialize};
 
@@ -333,4 +332,68 @@ impl UpdateReview {
 #[serde(rename_all = "camelCase")]
 pub struct GetMultiplePlacesImagesBody {
     pub places_ids: Vec<String>,
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn visible_person_preserves_screen_rect_and_omits_it_for_older_photos() {
+        let mut person = json!({
+            "userName": "photographer", "userAddress": "0x1", "wearables": [],
+            "isGuest": false, "isEmoting": null
+        });
+        let without_rect: User = serde_json::from_value(person.clone()).unwrap();
+        assert_eq!(serde_json::to_value(without_rect).unwrap(), person);
+
+        person["screenRect"] = json!({"x": 0.25, "y": 0.125, "width": 0.5, "height": 0.75});
+        let with_rect: User = serde_json::from_value(person.clone()).unwrap();
+        assert_eq!(serde_json::to_value(with_rect).unwrap(), person);
+
+        person["screenRect"] = serde_json::Value::Null;
+        let null_rect: User = serde_json::from_value(person).unwrap();
+        assert!(
+            serde_json::to_value(null_rect)
+                .unwrap()
+                .get("screenRect")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn screen_rect_accepts_edges_and_rejects_invalid_or_overflowing_coordinates() {
+        let rect = |x, y, width, height| ScreenRect {
+            x,
+            y,
+            width,
+            height,
+        };
+        for value in [
+            rect(0.0, 0.0, 0.0, 0.0),
+            rect(0.0, 0.0, 1.0, 1.0),
+            rect(0.3, 0.5, 0.70005, 0.5),
+        ] {
+            assert!(value.is_valid(), "{value:?}");
+        }
+        for value in [
+            rect(-0.1, 0.0, 0.1, 0.1),
+            rect(0.0, -0.1, 0.1, 0.1),
+            rect(0.0, 0.0, -0.1, 0.1),
+            rect(0.0, 0.0, 0.1, -0.1),
+            rect(0.9, 0.0, 0.2, 0.1),
+            rect(0.0, 0.9, 0.1, 0.2),
+            rect(f32::INFINITY, 0.0, 0.1, 0.1),
+            rect(0.0, 0.0, f32::NAN, 0.1),
+        ] {
+            assert!(!value.is_valid(), "{value:?}");
+        }
+        let overflow =
+            serde_json::from_str::<ScreenRect>(r#"{"x":1e39,"y":0,"width":0,"height":0}"#);
+        assert!(match overflow {
+            Ok(rect) => !rect.is_valid(),
+            Err(_) => true,
+        });
+    }
 }

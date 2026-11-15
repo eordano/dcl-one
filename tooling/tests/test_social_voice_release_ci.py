@@ -147,7 +147,7 @@ sys.exit(29)
         self.assertNotIn('secrets.', workflow)
         self.assertIn('permissions:\n  contents: read\n', workflow)
 
-    def test_workflow_isolates_release_cache_and_reserves_disk_before_nix(self):
+    def test_workflow_isolates_release_cache_and_deletes_no_runner_software(self):
         workflow = WORKFLOW.read_text()
         self.assertIn('CARGO_TARGET_DIR: ${{ github.workspace }}/services/catalyst/target-social-voice-release', workflow)
         # Dependencies only, in the exact directory Cargo receives, under a key family of its own.
@@ -161,13 +161,13 @@ sys.exit(29)
         self.assertIn('          RUSTUP_HOME: /dev/null\n', workflow)
         for family in ('foundation-dev-', 'shared-key: dev-tests', 'social-voice-release-nodebug'):
             self.assertNotIn(family, workflow, 'no sharing with another cache family')
-        reserve = workflow.index('      - name: Reserve disk space')
-        self.assertLess(reserve, workflow.index('uses: cachix/install-nix-action@'))
-        self.assertLess(reserve, workflow.index('uses: Swatinem/rust-cache@'))
+        # Deleting the unused SDKs took half of the job time, so the step does it only on a runner with little room.
+        # test_dev_workflow runs the step against both sides of the limit.
+        self.assertEqual(workflow.count('sudo rm -rf'), 1)
+        self.assertLess(workflow.index('if [ "${avail:-0}" -le 25 ]; then\n'), workflow.index('sudo rm -rf'))
+        self.assertLess(workflow.index('sudo rm -rf'), workflow.index('uses: actions/checkout@'))
         self.assertLess(workflow.index('Put the Nix Rust toolchain on PATH'), workflow.index('uses: Swatinem/rust-cache@'))
         self.assertLess(workflow.index('uses: Swatinem/rust-cache@'), workflow.index('bash tooling/social-voice-release-test.sh'))
-        self.assertIn("        if: runner.os == 'Linux'\n", workflow)
-        self.assertIn('sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/share/swift /opt/ghc /usr/local/.ghcup', workflow)
 
 
 if __name__ == '__main__':

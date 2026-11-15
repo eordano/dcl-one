@@ -153,6 +153,7 @@ pub const NOT_STORE_KEYS: &[(&str, &str)] = &[
         "camera_reel.withheld_blobs.hash",
         "the blobs of rejected or deleted photos: garbage for this collector",
     ),
+    ("camera_reel.images.image_content_type", "a MIME type"),
     ("explore.place.image_url", "a URL"),
     ("explore.place_world_local.image_url", "a URL"),
     (
@@ -240,6 +241,15 @@ pub const NOT_STORE_KEYS: &[(&str, &str)] = &[
     ("shop.name_transfers.tx_hash", "a transaction hash"),
     ("shop.rental_event.tx_hash", "a transaction hash"),
     ("shop.executions.tx_hash", "a transaction hash"),
+    (
+        "credits.goal_grants.credit_hash",
+        "a CreditsManager credit digest",
+    ),
+    ("credits.season_goals.thumbnail", "an external image URL"),
+    (
+        "credits.goal_progress.thumbnail",
+        "a snapshotted external image URL",
+    ),
     (
         "credits.authorizations.credit_hash",
         "a CreditsManager credit digest",

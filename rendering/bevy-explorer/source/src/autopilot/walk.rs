@@ -25,13 +25,17 @@ pub struct AutopilotWalk {
     pub to: IVec2,
 }
 
-pub(super) fn register(app: &mut App) {
-    app.add_systems(
-        PostUpdate,
-        walk.run_if(resource_exists::<AutopilotWalk>)
-            .after(PostUpdateSets::PlayerUpdate)
-            .before(PostUpdateSets::CameraUpdate),
-    );
+pub(super) struct AutopilotWalkPlugin;
+
+impl Plugin for AutopilotWalkPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PostUpdate,
+            walk.run_if(resource_exists::<AutopilotWalk>)
+                .after(PostUpdateSets::PlayerUpdate)
+                .before(PostUpdateSets::CameraUpdate),
+        );
+    }
 }
 
 /// Where the walk is `elapsed` seconds after it began: on the line from `from` to `to` at `speed`,

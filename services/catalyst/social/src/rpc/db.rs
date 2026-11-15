@@ -493,7 +493,8 @@ impl Db {
 
     /// Records the block and reads the previous action; the transactional
     /// block_user_recording_action also appends the matching friendship action.
-    pub async fn block_user_and_last(
+    #[cfg(test)]
+    pub(super) async fn block_user_and_last(
         &self,
         blocker: &str,
         blocked: &str,
@@ -507,7 +508,8 @@ impl Db {
 
     /// Removes a block and reads the previous action; use
     /// unblock_user_recording_action to append its delete action atomically.
-    pub async fn unblock_user_and_last(
+    #[cfg(test)]
+    pub(super) async fn unblock_user_and_last(
         &self,
         blocker: &str,
         blocked: &str,
@@ -610,19 +612,6 @@ impl Db {
         Ok((id, at, action_id))
     }
 
-    pub async fn is_friendship_blocked(&self, a: &str, b: &str) -> Result<bool, DbError> {
-        let blocked: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM social.blocks \
-             WHERE (blocker_address = $1 AND blocked_address = $2) \
-                OR (blocker_address = $2 AND blocked_address = $1))",
-        )
-        .bind(a.to_lowercase())
-        .bind(b.to_lowercase())
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(blocked)
-    }
-
     pub async fn is_blocked(&self, blocker: &str, blocked: &str) -> Result<bool, DbError> {
         let found: bool =
             sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM social.blocks WHERE blocker_address = $1 AND blocked_address = $2)")
@@ -633,11 +622,13 @@ impl Db {
         Ok(found)
     }
 
-    pub async fn block_user(&self, blocker: &str, blocked: &str) -> Result<(), DbError> {
+    #[cfg(test)]
+    pub(super) async fn block_user(&self, blocker: &str, blocked: &str) -> Result<(), DbError> {
         self.block_user_and_last(blocker, blocked).await.map(|_| ())
     }
 
-    pub async fn unblock_user(&self, blocker: &str, blocked: &str) -> Result<(), DbError> {
+    #[cfg(test)]
+    pub(super) async fn unblock_user(&self, blocker: &str, blocked: &str) -> Result<(), DbError> {
         self.unblock_user_and_last(blocker, blocked)
             .await
             .map(|_| ())
@@ -1009,28 +1000,6 @@ impl Db {
             .collect())
     }
 
-    /// The stored role in an ACTIVE community; a soft-deleted community grants
-    /// no role to anyone (tests/community_voice_soft_delete.rs).
-    pub async fn community_role(
-        &self,
-        community_id: &str,
-        address: &str,
-    ) -> Result<Option<String>, DbError> {
-        let Ok(cid) = Uuid::parse_str(community_id) else {
-            return Ok(None);
-        };
-        let role: Option<String> = sqlx::query_scalar(
-            "SELECT role FROM social.community_members \
-             WHERE community_id = $1 AND member_address = $2 \
-               AND EXISTS (SELECT 1 FROM social.communities c WHERE c.id = $1 AND c.active)",
-        )
-        .bind(cid)
-        .bind(address.to_lowercase())
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(role)
-    }
-
     /// Live ban status from `community_bans`; a ban deletes the membership
     /// row, so a role captured before the ban is the stale value being raced.
     pub async fn is_member_banned(
@@ -1122,28 +1091,6 @@ impl Db {
              WHERE m.member_address <> $1 AND (m.community_id, m.member_address) > ($2, $3) \
              ORDER BY m.community_id, m.member_address LIMIT 256"
         ).bind(address.to_lowercase()).bind(community).bind(member).fetch_all(&self.pool).await?)
-    }
-
-    /// Active friends with no block in either direction.
-    pub async fn friend_addresses_unblocked(&self, address: &str) -> Result<Vec<String>, DbError> {
-        let rows: Vec<String> = sqlx::query_scalar(
-            r#"
-            SELECT CASE WHEN address_requester = $1 THEN address_requested ELSE address_requester END AS friend
-            FROM social.friendships
-            WHERE is_active = TRUE
-              AND ($1 IN (address_requester, address_requested))
-              AND NOT EXISTS (
-                SELECT 1 FROM social.blocks b
-                WHERE (b.blocker_address = $1 AND b.blocked_address = CASE
-                          WHEN address_requester = $1 THEN address_requested ELSE address_requester END)
-                   OR (b.blocked_address = $1 AND b.blocker_address = CASE
-                          WHEN address_requester = $1 THEN address_requested ELSE address_requester END))
-            "#,
-        )
-        .bind(address.to_lowercase())
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
     }
 
     /// One read behind every community-voice gate: the ACTIVE community's
@@ -1289,8 +1236,7 @@ where
     })
 }
 
-/// [`Db::block_user_and_last`] on any executor (the pool, or the block's
-/// transaction).
+/// Records a block and reads the previous action on the supplied executor.
 async fn block_and_last<'e, E>(
     executor: E,
     blocker: &str,
@@ -1326,7 +1272,7 @@ where
     ))
 }
 
-/// [`Db::unblock_user_and_last`] on any executor.
+/// Removes a block and reads the previous action on the supplied executor.
 async fn unblock_and_last<'e, E>(
     executor: E,
     blocker: &str,

@@ -9,49 +9,53 @@ use crate::avatar_movement::{
     ActivePlayerComponent, AvatarLocomotionSettings, AvatarMovement, AvatarMovementInfo,
 };
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<CameraState, _>(camera_state)
-        .add_console_command::<MovementState, _>(movement_state)
-        .add_preview_console_command::<CameraSensitivity, _>(camera_sensitivity)
-        .add_preview_debug_inputs(DebugSection {
-            title: "Camera",
-            query: "/camera_state",
-            fields: &[
-                ("Follow distance (m)", "distance"),
-                ("Far clip (m)", "far"),
-                ("Vertical FOV (degrees)", "fov"),
-                ("Scene override", "override"),
-            ],
-            actions: &[],
-            inputs: &[DebugInput {
-                label: "Look sensitivity",
-                field: "sensitivity",
-                command: "/camera_sensitivity {value}",
-                kind: DebugInputKind::Number {
-                    min: 0.01,
-                    max: 100.0,
-                    step: 0.01,
-                },
-            }],
-        })
-        .add_debug_section(DebugSection {
-            title: "Locomotion",
-            query: "/movement_state",
-            fields: &[
-                ("Walk speed", "walk"),
-                ("Jog speed", "jog"),
-                ("Run speed", "run"),
-                ("Jump height", "jump"),
-                ("Run jump height", "runJump"),
-                ("Double jump height", "doubleJump"),
-                ("Hard landing cooldown", "landing"),
-                ("Requested velocity (X / Y / Z)", "requested"),
-                ("Actual velocity (X / Y / Z)", "actual"),
-                ("External velocity (X / Y / Z)", "external"),
-            ],
-            inputs: &[],
-            actions: &[],
-        });
+pub(super) struct InputDebugPanelPlugin;
+
+impl Plugin for InputDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<CameraState, _>(camera_state)
+            .add_console_command::<MovementState, _>(movement_state)
+            .add_preview_console_command::<CameraSensitivity, _>(camera_sensitivity)
+            .add_preview_debug_inputs(DebugSection {
+                title: "Camera",
+                query: "/camera_state",
+                fields: &[
+                    ("Follow distance (m)", "distance"),
+                    ("Far clip (m)", "far"),
+                    ("Vertical FOV (degrees)", "fov"),
+                    ("Scene override", "override"),
+                ],
+                actions: &[],
+                inputs: &[DebugInput {
+                    label: "Look sensitivity",
+                    field: "sensitivity",
+                    command: "/camera_sensitivity {value}",
+                    kind: DebugInputKind::Number {
+                        min: 0.01,
+                        max: 100.0,
+                        step: 0.01,
+                    },
+                }],
+            })
+            .add_debug_section(DebugSection {
+                title: "Locomotion",
+                query: "/movement_state",
+                fields: &[
+                    ("Walk speed", "walk"),
+                    ("Jog speed", "jog"),
+                    ("Run speed", "run"),
+                    ("Jump height", "jump"),
+                    ("Run jump height", "runJump"),
+                    ("Double jump height", "doubleJump"),
+                    ("Hard landing cooldown", "landing"),
+                    ("Requested velocity (X / Y / Z)", "requested"),
+                    ("Actual velocity (X / Y / Z)", "actual"),
+                    ("External velocity (X / Y / Z)", "external"),
+                ],
+                inputs: &[],
+                actions: &[],
+            });
+    }
 }
 
 /// Read the player's camera.

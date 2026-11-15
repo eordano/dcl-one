@@ -664,7 +664,7 @@ async fn stage_batch(
         }
     }
     let hashes: Vec<String> = to_store.iter().map(|f| f.hash.clone()).collect();
-    let Some(batches) = record_stored(&state.pool, entity_id, &hashes)
+    let Some((batches, progress)) = record_stored(&state.pool, entity_id, &hashes)
         .await
         .map_err(db_error)?
     else {
@@ -674,7 +674,6 @@ async fn stage_batch(
             None => Err(expired()),
         };
     };
-    let progress = progress(&state.pool, entity_id).await.map_err(db_error)?;
     let missing: Vec<String> = content
         .iter()
         .filter(|h| !progress.contains_key(*h))
@@ -1216,13 +1215,25 @@ async fn discard_unadmitted(pool: &PgPool, entity_id: &str) {
 }
 
 /// Marks the batch's files stored by this upload and counts it; the upload's stored batches
-/// so far, `None` once its row is gone.
+/// so far and its stored files with their sizes, `None` once its row is gone.
 async fn record_stored(
     pool: &PgPool,
     entity_id: &str,
     hashes: &[String],
-) -> Result<Option<i32>, sqlx::Error> {
+) -> Result<Option<(i32, HashMap<String, i64>)>, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    // A publish on another replica deletes the row and, by cascade, its files. The row lock makes
+    // that delete wait for this commit: the files read below are never the empty set of a consumed
+    // upload, and the delete cannot hold the row while it waits for a file row locked here.
+    let pending: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM worlds.pending_scenes WHERE entity_id = $1 FOR KEY SHARE",
+    )
+    .bind(entity_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if pending.is_none() {
+        return Ok(None);
+    }
     sqlx::query(
         "UPDATE worlds.pending_scene_files SET stored = true, written = true \
          WHERE entity_id = $1 AND hash = ANY($2::text[])",
@@ -1231,24 +1242,28 @@ async fn record_stored(
     .bind(hashes)
     .execute(&mut *tx)
     .await?;
-    let batches: Option<i32> = sqlx::query_scalar(
+    let batches: i32 = sqlx::query_scalar(
         "UPDATE worlds.pending_scenes SET batches = batches + 1, initialized = true \
          WHERE entity_id = $1 RETURNING batches",
     )
     .bind(entity_id)
-    .fetch_optional(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
+    let stored = progress(&mut *tx, entity_id).await?;
     tx.commit().await?;
-    Ok(batches)
+    Ok(Some((batches, stored)))
 }
 
 /// The upload's stored files and their sizes.
-async fn progress(pool: &PgPool, entity_id: &str) -> Result<HashMap<String, i64>, sqlx::Error> {
+async fn progress<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    entity_id: &str,
+) -> Result<HashMap<String, i64>, sqlx::Error> {
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT hash, size FROM worlds.pending_scene_files WHERE entity_id = $1 AND stored",
     )
     .bind(entity_id)
-    .fetch_all(pool)
+    .fetch_all(db)
     .await?;
     Ok(rows.into_iter().collect())
 }

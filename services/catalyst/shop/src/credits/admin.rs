@@ -140,20 +140,6 @@ pub fn validated_reason(reason: &Option<String>) -> Result<Option<String>, ApiEr
     }
 }
 
-pub(crate) fn validate_sku(raw: &str) -> Result<String, ApiError> {
-    let s = raw.trim();
-    if s.is_empty() || s.len() > 100 {
-        return Err(ApiError::bad_request("invalid sku"));
-    }
-    if !s
-        .chars()
-        .all(|c| c.is_ascii_graphic() && c != '/' && c != '\\')
-    {
-        return Err(ApiError::bad_request("invalid sku"));
-    }
-    Ok(s.to_string())
-}
-
 pub(crate) fn validate_escrow_ref(raw: &str) -> Result<String, ApiError> {
     let s = raw.trim();
     if s.is_empty() || s.len() > 200 {
@@ -192,6 +178,7 @@ pub(crate) fn paginate(limit: Option<i64>, offset: Option<i64>) -> (i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credits::packs::validate_sku;
     use axum::http::{HeaderValue, StatusCode, header::AUTHORIZATION};
     use axum::response::IntoResponse;
 
@@ -314,6 +301,15 @@ mod tests {
     #[test]
     fn validates_sku_and_escrow_ref_and_price_and_currency() {
         assert_eq!(validate_sku(" pack_100 ").unwrap(), "pack_100");
+        assert_eq!(validate_sku(&"x".repeat(100)).unwrap(), "x".repeat(100));
+        assert_eq!(validate_sku("pack_!.-@").unwrap(), "pack_!.-@");
+        for invalid in ["bad\tpack", "bad\npack", "é", "a/b", "a\\b"] {
+            assert_eq!(
+                validate_sku(invalid).unwrap_err().to_string(),
+                "invalid sku"
+            );
+        }
+
         assert!(validate_sku("").is_err());
         assert!(validate_sku("a/b").is_err());
         assert!(validate_sku("a\\b").is_err());

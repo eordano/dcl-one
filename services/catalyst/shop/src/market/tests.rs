@@ -818,6 +818,16 @@ async fn profiles_metadata_validates_ids_as_asset_bundle_registry() {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(resp, json!({ "error": "Bad request", "message": msg }));
     }
+    let mut ids: Vec<Value> = (0..30_000).map(|i| json!(format!("a{i}"))).collect();
+    ids.push(Value::Null);
+    assert!(json!({"ids": ids}).to_string().len() < 256 * 1024);
+    let (status, _) = post_json(
+        router(state.clone()),
+        "/lambdas/profiles/metadata",
+        json!({"ids": ids}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, resp) = post_json(
         router(state.clone()),
         "/lambdas/profiles/metadata",
@@ -829,7 +839,7 @@ async fn profiles_metadata_validates_ids_as_asset_bundle_registry() {
 }
 
 #[tokio::test]
-async fn profiles_metadata_caps_distinct_ids_and_answers_bad_json_with_a_bare_500() {
+async fn profiles_metadata_takes_any_number_of_ids_and_answers_bad_json_with_a_bare_500() {
     let state = state_without_db();
     let resp = router(state.clone())
         .oneshot(
@@ -855,17 +865,16 @@ async fn profiles_metadata_caps_distinct_ids_and_answers_bad_json_with_a_bare_50
         json!({ "ids": ids }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body["message"],
-        "Too many profile ids were specified. Maximum allowed is 1000"
-    );
+    // No cap, as asset-bundle-registry (`AB-3-1001-ids.json`); without a
+    // database nothing is found.
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!([]));
 }
 
-/// Both paths, the per-id cache (50 ids or fewer) and the batch read, turn a
-/// failed database read into the bare 500.
+/// Both paths, the per-id cache (50 ids or fewer) and the batch read, answer
+/// a failed database read with asset-bundle-registry's 200 and what was found.
 #[tokio::test]
-async fn profiles_metadata_answers_a_failed_read_with_a_bare_500_on_both_paths() {
+async fn profiles_metadata_answers_a_failed_read_with_what_was_found_on_both_paths() {
     let state = state_without_db();
     for n in [3, 60] {
         let ids: Vec<String> = (0..n).map(|i| format!("0x{i:040x}")).collect();
@@ -875,8 +884,8 @@ async fn profiles_metadata_answers_a_failed_read_with_a_bare_500_on_both_paths()
             json!({ "ids": ids }),
         )
         .await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{n} ids");
-        assert_eq!(body, json!({ "error": "Internal Server Error" }), "{n} ids");
+        assert_eq!(status, StatusCode::OK, "{n} ids");
+        assert_eq!(body, json!([]), "{n} ids");
     }
 }
 

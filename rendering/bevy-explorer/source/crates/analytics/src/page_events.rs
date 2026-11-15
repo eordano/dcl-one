@@ -15,8 +15,12 @@ use crate::{
     segment_system::{SegmentConfig, SegmentMetricsEvents},
 };
 
-pub fn register(app: &mut App) {
-    app.add_console_command::<TrackCommand, _>(track_cmd);
+pub struct PageEventsPlugin;
+
+impl Plugin for PageEventsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<TrackCommand, _>(track_cmd);
+    }
 }
 
 /// Queue analytics events from the host page: base64 of a JSON array of

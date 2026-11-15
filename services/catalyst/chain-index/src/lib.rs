@@ -1,6 +1,7 @@
 //! The chain-derived readers every domain shares: the collections,
 //! marketplace and land-manager subgraph clients (`graph`, `land_graph`),
-//! the LAND registries per network (`registries`) and the unavailable
+//! the LAND registries per network (`registries`), Ethereum RPC logs and
+//! headers (`rpc`), and the unavailable
 //! envelope naming a missing source (`source`). [`ChainIndex`] holds the
 //! ONE outbound client, the subgraph URLs and the readers' memos; the shop's
 //! `MarketplaceState` builds it, and content, land_authz, worlds, social and
@@ -13,6 +14,7 @@ pub(crate) use dcl_http as http;
 pub mod graph;
 pub mod land_graph;
 pub mod registries;
+pub mod rpc;
 pub mod source;
 
 use std::sync::Arc;
@@ -74,15 +76,15 @@ impl ChainIndex {
         false
     }
 
-    /// Tests only (production never calls it): admit a loopback
-    /// `http://127.0.0.1` fake subgraph past the SSRF guard. Not `cfg(test)`
-    /// so the domains' tests can reach it once they are separate crates.
+    /// Admit a loopback fake subgraph for unit tests and test-support consumers.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn allow_loopback_for_tests(&self) {
         self.allow_loopback.store(true, Ordering::Relaxed);
     }
 
     /// Tests only: the switch [`Self::allow_loopback_for_tests`] flips, for
     /// a state that wraps this index and keeps its own test hook.
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn loopback_switch_for_tests(&self) -> Arc<AtomicBool> {
         self.allow_loopback.clone()

@@ -294,20 +294,28 @@ CREATE TABLE builder.newsletter_subscriptions (
 -- ══ camera_reel ═════════════════════════════════════════════════════════════
 
 -- A player's photo: the full image and its 640x360 thumbnail are blobs in
--- the ONE store named by `image_hash`/`thumbnail_hash` (the wire's `url` /
--- `thumbnailUrl` render as `<API_URL>/api/images/<hash>`); `metadata` is the
+-- the ONE store named by `image_hash`/`thumbnail_hash`. The wire URLs use
+-- UUID-prefixed basenames when retained, and hashes for older rows. `metadata` is the
 -- client document (`Metadata`: userName, userAddress, dateTime, realm,
 -- scene, visiblePeople, placeId) returned as a unit; `place_id` is its
 -- placeId projected for the place galleries and names an explore.place row
 -- by key (no FK: mirrored catalogue, different lifecycle). `user_address` is
 -- the verified signer (the write path refuses a metadata.userAddress that is
 -- not the signer; the CHECK holds the pair together). `review_status` is the
--- moderator's: `rejected` hides the row and its blobs from every read.
+-- moderator's: `rejected` hides the row from public galleries and metadata
+-- reads, and withholds unreferenced blobs on the protected byte routes.
 CREATE TABLE camera_reel.images (
     id uuid NOT NULL,
     user_address text NOT NULL,
     image_hash text NOT NULL,
     thumbnail_hash text NOT NULL,
+    -- The client's basename renders UUID-prefixed image and thumbnail aliases.
+    -- NULL preserves the hash URLs of rows created without a filename.
+    original_filename text,
+    -- Both source objects use the accepted client MIME, independently of encoding.
+    -- NULL leaves older rows on their byte-sniffing fallback.
+    image_content_type text CONSTRAINT images_image_content_type_check
+        CHECK (image_content_type IN ('image/png', 'image/jpeg')),
     is_public boolean NOT NULL DEFAULT false,
     review_status text NOT NULL DEFAULT 'ok',
     -- Old rows have no new ranking event. New uploads set false, then publish
@@ -337,7 +345,7 @@ CREATE INDEX images_user_created_idx ON camera_reel.images (user_address, create
 CREATE INDEX images_place_public_created_idx ON camera_reel.images (place_id, created_at DESC, id DESC)
     WHERE is_public AND review_status <> 'rejected';
 
--- GET /api/images/{hash}: a blob is served only while a non-rejected row
+-- GET /api/files/{hash}: a blob is served only while a non-rejected row
 -- names it as image or thumbnail (image_hash = $1 OR thumbnail_hash = $1,
 -- bitmap OR of the two).
 CREATE INDEX images_image_hash_idx ON camera_reel.images (image_hash);

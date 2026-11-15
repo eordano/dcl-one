@@ -14,6 +14,12 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   clock hands control back to the scene. No HUD lock while a scene controls the sky.
   `transitionMode` in scene.json is ignored. HUD and `/time` skips take the nearest
   direction; SDK `SkyboxTime` keeps its own mode. `/time` reports the effective time.
+- **Scene environment components.** Skybox cloud speed accepts finite negative values for
+  reverse rotation, as the public protocol specifies. Unity's environment profile at
+  `c78b1f0c59545b0d3b1ff43e109fa63997267850` clamps negative speed to zero. Missing overrides
+  retain this renderer's time-of-day atmosphere, lighting and quality settings; component
+  compatibility does not imply identical default pixels across renderers. A sky image changes
+  the visible sky while the authored color bands continue to drive procedural ambient lighting.
 - **Emissive strength.** Unity never parses `KHR_materials_emissive_strength`; bevy honours
   it, spec-correctly. Content authored against Unity can glow (the Nekko cat at 65x). Dropping
   the extension is not the fix; the long-term answer is still open.

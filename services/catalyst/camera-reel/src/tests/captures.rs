@@ -12,10 +12,9 @@ use axum::Router;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{API_URL, PREFIX, json_of, scratch, send};
+use super::{PREFIX, json_of, scratch, send};
 use crate::Settings;
 use crate::auth::hash_bytes_v1;
-use crate::db::image_url;
 use crate::social::test_fixtures;
 
 const SERVICE: &str = "camera-reel";
@@ -34,46 +33,23 @@ const CAPTURED_OWNERS: [&str; 2] = [
     "0x62c1d7d461837cbf86dd8e99734fe709c4382f43",
 ];
 
-/// The 21 captures and what each answers differently, every entry a
-/// deliberate difference documented in `lib.rs` or an upstream addition
-/// after the capture: `status: ...` / `header ...` / `body ...` notes, then
-/// `<path> missing|extra|value`. The shared diff skips every `id` and `url`
-/// leaf; [`assert_photo_ids_and_urls`] checks those of the photo answers.
+/// The 21 captures and their dated upstream differences. The shared diff
+/// skips every `id` and `url` leaf; [`assert_photo_ids_and_urls`] checks
+/// those of the photo answers exactly, including filenames and order.
 const CAPTURES: &[(&str, &[&str])] = &[
     (
         "docs-openapi",
         &[
-            // Referenced by upstream's spec, never defined there (lib.rs).
-            "components.schemas.GalleryImageWithPlace extra",
             // Upstream 3e8bd0b (#61), after the capture.
             "components.schemas.ScreenRect extra",
             "components.schemas.User.properties.screenRect extra",
         ],
     ),
     ("health-live", &[]),
-    // Addressed by blob hash: the legacy `{uuid}-{ts}.jpg` key resolves to
-    // no row, so no 307 to the legacy bucket.
-    (
-        "image-file-redirect",
-        &[
-            "status: fixture=307 candidate=404",
-            "header content-length: fixture=\"0\" candidate=\"29\"",
-            "header location: fixture=\"https://camera-reel-s3-bucket.decentraland.org/e9659dd5-0f87-4169-a9a6-1ec0d5faf051-1790074770.jpg\" candidate=<missing>",
-            r#"body bytes differ: fixture="" candidate="{\"message\":\"image not found\"}""#,
-        ],
-    ),
+    ("image-file-redirect", &[]),
     ("image-metadata-404", &[]),
     ("image-metadata", &[]),
-    // Addressed by blob hash: a photo id is not a hash, so no 307.
-    (
-        "image-redirect",
-        &[
-            "status: fixture=307 candidate=404",
-            "header content-length: fixture=\"0\" candidate=\"29\"",
-            "header location: fixture=\"https://camera-reel-s3-bucket.decentraland.org/e9659dd5-0f87-4169-a9a6-1ec0d5faf051\" candidate=<missing>",
-            r#"body bytes differ: fixture="" candidate="{\"message\":\"image not found\"}""#,
-        ],
-    ),
+    ("image-redirect", &[]),
     ("place-images-page2", &[]),
     ("place-images-unknown-place", &[]),
     ("place-images", &[]),
@@ -97,6 +73,7 @@ struct Captured {
     owner: String,
     metadata: Value,
     date_time: i64,
+    original_filename: String,
 }
 
 fn body(name: &str) -> Value {
@@ -119,6 +96,7 @@ fn captured_photos() -> Vec<Captured> {
             id: image["id"].as_str().unwrap().parse().unwrap(),
             owner: image["metadata"]["userAddress"].as_str().unwrap().into(),
             metadata: image["metadata"].clone(),
+            original_filename: captured_filename(image),
             date_time: image["metadata"]["dateTime"]
                 .as_str()
                 .unwrap()
@@ -137,9 +115,21 @@ fn captured_photos() -> Vec<Captured> {
             owner: FILLER_OWNER.into(),
             metadata: filler_metadata(date_time, PLACE, &[]),
             date_time: date_time.parse().unwrap(),
+            original_filename: captured_filename(image),
         });
     }
     photos
+}
+
+fn captured_filename(image: &Value) -> String {
+    let id = image["id"].as_str().unwrap();
+    image["url"]
+        .as_str()
+        .unwrap()
+        .rsplit_once(&format!("/api/images/{id}-"))
+        .unwrap()
+        .1
+        .to_string()
 }
 
 fn filler_metadata(date_time: &str, place_id: &str, wearables: &[String]) -> Value {
@@ -168,11 +158,18 @@ fn thumbnail_hash(id: Uuid) -> String {
     hash_bytes_v1(format!("{id}-thumbnail").as_bytes())
 }
 
-async fn insert(pool: &sqlx::PgPool, id: Uuid, owner: &str, metadata: &Value, date_time: i64) {
+async fn insert(
+    pool: &sqlx::PgPool,
+    id: Uuid,
+    owner: &str,
+    metadata: &Value,
+    date_time: i64,
+    original_filename: &str,
+) {
     sqlx::query(
         "INSERT INTO camera_reel.images \
-         (id, user_address, image_hash, thumbnail_hash, is_public, metadata, created_at) \
-         VALUES ($1, $2, $3, $4, true, $5, to_timestamp($6) AT TIME ZONE 'UTC')",
+         (id, user_address, image_hash, thumbnail_hash, is_public, metadata, created_at, original_filename) \
+         VALUES ($1, $2, $3, $4, true, $5, to_timestamp($6) AT TIME ZONE 'UTC', $7)",
     )
     .bind(id)
     .bind(owner)
@@ -180,6 +177,7 @@ async fn insert(pool: &sqlx::PgPool, id: Uuid, owner: &str, metadata: &Value, da
     .bind(thumbnail_hash(id))
     .bind(metadata)
     .bind(date_time as f64)
+    .bind(original_filename)
     .execute(pool)
     .await
     .unwrap();
@@ -215,9 +213,7 @@ fn photos_of(answer: &Value) -> Vec<[String; 3]> {
         .collect()
 }
 
-/// What the shared diff skips in a photo answer: the same photos in the same
-/// order, each `url`/`thumbnailUrl` the hash URL under this node's `api_url`
-/// where upstream's is its legacy key `<id>-[thumbnail-]<dateTime>.jpg`.
+/// Check every photo id and both literal filename URLs, in captured order.
 async fn assert_photo_ids_and_urls(app: &Router, name: &str) {
     let fx = test_fixtures::fixture(SERVICE, name);
     let mut uri = format!("{PREFIX}{}", fx.request.path);
@@ -238,31 +234,27 @@ async fn assert_photo_ids_and_urls(app: &Router, name: &str) {
     let (_, _, bytes) = send(app.clone(), &fx.request.method, &uri, Vec::new(), body).await;
     let got = photos_of(&json_of(&bytes));
     let captured = photos_of(fx.response.body_json.as_ref().unwrap());
-    assert_eq!(
-        got.iter().map(|p| &p[0]).collect::<Vec<_>>(),
-        captured.iter().map(|p| &p[0]).collect::<Vec<_>>(),
-        "{name}: the photos and their order"
-    );
-    for ([id, url, thumbnail], [_, captured_url, captured_thumbnail]) in got.iter().zip(&captured) {
-        let uuid: Uuid = id.parse().unwrap();
-        assert_eq!(*url, image_url(API_URL, &image_hash(uuid)), "{name} {id}");
-        assert_eq!(
-            *thumbnail,
-            image_url(API_URL, &thumbnail_hash(uuid)),
-            "{name} {id}"
-        );
-        let legacy = format!("https://camera-reel-service.decentraland.org/api/images/{id}-");
-        assert!(captured_url.starts_with(&legacy), "{name}: {captured_url}");
-        assert!(
-            captured_thumbnail.starts_with(&format!("{legacy}thumbnail-")),
-            "{name}: {captured_thumbnail}"
-        );
-    }
+    assert_eq!(got, captured, "{name}: photo ids, order and exact URLs");
 }
 
 #[tokio::test]
 async fn the_camera_reel_host_answers_as_its_captures() {
-    let Some(s) = scratch(Settings::new(API_URL)).await else {
+    let metadata = body("image-metadata");
+    let api_url = metadata["url"]
+        .as_str()
+        .unwrap()
+        .split_once("/api/images/")
+        .unwrap()
+        .0;
+    let redirect = test_fixtures::fixture(SERVICE, "image-redirect");
+    let bucket_url = redirect.response.headers["location"]
+        .rsplit_once('/')
+        .unwrap()
+        .0
+        .to_string();
+    let mut settings = Settings::new(api_url);
+    settings.bucket_url = Some(bucket_url);
+    let Some(s) = scratch(settings).await else {
         return;
     };
     let pool = s.db().pool().clone();
@@ -276,6 +268,7 @@ async fn the_camera_reel_host_answers_as_its_captures() {
             &photo.owner,
             &photo.metadata,
             photo.date_time,
+            &photo.original_filename,
         )
         .await;
     }
@@ -289,7 +282,15 @@ async fn the_camera_reel_host_answers_as_its_captures() {
     for n in 0..place_total - at_place {
         let date_time = oldest - 1 - n as i64;
         let metadata = filler_metadata(&date_time.to_string(), PLACE, &[]);
-        insert(&pool, Uuid::new_v4(), FILLER_OWNER, &metadata, date_time).await;
+        insert(
+            &pool,
+            Uuid::new_v4(),
+            FILLER_OWNER,
+            &metadata,
+            date_time,
+            &format!("{date_time}.jpg"),
+        )
+        .await;
     }
     // The item gallery's other public photos of someone wearing the item,
     // at no captured place and older than every captured one.
@@ -305,7 +306,15 @@ async fn the_camera_reel_host_answers_as_its_captures() {
             "",
             &[format!("{ITEM_URN}:{}", 1000 + n)],
         );
-        insert(&pool, Uuid::new_v4(), FILLER_OWNER, &metadata, date_time).await;
+        insert(
+            &pool,
+            Uuid::new_v4(),
+            FILLER_OWNER,
+            &metadata,
+            date_time,
+            &format!("{date_time}.jpg"),
+        )
+        .await;
     }
 
     let app = s.app();

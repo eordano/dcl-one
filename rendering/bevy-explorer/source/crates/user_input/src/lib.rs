@@ -30,7 +30,7 @@ pub struct UserInputPlugin;
 impl Plugin for UserInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((AvatarMovementPlugin, PointAtPlugin));
-        debug_panel::register(app);
+        app.add_plugins(debug_panel::InputDebugPanelPlugin);
         app.add_systems(
             Update,
             update_camera

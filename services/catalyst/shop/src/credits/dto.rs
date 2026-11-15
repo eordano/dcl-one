@@ -2,15 +2,23 @@
 
 use serde::{Deserialize, Serialize};
 
+fn serialize_number<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    if value.fract() == 0.0 && *value >= i64::MIN as f64 && *value < -(i64::MIN as f64) {
+        serializer.serialize_i64(*value as i64)
+    } else {
+        serializer.serialize_f64(*value)
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct SeasonsData {
     #[serde(rename = "lastSeason")]
-    pub last_season: SeasonData,
+    pub last_season: Option<SeasonSummary>,
     #[serde(rename = "currentSeason")]
-    pub current_season: CurrentSeasonInfo,
+    pub current_season: Option<CurrentSeasonInfo>,
     #[serde(rename = "nextSeason")]
-    pub next_season: SeasonData,
+    pub next_season: Option<SeasonSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -18,6 +26,17 @@ pub struct SeasonsData {
 pub struct CurrentSeasonInfo {
     pub season: SeasonData,
     pub week: Week,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
+#[serde(rename_all = "camelCase")]
+pub struct SeasonSummary {
+    pub id: i32,
+    pub name: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub max_mana: String,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -59,9 +78,30 @@ pub struct Week {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct CreditsProgramProgressResponse {
+    pub season: ProgressSeason,
+    #[serde(rename = "currentWeek")]
+    pub current_week: ProgressWeek,
     pub user: UserData,
     pub credits: CreditsData,
     pub goals: Vec<GoalData>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressSeason {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub time_left: i64,
+    pub start_date: String,
+    pub end_date: String,
+    pub season_state: String,
+}
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressWeek {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub time_left: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -71,18 +111,13 @@ pub struct UserData {
     pub has_started_program: bool,
 }
 
-/// Whole credits (the balance's floor at the peg; upstream renders whole
-/// credits too). Integer on the wire: the peg makes a credit ten cents and
-/// no money path keeps a fraction of one.
+/// Seasonal MANA presentation; independent from the paid USD balance.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct CreditsData {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub available: i64,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub earned: i64,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub paid: i64,
+    #[serde(serialize_with = "serialize_number")]
+    pub available: f64,
     #[serde(rename = "expiresIn")]
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub expires_in: u64,
@@ -93,10 +128,17 @@ pub struct CreditsData {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct GoalData {
+    #[serde(rename = "isCompleted")]
+    pub is_completed: bool,
+    #[serde(rename = "completedAt")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub completed_at: Option<i64>,
+    pub id: String,
     pub title: String,
-    pub description: String,
+    pub description: Option<String>,
     pub thumbnail: String,
     pub progress: GoalProgressData,
+    #[serde(serialize_with = "serialize_number")]
     pub reward: f64,
     #[serde(rename = "isClaimed")]
     pub is_claimed: bool,
@@ -105,12 +147,20 @@ pub struct GoalData {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct GoalProgressData {
+    pub metadata: GoalMetadata,
     #[serde(rename = "totalSteps")]
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub total_steps: u64,
     #[serde(rename = "completedSteps")]
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub completed_steps: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
+pub struct GoalMetadata {
+    #[serde(rename = "photosTaken")]
+    pub photos_taken: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +175,8 @@ pub struct ClaimCreditsBody {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct ClaimCreditsResponse {
     pub ok: bool,
+    pub message: String,
+    #[serde(serialize_with = "serialize_number")]
     pub credits_granted: f64,
     #[serde(rename = "isBlockedForClaiming")]
     pub is_blocked_for_claiming: bool,
@@ -133,12 +185,34 @@ pub struct ClaimCreditsResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct UserCreditsResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub reason: Option<CreditFlagReason>,
+    #[serde(
+        rename = "isBlockedForClaiming",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub is_blocked_for_claiming: Option<bool>,
     pub credits: Vec<UserCreditItem>,
     #[serde(rename = "totalCredits")]
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub total_credits: i64,
+    #[serde(serialize_with = "serialize_number")]
+    pub total_credits: f64,
     pub totals: CreditsTotals,
     pub usd: UsdCredits,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
+#[serde(rename_all = "camelCase")]
+pub struct CreditFlagReason {
+    pub message: String,
+    pub ip: Option<String>,
+    pub linked_addresses: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -172,10 +246,12 @@ pub struct UserCreditItem {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "credits/"))]
 pub struct CreditsTotals {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub expiring: i64,
+    #[serde(serialize_with = "serialize_number")]
+    pub expiring: f64,
     #[serde(rename = "nonExpiring")]
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub non_expiring: i64,
+    #[serde(serialize_with = "serialize_number")]
+    pub non_expiring: f64,
 }
 
 /// The USD block (upstream `get-user-credits.ts`): `balanceCents` is the

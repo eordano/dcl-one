@@ -262,6 +262,22 @@ impl Pending {
         Ok(())
     }
 }
+/// A packet and its admission evidence enter the queue as one value.
+pub(super) enum Outgoing {
+    Packet(Message),
+    Assignment {
+        message: Message,
+        stamp: Option<crate::gatekeeper::admission::cluster::fence::PulseAdmissionStamp>,
+    },
+    ConfiguredAssignment {
+        message: Message,
+        stamp: crate::gatekeeper::admission::cluster::fence::PulseAdmissionStamp,
+        token_fence: TokenFence,
+        owner: V4Owner,
+    },
+    Kick(Message),
+}
+
 struct Frame {
     message: Message,
     owner: Option<PeerLink>,
@@ -321,16 +337,10 @@ pub(super) struct WebSocket {
     incoming: futures::stream::SplitStream<Transport>,
     queue: Arc<Queue>,
     state: AppState,
-    delivery: Option<(Option<bool>, bool)>,
-    assignment: bool,
-    pulse_admission: Option<crate::gatekeeper::admission::cluster::fence::PulseAdmissionStamp>,
-    island_token_fence: Option<TokenFence>,
-    terminal_next: bool,
     rate: HeartbeatRate,
     sample: Option<PositionSample>,
     sample_generation: u64,
     next_position: Instant,
-    fence: Option<V4Owner>,
     idle: Idle,
 }
 
@@ -387,36 +397,11 @@ impl WebSocket {
             queue,
             idle: Idle::new(Instant::from_std(state.started_at), Instant::now()),
             state,
-            delivery: None,
-            assignment: false,
-            pulse_admission: None,
-            island_token_fence: None,
-            terminal_next: false,
             rate: HeartbeatRate::default(),
             sample: None,
             sample_generation: 0,
             next_position: Instant::now(),
-            fence: None,
         }
-    }
-    pub(super) fn delivery(&mut self, assigned: Option<bool>, metric: bool, coalesce: bool) {
-        self.delivery = Some((assigned, metric));
-        self.assignment = coalesce;
-    }
-    pub(super) fn kick(&mut self) {
-        self.terminal_next = true;
-    }
-    pub(super) fn bind_fence(&mut self, owner: Option<&V4Owner>) {
-        self.fence = owner.cloned();
-    }
-    pub(super) fn bind_pulse(
-        &mut self,
-        stamp: Option<crate::gatekeeper::admission::cluster::fence::PulseAdmissionStamp>,
-    ) {
-        self.pulse_admission = stamp;
-    }
-    pub(super) fn bind_island_token_fence(&mut self, fence: TokenFence) {
-        self.island_token_fence = Some(fence);
     }
     pub(super) fn bind_owner(&mut self, owner: &PeerLink) {
         self.queue.pending.lock().owner = Some(owner.clone());
@@ -503,8 +488,7 @@ impl WebSocket {
                         self.queue.terminal(Terminal::Abort);
                         return None;
                     }
-                    let feed = self.state.feed.clone();
-                    if !send(self, Message::Ping(bytes::Bytes::new()), None, &feed).await {
+                    if !send(self, Message::Ping(bytes::Bytes::new()), None).await {
                         return None;
                     }
                 }
@@ -574,18 +558,32 @@ pub(super) async fn send(
     socket: &mut WebSocket,
     message: Message,
     owner: Option<&PeerLink>,
-    _: &FeedCache,
 ) -> bool {
-    let delivery = socket.delivery.take();
-    let assignment = std::mem::take(&mut socket.assignment);
-    let terminal = std::mem::take(&mut socket.terminal_next);
+    send_outgoing(socket, Outgoing::Packet(message), owner).await
+}
+
+pub(super) async fn send_outgoing(
+    socket: &mut WebSocket,
+    outgoing: Outgoing,
+    owner: Option<&PeerLink>,
+) -> bool {
     if socket.queue.peer_close.is_cancelled() {
         return false;
     }
-    if terminal {
-        socket.queue.terminal(Terminal::Kick(message));
-        return !socket.queue.peer_close.is_cancelled();
-    }
+    let (message, assignment, pulse_admission, island_token_fence, fence) = match outgoing {
+        Outgoing::Kick(message) => {
+            socket.queue.terminal(Terminal::Kick(message));
+            return !socket.queue.peer_close.is_cancelled();
+        }
+        Outgoing::Packet(message) => (message, false, None, None, None),
+        Outgoing::Assignment { message, stamp } => (message, true, stamp, None, None),
+        Outgoing::ConfiguredAssignment {
+            message,
+            stamp,
+            token_fence,
+            owner,
+        } => (message, true, Some(stamp), Some(token_fence), Some(owner)),
+    };
     if let Message::Close(frame) = &message {
         socket.queue.terminal(Terminal::Close(
             frame.as_ref().map_or(1000, |frame| frame.code),
@@ -595,29 +593,24 @@ pub(super) async fn send(
         ));
         return !socket.queue.peer_close.is_cancelled();
     }
-    let needs_fence =
-        delivery.is_some_and(|(assigned, _)| assigned.is_some()) && socket.fence.is_some();
-    let permit = if needs_fence {
-        socket.fence.as_ref().and_then(|owner| {
-            socket.state.registry.control_position_permit(
-                &owner.address,
-                &owner.session,
-                owner.epoch,
-                false,
-            )
-        })
-    } else {
-        None
-    };
+    let fence_bound = fence.is_some();
+    let permit = fence.as_ref().and_then(|owner| {
+        socket.state.registry.control_position_permit(
+            &owner.address,
+            &owner.session,
+            owner.epoch,
+            false,
+        )
+    });
     let mut frame = Some(Frame {
         message,
         owner: owner.cloned(),
-        delivery,
+        delivery: assignment.then_some((Some(true), true)),
         assignment,
-        pulse_admission: socket.pulse_admission.take(),
-        island_token_fence: socket.island_token_fence.take(),
+        pulse_admission,
+        island_token_fence,
         permit,
-        fence_bound: needs_fence,
+        fence_bound,
     });
     loop {
         let changed = socket.queue.changed.notified();

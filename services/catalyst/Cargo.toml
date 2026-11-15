@@ -86,6 +86,7 @@ ipnet = "2"
 uuid = { version = "1", features = ["serde", "v4", "v5"] }
 tokio-util = { version = "0.7", features = ["io"] }
 dashmap = "6"
+moka = { version = "=0.12.10", features = ["future"] }
 hashlink = "0.11"
 dragonbox_ecma = "0.1.12"
 parking_lot = "0.12"
@@ -116,6 +117,8 @@ hmac = "0.13.0"
 handlebars = { version = "6.4.4", default-features = false }
 bcrypt = "0.19.3"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "tiff"] }
+# Camera preserves the pinned service's format detection, codecs and thumbnails.
+image-camera = { package = "image", version = "=0.24.9", default-features = false, features = ["gif", "jpeg", "ico", "png", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dds", "farbfeld", "openexr", "qoi"] }
 alloy-sol-types = "1.7.3"
 getrandom = "0.4.3"
 v8 = "=152.2.0"
@@ -167,7 +170,6 @@ catalyst-price = { path = "price" }
 catalyst-storage = { path = "storage" }
 catalyst-config = { path = "config" }
 catalyst-shared = { path = "shared" }
-catalyst-testing = { path = "testing" }
 tokio.workspace = true
 axum.workspace = true
 tower-http.workspace = true

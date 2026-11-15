@@ -1,6 +1,12 @@
 #!/bin/bash
 
-set -e # stop execution on first non-zero result
+set -euo pipefail
+
+echo "> Checking compatibility and component-ID tooling"
+node --test scripts/tooling.test.cjs
+
+echo "> Checking bitwise generator goldens"
+node protoc-gen-bitwise/test/generator.test.js
 
 bash "$(dirname "$0")/generate.sh"
 

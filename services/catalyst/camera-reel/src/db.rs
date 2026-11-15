@@ -1,8 +1,9 @@
 //! The statements over `camera_reel.images` (`schemas/50_create.sql`). Each
 //! write is one statement so its outcome (owned /
 //! not owned / absent, at the cap / under it) comes from one snapshot. The
-//! wire `url`/`thumbnailUrl` are rendered here from the stored hashes as
-//! `<api_url>/api/images/<hash>`, so a changed `API_URL` never strands a row.
+//! wire `url`/`thumbnailUrl` use each upload's UUID and retained basename.
+//! Older rows without a basename keep their hash URLs. Both render under
+//! `api_url`, so a changed public base URL never strands a row.
 //!
 //! Pages: the old `offset` shape as is, plus a keyset shape (`Page::After`)
 //! whose cursor is the last row's `(created_at, id)`, the order every page
@@ -20,6 +21,7 @@
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
+use moka::future::Cache;
 use sqlx::types::Json;
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
@@ -28,7 +30,6 @@ use super::dto::{Image, Metadata};
 use crate::shared::cache::{TtlCache, cache_get, cache_put};
 
 const SERVABLE_TTL: Duration = Duration::from_secs(60);
-const WORLD_PLACES_TTL: Duration = Duration::from_secs(300);
 
 #[cfg(test)]
 tokio::task_local! {
@@ -54,6 +55,14 @@ pub struct DbImage {
     pub review_status: String,
 }
 
+impl DbImage {
+    fn with_public_urls(mut self, api_url: &str) -> Self {
+        self.url = image_url(api_url, &self.url);
+        self.thumbnail_url = image_url(api_url, &self.thumbnail_url);
+        self
+    }
+}
+
 /// What an upload inserts: the two blob hashes and the client's document.
 #[derive(Debug, Clone)]
 pub struct NewImage {
@@ -65,19 +74,34 @@ pub struct NewImage {
 }
 
 impl NewImage {
-    pub fn wire(&self, api_url: &str) -> Image {
+    pub fn wire(&self, api_url: &str, original_filename: Option<&str>) -> Image {
+        let (image_name, thumbnail_name) = match original_filename {
+            Some(filename) => (
+                format!("{}-{filename}", self.id),
+                format!("{}-thumbnail-{filename}", self.id),
+            ),
+            None => (self.image_hash.clone(), self.thumbnail_hash.clone()),
+        };
         Image {
             id: self.id.to_string(),
-            url: image_url(api_url, &self.image_hash),
-            thumbnail_url: image_url(api_url, &self.thumbnail_hash),
+            url: image_url(api_url, &image_name),
+            thumbnail_url: image_url(api_url, &thumbnail_name),
             is_public: self.is_public,
             metadata: self.metadata.clone(),
         }
     }
 }
 
-pub fn image_url(api_url: &str, hash: &str) -> String {
-    format!("{}/api/images/{hash}", api_url.trim_end_matches('/'))
+/// Upstream concatenates the configured base and decoded object name literally.
+/// Reserved characters are part of the wire value, not escaped URL segments.
+pub fn image_url(api_url: &str, name: &str) -> String {
+    format!("{api_url}/api/images/{name}")
+}
+
+/// One exact photo alias selects its hash and original object MIME together.
+pub struct ImageBlob {
+    pub hash: String,
+    pub content_type: Option<String>,
 }
 
 /// What one delete reports back: ownership outcome, the hashes the row
@@ -118,7 +142,8 @@ fn hashes_of(image_hash: &str, thumbnail_hash: &str) -> Vec<String> {
 /// Inside the write's transaction, after the row is rejected or gone:
 /// records `hashes` as withheld unless a non-rejected row, a content file
 /// or a builder upload still names them.
-/// Returns the hashes it recorded.
+/// Returns the hashes it recorded. A qualifying rejection promotes an older
+/// deletion record; deletion can never downgrade a durable rejection.
 async fn withhold(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     image_id: Uuid,
@@ -133,7 +158,9 @@ async fn withhold(
                            WHERE (i.image_hash = h.hash OR i.thumbnail_hash = h.hash) AND i.review_status <> 'rejected') \
            AND NOT EXISTS (SELECT 1 FROM content.content_files f WHERE f.content_hash = h.hash) \
            AND NOT EXISTS (SELECT 1 FROM builder.uploaded_contents u WHERE u.hash = h.hash) \
-         ON CONFLICT (hash) DO NOTHING \
+         ON CONFLICT (hash) DO UPDATE \
+             SET reason=EXCLUDED.reason, image_id=EXCLUDED.image_id, withheld_at=EXCLUDED.withheld_at \
+             WHERE camera_reel.withheld_blobs.reason = 'deleted' AND EXCLUDED.reason = 'rejected' \
          RETURNING hash",
     )
     .bind(hashes)
@@ -208,7 +235,7 @@ pub struct Database {
     pool: PgPool,
     api_url: String,
     servable: std::sync::Arc<TtlCache<bool>>,
-    world_places: std::sync::Arc<TtlCache<Vec<String>>>,
+    world_places: Cache<String, Vec<String>>,
 }
 
 fn parse_uuid(uuid: &str) -> Result<Uuid, sqlx::Error> {
@@ -225,12 +252,20 @@ enum Filter<'a> {
 }
 
 impl Database {
-    pub fn new(pool: PgPool, api_url: impl Into<String>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        api_url: impl Into<String>,
+        places_cache_ttl_seconds: u64,
+        places_cache_max_size: u64,
+    ) -> Self {
         Self {
             pool,
             api_url: api_url.into(),
             servable: Default::default(),
-            world_places: Default::default(),
+            world_places: Cache::builder()
+                .max_capacity(places_cache_max_size)
+                .time_to_live(Duration::from_secs(places_cache_ttl_seconds))
+                .build(),
         }
     }
 
@@ -240,10 +275,8 @@ impl Database {
 
     fn select(&self) -> QueryBuilder<Postgres> {
         let mut qb = QueryBuilder::new(format!("SELECT {COLUMNS}, "));
-        qb.push_bind(&self.api_url)
-            .push("::text || '/api/images/' || image_hash AS url, ")
-            .push_bind(&self.api_url)
-            .push("::text || '/api/images/' || thumbnail_hash AS thumbnail_url");
+        qb.push("CASE WHEN original_filename IS NULL THEN image_hash ELSE id::text || '-' || original_filename END AS url, ")
+            .push("CASE WHEN original_filename IS NULL THEN thumbnail_hash ELSE id::text || '-thumbnail-' || original_filename END AS thumbnail_url");
         qb
     }
 
@@ -251,7 +284,10 @@ impl Database {
         let mut qb = self.select();
         qb.push(format!(" FROM {TABLE} WHERE id = "))
             .push_bind(parse_uuid(id)?);
-        qb.build_query_as::<DbImage>().fetch_one(&self.pool).await
+        qb.build_query_as::<DbImage>()
+            .fetch_one(&self.pool)
+            .await
+            .map(|image| image.with_public_urls(&self.api_url))
     }
 
     fn push_filter(
@@ -330,7 +366,7 @@ impl Database {
         };
         let images = rows
             .iter()
-            .map(DbImage::from_row)
+            .map(|row| DbImage::from_row(row).map(|image| image.with_public_urls(&self.api_url)))
             .collect::<Result<Vec<_>, _>>()?;
         let next = match page {
             Page::Offset(_) => None,
@@ -391,6 +427,11 @@ impl Database {
             .await
     }
 
+    pub async fn get_wearable_images_count(&self, item: &str) -> Result<u64, sqlx::Error> {
+        self.get_images_count(&Filter::WearableItem(item), true)
+            .await
+    }
+
     /// Public, non-rejected photos in which somebody wears `item`
     /// (`<contract>-<itemId>`), newest first; public whoever asks, since
     /// these are photos of other people offered for an item.
@@ -435,6 +476,17 @@ impl Database {
         image: &NewImage,
         max_images: u64,
     ) -> Result<Option<u64>, sqlx::Error> {
+        self.insert_image_within_limit_named(image, max_images, None, None)
+            .await
+    }
+
+    pub async fn insert_image_within_limit_named(
+        &self,
+        image: &NewImage,
+        max_images: u64,
+        original_filename: Option<&str>,
+        image_content_type: Option<&str>,
+    ) -> Result<Option<u64>, sqlx::Error> {
         let user = image.metadata.user_address.to_lowercase();
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
@@ -443,8 +495,8 @@ impl Database {
             .await?;
         let count = sqlx::query_scalar::<_, i64>(
             "WITH ins AS ( \
-                 INSERT INTO camera_reel.images (id, user_address, image_hash, thumbnail_hash, is_public, metadata, ranking_published) \
-                 SELECT $1, $2, $3, $4, $5, $6, false \
+                 INSERT INTO camera_reel.images (id, user_address, image_hash, thumbnail_hash, is_public, metadata, ranking_published, original_filename, image_content_type) \
+                 SELECT $1, $2, $3, $4, $5, $6, false, $8, $9 \
                  WHERE (SELECT COUNT(*) FROM camera_reel.images WHERE user_address = $2) < $7 \
                  RETURNING id \
              ) \
@@ -457,10 +509,53 @@ impl Database {
         .bind(image.is_public)
         .bind(Json(&image.metadata))
         .bind(max_images.min(i64::MAX as u64) as i64)
+        .bind(original_filename)
+        .bind(image_content_type)
         .fetch_optional(&mut *tx)
         .await?;
         tx.commit().await?;
         Ok(count.map(|c| c as u64))
+    }
+
+    /// A new upload may reuse bytes whose last photo was deleted. Only lift
+    /// deletion withholding after both blobs exist; a rejection remains durable.
+    /// Lock this live row so its own concurrent deletion/review cannot invalidate
+    /// the references checked by this transaction.
+    pub(crate) async fn release_deleted_upload(
+        &self,
+        id: Uuid,
+    ) -> Result<BlobVerdict, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT image_hash, thumbnail_hash FROM camera_reel.images \
+             WHERE id=$1 AND review_status <> 'rejected' FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((image_hash, thumbnail_hash)) = row else {
+            return Ok(BlobVerdict {
+                withheld: Vec::new(),
+                released: Vec::new(),
+            });
+        };
+        let hashes = hashes_of(&image_hash, &thumbnail_hash);
+        let released = sqlx::query_scalar::<_, String>(
+            "DELETE FROM camera_reel.withheld_blobs w \
+             WHERE w.hash = ANY($1) AND w.reason = 'deleted' \
+               AND EXISTS (SELECT 1 FROM camera_reel.images i \
+                           WHERE (i.image_hash=w.hash OR i.thumbnail_hash=w.hash) AND i.review_status <> 'rejected') \
+               AND NOT EXISTS (SELECT 1 FROM camera_reel.images i \
+                               WHERE (i.image_hash=w.hash OR i.thumbnail_hash=w.hash) AND i.review_status = 'rejected') \
+             RETURNING w.hash",
+        ).bind(&hashes).fetch_all(&mut *tx).await?;
+        tx.commit().await?;
+        self.forget_servable(&image_hash);
+        self.forget_servable(&thumbnail_hash);
+        Ok(BlobVerdict {
+            withheld: Vec::new(),
+            released,
+        })
     }
 
     /// Blob I/O finishes before this transaction. The marker, local receipt,
@@ -620,6 +715,47 @@ impl Database {
         Ok(servable)
     }
 
+    /// Resolve only exact stored photo aliases, or a legacy hash a photo still
+    /// references. The UUID prefix uses the existing primary key; arbitrary
+    /// shared-storage hashes never become readable through this route.
+    pub async fn image_blob_for_name(&self, name: &str) -> Result<Option<ImageBlob>, sqlx::Error> {
+        if let Some((id, suffix)) = name
+            .get(..36)
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .zip(name.get(36..).and_then(|suffix| suffix.strip_prefix('-')))
+        {
+            if !name.starts_with(&id.to_string()) {
+                return Ok(None);
+            }
+            let row: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT image_hash, thumbnail_hash, original_filename, image_content_type FROM camera_reel.images \
+                 WHERE id=$1 AND review_status <> 'rejected'",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+            if let Some((image_hash, thumbnail_hash, Some(filename), content_type)) = row {
+                if suffix == filename {
+                    return Ok(Some(ImageBlob {
+                        hash: image_hash,
+                        content_type,
+                    }));
+                }
+                if suffix == format!("thumbnail-{filename}") {
+                    return Ok(Some(ImageBlob {
+                        hash: thumbnail_hash,
+                        content_type,
+                    }));
+                }
+            }
+            return Ok(None);
+        }
+        Ok(self.hash_is_servable(name).await?.then(|| ImageBlob {
+            hash: name.to_string(),
+            content_type: None,
+        }))
+    }
+
     fn forget_servable(&self, hash: &str) {
         self.servable.lock().unwrap().remove(hash);
     }
@@ -715,12 +851,14 @@ impl Database {
     }
 
     /// The place ids of a world name (`name.dcl.eth`), the places listing's
-    /// `?names=` answer as a local read, memoised for `WORLD_PLACES_TTL`:
+    /// `?names=` answer as a local read, memoised with the configured TTL:
     /// the world's scenes, not its catalogue row (`id = lower(world_name)`),
     /// which the places API leaves out of that answer too.
     pub async fn world_place_ids(&self, world_name: &str) -> Result<Vec<String>, sqlx::Error> {
-        let key = world_name.to_lowercase();
-        if let Some(ids) = cache_get(&self.world_places, &key) {
+        // Cache identity follows the exact request, independently of the
+        // case-insensitive catalogue lookup.
+        let key = world_name.to_owned();
+        if let Some(ids) = self.world_places.get(&key).await {
             return Ok(ids);
         }
         let ids: Vec<String> = sqlx::query_scalar(
@@ -730,10 +868,10 @@ impl Database {
                AND (world IS FALSE OR COALESCE(NULLIF(raw->'show_in_places', 'null'::jsonb) = 'true'::jsonb, true) IS TRUE) \
              ORDER BY id",
         )
-        .bind(&key)
+        .bind(world_name.to_lowercase())
         .fetch_all(&self.pool)
         .await?;
-        cache_put(&self.world_places, key, ids.clone(), WORLD_PLACES_TTL);
+        self.world_places.insert(key, ids.clone()).await;
         Ok(ids)
     }
 }
@@ -741,6 +879,20 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn world_lookup_cache_obeys_configured_capacity_after_maintenance() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/camera_cache_test")
+            .unwrap();
+        let db = Database::new(pool, "https://camera.example", 300, 2);
+        for n in 0..20 {
+            db.world_places.insert(format!("{n}.eth"), vec![]).await;
+        }
+        db.world_places.run_pending_tasks().await;
+        assert!(db.world_places.entry_count() <= 2);
+        assert!(db.world_places.entry_count() > 0);
+    }
 
     #[test]
     fn cursor_round_trips_microseconds_and_id() {
@@ -762,7 +914,7 @@ mod tests {
     fn urls_render_from_the_hash_under_the_api_url() {
         assert_eq!(
             image_url("https://x.example/camera-reel-service/", "bafk"),
-            "https://x.example/camera-reel-service/api/images/bafk"
+            "https://x.example/camera-reel-service//api/images/bafk"
         );
     }
 }

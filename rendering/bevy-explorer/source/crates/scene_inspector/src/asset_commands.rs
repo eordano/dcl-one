@@ -33,11 +33,15 @@ pub struct CatalogAsset {
 #[derive(Resource, Clone, Default)]
 pub struct AssetCatalog(pub Arc<AsyncRwLock<Vec<CatalogAsset>>>);
 
-pub fn add_asset_commands(app: &mut App) {
-    app.init_resource::<AssetCatalog>();
-    app.add_console_command::<AssetCatalogCommand, _>(asset_catalog_cmd);
-    app.add_console_command::<InitAssetCommand, _>(init_asset_cmd);
-    app.add_console_command::<SceneContentCommand, _>(scene_content_cmd);
+pub struct AssetCommandsPlugin;
+
+impl Plugin for AssetCommandsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<AssetCatalog>();
+        app.add_console_command::<AssetCatalogCommand, _>(asset_catalog_cmd);
+        app.add_console_command::<InitAssetCommand, _>(init_asset_cmd);
+        app.add_console_command::<SceneContentCommand, _>(scene_content_cmd);
+    }
 }
 
 // --- /scene_content ---

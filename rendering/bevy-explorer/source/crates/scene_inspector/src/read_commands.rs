@@ -23,23 +23,27 @@ use crate::{
     snapshot::PendingSnapshotRequests,
 };
 
-pub fn add_read_commands(app: &mut App) {
-    app.add_console_command::<SetSceneCommand, _>(set_scene_cmd);
-    app.add_console_command::<SceneStatsCommand, _>(scene_stats_cmd);
-    app.add_console_command::<SceneTargetCommand, _>(scene_target_cmd);
-    app.add_console_command::<SceneLogsCommand, _>(scene_logs_cmd);
-    app.add_console_command::<SceneEntitiesCommand, _>(scene_entities_cmd);
-    app.add_console_command::<EntityComponentsCommand, _>(entity_components_cmd);
-    app.add_console_command::<InspectComponentCommand, _>(inspect_component_cmd);
-    app.add_console_command::<SceneTreeCommand, _>(scene_tree_cmd);
-    app.add_console_command::<CrdtSnapshotCommand, _>(crdt_snapshot_cmd);
-    app.add_console_command::<CrdtInitialCommand, _>(crdt_initial_cmd);
-    app.add_console_command::<ScreenshotCommand, _>(screenshot_cmd);
-    app.add_console_command::<TextureCameraScreenshotCommand, _>(texture_camera_screenshot_cmd);
-    app.add_console_command::<ComponentNamesCommand, _>(component_names_cmd);
-    app.add_console_command::<ComponentDefaultCommand, _>(component_default_cmd);
-    app.add_console_command::<ComponentSchemaCommand, _>(component_schema_cmd);
-    crate::screen_position::add_screen_position_command(app);
+pub struct ReadCommandsPlugin;
+
+impl Plugin for ReadCommandsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<SetSceneCommand, _>(set_scene_cmd);
+        app.add_console_command::<SceneStatsCommand, _>(scene_stats_cmd);
+        app.add_console_command::<SceneTargetCommand, _>(scene_target_cmd);
+        app.add_console_command::<SceneLogsCommand, _>(scene_logs_cmd);
+        app.add_console_command::<SceneEntitiesCommand, _>(scene_entities_cmd);
+        app.add_console_command::<EntityComponentsCommand, _>(entity_components_cmd);
+        app.add_console_command::<InspectComponentCommand, _>(inspect_component_cmd);
+        app.add_console_command::<SceneTreeCommand, _>(scene_tree_cmd);
+        app.add_console_command::<CrdtSnapshotCommand, _>(crdt_snapshot_cmd);
+        app.add_console_command::<CrdtInitialCommand, _>(crdt_initial_cmd);
+        app.add_console_command::<ScreenshotCommand, _>(screenshot_cmd);
+        app.add_console_command::<TextureCameraScreenshotCommand, _>(texture_camera_screenshot_cmd);
+        app.add_console_command::<ComponentNamesCommand, _>(component_names_cmd);
+        app.add_console_command::<ComponentDefaultCommand, _>(component_default_cmd);
+        app.add_console_command::<ComponentSchemaCommand, _>(component_schema_cmd);
+        app.add_plugins(crate::screen_position::ScreenPositionCommandPlugin);
+    }
 }
 
 // --- /set_scene ---
@@ -999,7 +1003,7 @@ mod tests {
     fn grow_only_components_keep_their_name_in_the_snapshot() {
         let mut app = App::new();
         app.init_resource::<ComponentNameRegistry>();
-        crate::manual_registry::register_engine_components(&mut app);
+        app.add_plugins(crate::manual_registry::EngineComponentsPlugin);
         let entries = snapshot_entries(app.world().resource::<ComponentNameRegistry>());
 
         let bytes = PbExplorerItemPurchaseResult {

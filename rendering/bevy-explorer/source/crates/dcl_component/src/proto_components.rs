@@ -147,6 +147,9 @@ impl DclProtoComponent for sdk::components::PbTriggerAreaResult {}
 impl DclProtoComponent for sdk::components::PbExplorerUiEventsResult {}
 impl DclProtoComponent for sdk::components::PbGltfNodeModifiers {}
 impl DclProtoComponent for sdk::components::PbSkyboxTime {}
+impl DclProtoComponent for sdk::components::PbSkybox {}
+impl DclProtoComponent for sdk::components::PbSun {}
+impl DclProtoComponent for sdk::components::PbEnvironmentFog {}
 impl DclProtoComponent for sdk::components::PbAvatarMovement {}
 impl DclProtoComponent for sdk::components::PbAvatarLocomotionSettings {}
 impl DclProtoComponent for sdk::components::PbAvatarMovementInfo {}

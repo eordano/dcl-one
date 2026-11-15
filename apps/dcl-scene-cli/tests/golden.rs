@@ -26,6 +26,7 @@
 //! auto-written golden would report green having asserted nothing.
 // Unix only: every staged fixture shares the toolchain's node_modules by symlink.
 #![cfg(unix)]
+#![recursion_limit = "256"]
 
 use dcl_scene_cli::build::{self, BuildOptions};
 use dcl_scene_cli::{crdt_gen, deploy, entrypoint, init, split};

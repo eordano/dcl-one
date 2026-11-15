@@ -44,44 +44,48 @@ impl InspectionParcel {
     }
 }
 
-pub(super) fn register(app: &mut App) {
-    let preview = app
-        .world()
-        .get_resource::<PreviewMode>()
-        .is_some_and(|p| p.is_preview);
-    app.insert_resource(InspectionParcel {
-        parcel: None,
-        preview,
-    });
-    if !preview {
-        return;
-    }
-    app.add_preview_console_command::<InspectionState, _>(inspection_state)
-        .add_preview_console_command::<InspectParcel, _>(inspect_parcel)
-        .add_debug_section(DebugSection {
-            title: "World Entities",
-            query: "/world_entities_state",
-            fields: &[("Inspecting", "mode"), ("Scene", "scene")],
-            actions: &[
-                ("Follow player", "/inspect_parcel"),
-                ("List all entities", "/scene_entities --panel"),
-                ("Read recent scene logs", "/scene_logs --panel"),
-            ],
-            inputs: &[
-                DebugInput {
-                    label: "Scene parcel (x,y)",
-                    field: "parcel",
-                    command: "/inspect_parcel {value}",
-                    kind: DebugInputKind::Text,
-                },
-                DebugInput {
-                    label: "List components for entity ID",
-                    field: "",
-                    command: "/entity_components --panel {value}",
-                    kind: DebugInputKind::Text,
-                },
-            ],
+pub(super) struct SceneInspectorPanelPlugin;
+
+impl Plugin for SceneInspectorPanelPlugin {
+    fn build(&self, app: &mut App) {
+        let preview = app
+            .world()
+            .get_resource::<PreviewMode>()
+            .is_some_and(|p| p.is_preview);
+        app.insert_resource(InspectionParcel {
+            parcel: None,
+            preview,
         });
+        if !preview {
+            return;
+        }
+        app.add_preview_console_command::<InspectionState, _>(inspection_state)
+            .add_preview_console_command::<InspectParcel, _>(inspect_parcel)
+            .add_debug_section(DebugSection {
+                title: "World Entities",
+                query: "/world_entities_state",
+                fields: &[("Inspecting", "mode"), ("Scene", "scene")],
+                actions: &[
+                    ("Follow player", "/inspect_parcel"),
+                    ("List all entities", "/scene_entities --panel"),
+                    ("Read recent scene logs", "/scene_logs --panel"),
+                ],
+                inputs: &[
+                    DebugInput {
+                        label: "Scene parcel (x,y)",
+                        field: "parcel",
+                        command: "/inspect_parcel {value}",
+                        kind: DebugInputKind::Text,
+                    },
+                    DebugInput {
+                        label: "List components for entity ID",
+                        field: "",
+                        command: "/entity_components --panel {value}",
+                        kind: DebugInputKind::Text,
+                    },
+                ],
+            });
+    }
 }
 
 #[derive(clap::Parser, ConsoleCommand)]

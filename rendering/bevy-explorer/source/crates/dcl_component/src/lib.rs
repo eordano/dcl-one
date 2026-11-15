@@ -216,6 +216,9 @@ impl SceneComponentId {
     pub const TEXTURE_CAMERA: SceneComponentId = SceneComponentId(1207);
     pub const CAMERA_LAYERS: SceneComponentId = SceneComponentId(1208);
     pub const PRIMARY_POINTER_INFO: SceneComponentId = SceneComponentId(1209);
+    pub const SKYBOX: SceneComponentId = SceneComponentId(1223);
+    pub const SUN: SceneComponentId = SceneComponentId(1224);
+    pub const ENVIRONMENT_FOG: SceneComponentId = SceneComponentId(1225);
     pub const SKYBOX_TIME: SceneComponentId = SceneComponentId(1210);
     pub const CAMERA_LAYER: SceneComponentId = SceneComponentId(1503);
 

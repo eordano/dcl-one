@@ -29,6 +29,7 @@ pub mod fed;
 pub mod filecache;
 pub mod imposters;
 pub(crate) mod json_date;
+mod keyed_locks;
 pub mod mirror_state;
 pub mod moderation_hooks;
 pub mod opensea;

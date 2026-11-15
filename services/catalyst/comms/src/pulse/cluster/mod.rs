@@ -10,6 +10,7 @@
 //! than on a thread of its own: `PulseServer` owns every board through `&mut self`, so there is no
 //! worker concurrency to defend against and no lock-free board discipline to keep.
 
+mod assignments;
 pub mod control;
 pub mod feed;
 pub mod nats;

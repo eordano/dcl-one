@@ -10,57 +10,61 @@ use common::{
 };
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<MemoryCommand, _>(debug_memory)
-        .add_debug_section(DebugSection {
-            title: "Memory and limits",
-            query: "/debug_memory",
-            fields: &[
-                ("Engine memory (MiB)", "used"),
-                ("Platform capacity (MiB)", "capacity"),
-                ("Effective cap (MiB)", "cap"),
-                ("Memory pressure", "pressure"),
-                ("Thresholds (MiB)", "thresholds"),
-                ("GPU memory pools", "gpu"),
-            ],
-            actions: &[("Restore platform limit", "/debug_memory 0")],
-            inputs: &[DebugInput {
-                label: "Session memory limit (MiB)",
-                field: "limit",
-                command: "/debug_memory {value}",
-                kind: DebugInputKind::Number {
-                    min: 0.0,
-                    max: u32::MAX as f64,
-                    step: 1.0,
-                },
-            }],
-        });
-    app.add_console_command::<PerformanceStateCommand, _>(performance_state)
-        .add_debug_section(DebugSection {
-            title: "Performance",
-            inputs: &[DebugInput {
-                label: "30 FPS limit",
-                field: "limit30",
-                command: "/session_graphics fps {value}",
-                kind: DebugInputKind::ActionButton {
-                    enable: ("Limit to 30 FPS", "30"),
-                    disable: ("Use configured FPS", ""),
-                },
-            }],
-            query: "/performance_state",
-            fields: &[
-                ("Client version", "version"),
-                ("Frame rate (FPS)", "fps"),
-                ("Frame duration (ms)", "frameMs"),
-                ("Min FPS in last 1,000 frames", "minFps"),
-                ("Max FPS in last 1,000 frames", "maxFps"),
-                ("Hiccups in last 1,000 frames", "hiccups"),
-                ("Target frame rate (FPS)", "targetFps"),
-                ("GPU frame time (ms)", "gpuFrameMs"),
-                ("Engine memory (MiB)", "engineMemoryMiB"),
-            ],
-            actions: &[],
-        });
+pub(super) struct MemoryDebugPanelPlugin;
+
+impl Plugin for MemoryDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<MemoryCommand, _>(debug_memory)
+            .add_debug_section(DebugSection {
+                title: "Memory and limits",
+                query: "/debug_memory",
+                fields: &[
+                    ("Engine memory (MiB)", "used"),
+                    ("Platform capacity (MiB)", "capacity"),
+                    ("Effective cap (MiB)", "cap"),
+                    ("Memory pressure", "pressure"),
+                    ("Thresholds (MiB)", "thresholds"),
+                    ("GPU memory pools", "gpu"),
+                ],
+                actions: &[("Restore platform limit", "/debug_memory 0")],
+                inputs: &[DebugInput {
+                    label: "Session memory limit (MiB)",
+                    field: "limit",
+                    command: "/debug_memory {value}",
+                    kind: DebugInputKind::Number {
+                        min: 0.0,
+                        max: u32::MAX as f64,
+                        step: 1.0,
+                    },
+                }],
+            });
+        app.add_console_command::<PerformanceStateCommand, _>(performance_state)
+            .add_debug_section(DebugSection {
+                title: "Performance",
+                inputs: &[DebugInput {
+                    label: "30 FPS limit",
+                    field: "limit30",
+                    command: "/session_graphics fps {value}",
+                    kind: DebugInputKind::ActionButton {
+                        enable: ("Limit to 30 FPS", "30"),
+                        disable: ("Use configured FPS", ""),
+                    },
+                }],
+                query: "/performance_state",
+                fields: &[
+                    ("Client version", "version"),
+                    ("Frame rate (FPS)", "fps"),
+                    ("Frame duration (ms)", "frameMs"),
+                    ("Min FPS in last 1,000 frames", "minFps"),
+                    ("Max FPS in last 1,000 frames", "maxFps"),
+                    ("Hiccups in last 1,000 frames", "hiccups"),
+                    ("Target frame rate (FPS)", "targetFps"),
+                    ("GPU frame time (ms)", "gpuFrameMs"),
+                    ("Engine memory (MiB)", "engineMemoryMiB"),
+                ],
+                actions: &[],
+            });
+    }
 }
 
 /// Report the live engine readings and the effective session frame-rate target as JSON.

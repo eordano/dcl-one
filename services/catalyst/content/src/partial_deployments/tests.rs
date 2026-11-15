@@ -47,7 +47,7 @@ impl Node {
         let storage = Arc::new(Storage::from_config(&tmp).await.unwrap());
         let state = Arc::new(ContentState::new(pool.clone(), settings, storage.clone()));
         state.sync.set_state(SyncState::Syncing);
-        let deployer = WriteDeployer::with_optional_eip1654(pool, storage, None)
+        let deployer = WriteDeployer::with_partial_validation_for_tests(pool, storage, None)
             .with_denylist(state.denylist.clone());
         assert!(state.attach_writes(true, Arc::new(deployer)));
         Some(Self { state, tmp })
@@ -288,9 +288,12 @@ async fn a_scene_uploaded_in_batches_is_published_by_its_last_batch() {
         node.state.storage.clone(),
     ));
     state.sync.set_state(SyncState::Syncing);
-    let deployer =
-        WriteDeployer::with_optional_eip1654(state.pool.clone(), state.storage.clone(), None)
-            .with_denylist(state.denylist.clone());
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
+        state.pool.clone(),
+        state.storage.clone(),
+        None,
+    )
+    .with_denylist(state.denylist.clone());
     assert!(state.attach_writes(true, Arc::new(deployer)));
     let router = build_router(state.clone());
 
@@ -970,4 +973,162 @@ fn quota_retry_waits_for_the_cleanup_after_the_oldest_upload_expires() {
         seconds_until_cleanup_frees_quota(10, None, 3_600_000, None, 300_000),
         300
     );
+}
+
+#[tokio::test]
+async fn finalization_retains_rate_limited_uploads_and_releases_superseded_ones() {
+    require_test_db!(Some(node) = Node::new("finalize-kinds", Limits::default()).await);
+    let signer = PrivateKeySigner::random();
+    let scene = make_scene(&signer, &[b"finalize-kinds-content"], "scene").await;
+    let (status, _, _) = send(
+        &node.router(),
+        &scene,
+        &scene.chain,
+        vec![entity_file(&scene)],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (hash, bytes) = &scene.files[0];
+    node.state.storage.store(hash, bytes.clone()).await.unwrap();
+    let deployer = &node.state.writes.get().unwrap().deployer;
+    let mut entity: Entity = serde_json::from_slice(&scene.bytes).unwrap();
+    entity.id = scene.id.clone();
+    let pending = pending(&node.state.pool, &scene.id).await.unwrap().unwrap();
+    let limits = &node.state.settings.partial_uploads;
+    let hashes = vec![hash.clone()];
+    let mut other: Value = serde_json::from_slice(&scene.bytes).unwrap();
+    other["timestamp"] = json!(entity.timestamp - 1);
+    let earlier = Bytes::from(serde_json::to_vec(&other).unwrap());
+    let earlier_id = hash_bytes_v1(&earlier);
+    deployer
+        .deploy_entity(
+            vec![earlier, bytes.clone()],
+            &earlier_id,
+            chain_for(&signer, &earlier_id).await,
+            "LOCAL",
+        )
+        .await
+        .unwrap();
+    let refusal = finalize(
+        deployer,
+        limits,
+        &entity,
+        scene.bytes.clone(),
+        scene.chain.clone(),
+        &hashes,
+        pending.created_at,
+        pending.created_at + limits.ttl_ms,
+    )
+    .await
+    .err()
+    .unwrap();
+    let response = refusal.into_response();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        response.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            >= 1
+    );
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"errors": [format!("Entity rate limited (entityId={} pointers={}).", scene.id, scene.pointers.join(","))]})
+    );
+    assert_eq!(pending_rows(&node.state.pool, &scene.id).await, 1);
+
+    deployer.clear_rate_limits();
+    other["timestamp"] = json!(entity.timestamp + 1);
+    let newer = Bytes::from(serde_json::to_vec(&other).unwrap());
+    let newer_id = hash_bytes_v1(&newer);
+    deployer
+        .deploy_entity(
+            vec![newer, bytes.clone()],
+            &newer_id,
+            chain_for(&signer, &newer_id).await,
+            "LOCAL",
+        )
+        .await
+        .unwrap();
+    let refusal = finalize(
+        deployer,
+        limits,
+        &entity,
+        scene.bytes.clone(),
+        scene.chain.clone(),
+        &hashes,
+        pending.created_at,
+        pending.created_at + limits.ttl_ms,
+    )
+    .await
+    .err()
+    .unwrap();
+    let response = refusal.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(response.headers().get(header::RETRY_AFTER).is_none());
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"errors": [crate::write_deployer::newer_entity_message(&entity)]})
+    );
+    assert_eq!(pending_rows(&node.state.pool, &scene.id).await, 0);
+}
+
+#[tokio::test]
+async fn terminal_pointer_contention_waits_then_retains_the_upload() {
+    require_test_db!(Some(node) = Node::new("finalize-contention", Limits::default()).await);
+    let signer = PrivateKeySigner::random();
+    let scene = make_scene(&signer, &[b"contention-content"], "scene").await;
+    let (status, _, _) = send(
+        &node.router(),
+        &scene,
+        &scene.chain,
+        vec![entity_file(&scene)],
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (hash, bytes) = &scene.files[0];
+    node.state.storage.store(hash, bytes.clone()).await.unwrap();
+    let deployer = &node.state.writes.get().unwrap().deployer;
+    let _claim = deployer.hold_pointers_for_tests("scene", &scene.pointers);
+    let mut entity: Entity = serde_json::from_slice(&scene.bytes).unwrap();
+    entity.id = scene.id.clone();
+    let pending = pending(&node.state.pool, &scene.id).await.unwrap().unwrap();
+    let limits = &node.state.settings.partial_uploads;
+    let hashes = vec![hash.clone()];
+    let started = tokio::time::Instant::now();
+    let refusal = tokio::time::timeout(
+        Duration::from_secs(10),
+        finalize(
+            deployer,
+            limits,
+            &entity,
+            scene.bytes.clone(),
+            scene.chain.clone(),
+            &hashes,
+            pending.created_at,
+            pending.created_at + limits.ttl_ms,
+        ),
+    )
+    .await
+    .expect("contention retries are bounded")
+    .err()
+    .unwrap();
+    assert!(
+        started.elapsed() >= FINALIZE_POINTER_CONFLICT_DELAY * FINALIZE_POINTER_CONFLICT_RETRIES
+    );
+    let response = refusal.into_response();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response.headers()[header::RETRY_AFTER],
+        POINTER_CONFLICT_RETRY_AFTER_SECS.to_string()
+    );
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"errors": [format!("The following pointers are currently being deployed: '{}'. Please try again in a few seconds.", scene.pointers.join(","))]})
+    );
+    assert_eq!(pending_rows(&node.state.pool, &scene.id).await, 1);
 }

@@ -223,6 +223,39 @@ fn split(connections: &[(i64, String)]) -> (Vec<i64>, Vec<String>) {
     connections.iter().cloned().unzip()
 }
 
+/// Persists ordered remaining pairs on the caller's locked connection.
+pub(super) async fn persist_remaining_connections(
+    conn: &mut PgConnection,
+    visit: &Visit,
+    remaining: &[(i64, String)],
+) -> sqlx::Result<()> {
+    if remaining.is_empty() {
+        sqlx::query(
+            "DELETE FROM social.presence_visits WHERE badge_id = $1 AND wallet = $2 AND room = $3",
+        )
+        .bind(&visit.badge_id)
+        .bind(&visit.wallet)
+        .bind(&visit.room)
+        .execute(&mut *conn)
+        .await?;
+    } else {
+        let (joins, sessions) = split(remaining);
+        sqlx::query(
+            "UPDATE social.presence_visits SET joins = $4, sessions = $5, opened_at = $6 \
+         WHERE badge_id = $1 AND wallet = $2 AND room = $3",
+        )
+        .bind(&visit.badge_id)
+        .bind(&visit.wallet)
+        .bind(&visit.room)
+        .bind(&joins)
+        .bind(&sessions)
+        .bind(joins[0])
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
 /// The room of a visit: scene and world rooms only, keyed as upstream.
 pub fn room_key(event: &PresenceEvent) -> Option<String> {
     let realm = &event.realm_name;
@@ -704,30 +737,7 @@ impl Flow<'_> {
             .into_iter()
             .filter(|(_, s)| *s != event.session_id)
             .collect();
-        if remaining.is_empty() {
-            sqlx::query(
-                "DELETE FROM social.presence_visits WHERE badge_id = $1 AND wallet = $2 AND room = $3",
-            )
-            .bind(&visit.badge_id)
-            .bind(&visit.wallet)
-            .bind(&visit.room)
-            .execute(&mut *conn)
-            .await?;
-        } else {
-            let (joins, sessions) = split(&remaining);
-            sqlx::query(
-                "UPDATE social.presence_visits SET joins = $4, sessions = $5, opened_at = $6 \
-                 WHERE badge_id = $1 AND wallet = $2 AND room = $3",
-            )
-            .bind(&visit.badge_id)
-            .bind(&visit.wallet)
-            .bind(&visit.room)
-            .bind(&joins)
-            .bind(&sessions)
-            .bind(joins[0])
-            .execute(&mut *conn)
-            .await?;
-        }
+        persist_remaining_connections(conn, &visit, &remaining).await?;
         self.remember_ended(
             conn,
             &visit.badge_id,

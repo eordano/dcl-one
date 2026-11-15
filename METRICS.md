@@ -1,5 +1,28 @@
 # Measured query workloads
 
+## Seasonal photo progress
+
+A disposable PostgreSQL 18 fixture with 1,000,000 photo-goal receipts and
+500,000 retained Camera events measured the wallet/season/week `photosTaken`
+query with `EXPLAIN (ANALYZE, BUFFERS)` after `ANALYZE`. Returning two counted
+photos used a parallel sequential scan in 26.199 ms. The partial index on
+`(address, season_id, week_id, ordinal) WHERE outcome = 'counted'` selected an
+index scan in 0.030 ms with five shared-buffer reads. Its measured size was
+67 MB. Including `photo_id` increased it to 82 MB without improving this
+sample's execution time (0.031 ms), so the index has no included columns.
+
+The global oldest-unprocessed-event diagnostic took 182.756 ms with one
+pending event and 173.302 ms with none. Replacing the aggregate with an
+ordered limit still selected a hash anti-join and did not reliably reduce
+the work. The worker samples this diagnostic separately from photo
+processing, at most every five minutes, with a query deadline; diagnostic
+failure does not roll back completed work or prevent that pass's processing.
+
+These are single local samples with synthetic distributions and uncontrolled
+cache state. They establish the selected access path and the cost of the
+diagnostic in that fixture, not production latency, throughput, index write
+cost or capacity.
+
 ## Social notification polling and oversized-event expiry
 
 The explicit `rpc::tests::fanout::notification_and_spill_queries_use_bounded_index_paths`

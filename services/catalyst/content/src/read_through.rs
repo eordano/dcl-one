@@ -26,18 +26,19 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, TryAcquireError, watch};
+#[cfg(any(test, feature = "test-support"))]
+use tokio::sync::Notify;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError, watch};
 use tokio::time::Instant;
 
 use super::deploy_remote_entity::{
     BufferSink, ByteBudget, ByteReservation, ContentSource, RemoteDeployment,
     deploy_entity_streaming, fetch_verified, stream_body,
 };
+use super::failed_deployments_store::LiveFailedDeploymentsStore;
 use super::queries::{self, EntityDoc};
 use super::sync::{parse_entity_types, parse_sync_sources};
-use super::sync_deployer::{
-    LiveFailedDeploymentsStore, LiveSyncDeployer, SyncValidation, is_buffered, is_entity_deployed,
-};
+use super::sync_deployer::{LiveSyncDeployer, SyncValidation, is_buffered, is_entity_deployed};
 use super::sync_types::{AuthChain, DeploymentContext, FailedDeployment, FailureReason, SyncError};
 use super::validator::{Sources, SyncedContent};
 use crate::auth::is_canonical_cid;
@@ -90,12 +91,14 @@ struct FillsInner {
     wait: Duration,
     negative_ttl: Duration,
     counters: Counters,
+    #[cfg(any(test, feature = "test-support"))]
     changed: Notify,
 }
 
 impl FillsInner {
     fn bump(&self, counter: &AtomicU64) {
         counter.fetch_add(1, Ordering::SeqCst);
+        #[cfg(any(test, feature = "test-support"))]
         self.changed.notify_waiters();
     }
 }
@@ -165,6 +168,7 @@ impl Fills {
                 wait,
                 negative_ttl,
                 counters: Counters::default(),
+                #[cfg(any(test, feature = "test-support"))]
                 changed: Notify::new(),
             }),
         }
@@ -181,6 +185,7 @@ impl Fills {
     }
 
     /// Resolves once `done` holds for the counts; tests wait on fills with it.
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn until(&self, done: impl Fn(FillCounts) -> bool) {
         loop {
             let changed = self.inner.changed.notified();
@@ -290,6 +295,7 @@ pub struct Downloads {
     files: Arc<Semaphore>,
     bytes: Arc<ByteBudget>,
     waited: Arc<AtomicU64>,
+    #[cfg(any(test, feature = "test-support"))]
     changed: Arc<Notify>,
 }
 
@@ -306,6 +312,7 @@ impl Downloads {
             files: Arc::new(Semaphore::new(files.max(1))),
             bytes,
             waited: Arc::new(AtomicU64::new(0)),
+            #[cfg(any(test, feature = "test-support"))]
             changed: Arc::new(Notify::new()),
         }
     }
@@ -316,6 +323,7 @@ impl Downloads {
             Ok(file) => file,
             Err(TryAcquireError::NoPermits) => {
                 self.waited.fetch_add(1, Ordering::SeqCst);
+                #[cfg(any(test, feature = "test-support"))]
                 self.changed.notify_waiters();
                 self.files
                     .clone()
@@ -337,6 +345,7 @@ impl Downloads {
         self.waited.load(Ordering::SeqCst)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn until_waited(&self, n: u64) {
         loop {
             let changed = self.changed.notified();

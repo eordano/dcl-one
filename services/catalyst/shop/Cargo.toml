@@ -28,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 tracing.workspace = true
+metrics.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 futures.workspace = true
@@ -71,7 +72,7 @@ catalyst-chain-index = { path = "../chain-index", features = ["test-support"] }
 catalyst-land-authz = { path = "../land-authz", features = ["test-support"] }
 catalyst-content = { path = "../content", features = ["test-support"] }
 catalyst-social = { path = "../social", features = ["test-support"] }
-catalyst-db = { path = "../db", features = ["scratch"] }
+catalyst-db = { path = "../db", features = ["test-support"] }
 catalyst-fed = { path = "../fed", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }

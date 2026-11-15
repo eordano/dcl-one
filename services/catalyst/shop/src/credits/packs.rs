@@ -10,6 +10,20 @@ use sqlx::Row;
 use super::errors::ApiError;
 use super::store::Credits;
 
+pub(crate) fn validate_sku(raw: &str) -> Result<String, ApiError> {
+    let s = raw.trim();
+    if s.is_empty() || s.len() > 100 {
+        return Err(ApiError::bad_request("invalid sku"));
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_graphic() && c != '/' && c != '\\')
+    {
+        return Err(ApiError::bad_request("invalid sku"));
+    }
+    Ok(s.to_string())
+}
+
 /// A purchase a settled event just flipped to `paid`, read from its row:
 /// what the grant credits, and the keys its ledger row and its recorded
 /// reversals go by, whichever Stripe event settled it.

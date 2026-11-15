@@ -39,7 +39,7 @@ impl Plugin for AutopilotPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(RunControlPlugin)
             .add_console_command::<AutopilotFailCommand, _>(autopilot_fail);
-        walk::register(app);
+        app.add_plugins(walk::AutopilotWalkPlugin);
     }
 }
 

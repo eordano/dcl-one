@@ -7,73 +7,78 @@ use std::sync::atomic::Ordering;
 
 use crate::{IpfsResource, IPFS_CACHED, IPFS_FAILED, IPFS_IN_FLIGHT, IPFS_NON_IPFS, IPFS_SUCCESS};
 
-pub(super) fn register(app: &mut App, preview: bool) {
-    app.add_console_command::<WebState, _>(web_state)
-        .add_debug_section(DebugSection {
-            title: "Web Requests",
-            query: "/content_request_state",
-            fields: &[
-                ("IPFS downloads in flight (including queued)", "inFlight"),
-                ("Successful downloads", "success"),
-                ("Cached reads", "cached"),
-                ("Non-IPFS reads", "local"),
-                ("Failed reads", "failed"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("IPFS connection failures (native)", "connectFailed"),
-                ("Available request slots", "available"),
-                ("Configured download slots", "slots"),
-                ("Downloaded content bytes", "bytes"),
-                ("Mean time to first body byte (ms)", "firstByteMs"),
-                ("Mean small download (ms, ≤10 KiB)", "smallMs"),
-                ("Mean download time (ms/MiB, ≥10 KiB)", "msPerMiB"),
-                ("Download fill rate (bytes/s, ≥10 KiB)", "fillRate"),
-            ],
-            actions: &[],
-            inputs: &[],
-        })
-        .add_debug_section(DebugSection {
-            title: "Entity Requests",
-            query: "/content_request_state",
-            fields: &[
-                (
-                    "Scene definitions per batch (min / mean / max)",
-                    "sceneBatch",
-                ),
-                (
-                    "Avatar attachments per batch (min / mean / max)",
-                    "attachmentBatch",
-                ),
-            ],
-            actions: &[],
-            inputs: &[],
-        });
-    if preview {
-        app.init_resource::<PreviewDelay>()
-            .add_preview_console_command::<DelayCommand, _>(request_delay)
+pub(super) struct WebRequestsDebugPanelPlugin;
+
+impl Plugin for WebRequestsDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        let preview = app.world().resource::<IpfsResource>().is_preview;
+        app.add_console_command::<WebState, _>(web_state)
             .add_debug_section(DebugSection {
-                title: "Web Requests Delay",
-                query: "/content_request_delay",
-                fields: &[],
-                actions: &[],
-                inputs: &[
-                    DebugInput {
-                        label: "Use artificial delay",
-                        field: "enabled",
-                        command: "/content_request_delay enabled {value}",
-                        kind: DebugInputKind::Toggle,
-                    },
-                    DebugInput {
-                        label: "Delay before each IPFS request (seconds)",
-                        field: "seconds",
-                        command: "/content_request_delay seconds {value}",
-                        kind: DebugInputKind::Number {
-                            min: 0.0,
-                            max: MAX_DELAY_SECONDS,
-                            step: 0.1,
-                        },
-                    },
+                title: "Web Requests",
+                query: "/content_request_state",
+                fields: &[
+                    ("IPFS downloads in flight (including queued)", "inFlight"),
+                    ("Successful downloads", "success"),
+                    ("Cached reads", "cached"),
+                    ("Non-IPFS reads", "local"),
+                    ("Failed reads", "failed"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("IPFS connection failures (native)", "connectFailed"),
+                    ("Available request slots", "available"),
+                    ("Configured download slots", "slots"),
+                    ("Downloaded content bytes", "bytes"),
+                    ("Mean time to first body byte (ms)", "firstByteMs"),
+                    ("Mean small download (ms, ≤10 KiB)", "smallMs"),
+                    ("Mean download time (ms/MiB, ≥10 KiB)", "msPerMiB"),
+                    ("Download fill rate (bytes/s, ≥10 KiB)", "fillRate"),
                 ],
+                actions: &[],
+                inputs: &[],
+            })
+            .add_debug_section(DebugSection {
+                title: "Entity Requests",
+                query: "/content_request_state",
+                fields: &[
+                    (
+                        "Scene definitions per batch (min / mean / max)",
+                        "sceneBatch",
+                    ),
+                    (
+                        "Avatar attachments per batch (min / mean / max)",
+                        "attachmentBatch",
+                    ),
+                ],
+                actions: &[],
+                inputs: &[],
             });
+        if preview {
+            app.init_resource::<PreviewDelay>()
+                .add_preview_console_command::<DelayCommand, _>(request_delay)
+                .add_debug_section(DebugSection {
+                    title: "Web Requests Delay",
+                    query: "/content_request_delay",
+                    fields: &[],
+                    actions: &[],
+                    inputs: &[
+                        DebugInput {
+                            label: "Use artificial delay",
+                            field: "enabled",
+                            command: "/content_request_delay enabled {value}",
+                            kind: DebugInputKind::Toggle,
+                        },
+                        DebugInput {
+                            label: "Delay before each IPFS request (seconds)",
+                            field: "seconds",
+                            command: "/content_request_delay seconds {value}",
+                            kind: DebugInputKind::Number {
+                                min: 0.0,
+                                max: MAX_DELAY_SECONDS,
+                                step: 0.1,
+                            },
+                        },
+                    ],
+                });
+        }
     }
 }
 
@@ -142,15 +147,32 @@ fn request_delay(
 #[cfg(test)]
 mod delay_tests {
     use super::*;
+    use crate::IpfsIo;
+    use bevy::asset::io::memory::MemoryAssetReader;
+    use std::sync::Arc;
+
+    fn app(preview: bool) -> App {
+        let ipfs = IpfsIo::new(
+            preview,
+            Box::new(MemoryAssetReader { root: default() }),
+            None,
+            default(),
+            4,
+            #[cfg(feature = "ipfs_debug")]
+            tokio::sync::mpsc::unbounded_channel().0,
+        );
+        let mut app = App::new();
+        app.insert_resource(IpfsResource {
+            inner: Arc::new(ipfs),
+        })
+        .add_plugins(WebRequestsDebugPanelPlugin);
+        app
+    }
 
     #[test]
     fn only_preview_installs_delay_controls_and_starts_disabled() {
-        let mut retail = App::new();
-        register(&mut retail, false);
-        assert!(!retail.world().contains_resource::<PreviewDelay>());
-        let mut preview = App::new();
-        register(&mut preview, true);
-        assert!(!preview.world().resource::<PreviewDelay>().enabled);
+        assert!(!app(false).world().contains_resource::<PreviewDelay>());
+        assert!(!app(true).world().resource::<PreviewDelay>().enabled);
     }
 }
 

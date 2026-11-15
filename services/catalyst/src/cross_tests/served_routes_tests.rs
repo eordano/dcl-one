@@ -12,13 +12,15 @@
 //! of these tables is enumerated the day it lands; a route in another
 //! module is a gap in `MODULES` below, and the worlds nest is pinned by
 //! source to the content handler it reuses.
+//! Camera image URLs must redirect to their protected byte route; every phase
+//! validates that redirect and checks its destination as well as direct byte reads.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use bytes::Bytes;
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -293,15 +295,48 @@ impl Rig {
         }
     }
 
-    async fn get(&self, module: &str, mount: &str, path: &str) -> (StatusCode, Bytes) {
+    async fn request(&self, module: &str, mount: &str, path: &str) -> axum::response::Response {
         let request = Request::get(path).body(Body::empty()).unwrap();
-        let response = tokio::time::timeout(
+        tokio::time::timeout(
             Duration::from_secs(30),
             self.router(module, mount).oneshot(request),
         )
         .await
         .unwrap_or_else(|_| panic!("{module} {path} did not answer in 30 s"))
-        .unwrap();
+        .unwrap()
+    }
+
+    async fn get(&self, module: &str, mount: &str, path: &str) -> (StatusCode, Bytes) {
+        let mut response = self.request(module, mount, path).await;
+        // A hash the denylist withholds answers 404 without a redirect; any
+        // other image name redirects to the protected byte route.
+        if module == "camera_reel"
+            && response.status() != StatusCode::NOT_FOUND
+            && let Some(name) = path
+                .strip_prefix(&format!("{mount}/api/images/"))
+                .filter(|name| !name.contains('/'))
+        {
+            let target = format!("{mount}/api/files/{name}");
+            assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT, "{path}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::LOCATION)
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                format!("http://127.0.0.1{target}"),
+                "{path} must redirect to the protected byte route"
+            );
+            assert!(
+                axum::body::to_bytes(response.into_body(), 1 << 20)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{path} must not return bytes in its redirect body"
+            );
+            response = self.request(module, mount, &target).await;
+        }
         let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), 1 << 20)
             .await
@@ -389,6 +424,11 @@ fn blob_routes(corpus: &Corpus) -> Vec<(&'static str, &'static str, String)> {
             "camera_reel",
             "/camera-reel-service",
             format!("/camera-reel-service/api/images/{hash}"),
+        ),
+        (
+            "camera_reel",
+            "/camera-reel-service",
+            format!("/camera-reel-service/api/files/{hash}"),
         ),
         (
             "communities",

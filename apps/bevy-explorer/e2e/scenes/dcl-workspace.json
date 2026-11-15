@@ -59,6 +59,9 @@
     },
     {
       "path": "raycast-storm"
+    },
+    {
+      "path": "environment"
     }
   ]
 }

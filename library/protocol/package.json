@@ -16,12 +16,12 @@
   "main": "index.js",
   "scripts": {
     "build": "./scripts/generate.sh",
-    "test": "./scripts/check-proto-compabitility.sh",
+    "test": "make buf-breaking",
     "gen:test": "node protoc-gen-bitwise/test/generator.test.js"
   },
   "devDependencies": {
     "@protobuf-ts/protoc": "^2.8.1",
-    "typescript": "^5.0.4"
+    "typescript": "7.0.2"
   },
   "config": {
     "protocVersion": "22.2"

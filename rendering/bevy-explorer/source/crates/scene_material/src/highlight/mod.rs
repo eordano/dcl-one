@@ -100,7 +100,6 @@ impl Plugin for HighlightPlugin {
 
 #[cfg(test)]
 mod test {
-    use assets::test_support::{compile_pipelines, headless_app, render_target};
     use bevy::{
         asset::{RenderAssetTransferPriority, RenderAssetUsages},
         core_pipeline::prepass::{DepthPrepass, NormalPrepass},
@@ -117,6 +116,7 @@ mod test {
             storage::ShaderStorageBuffer,
         },
     };
+    use pipeline_test::{compile_pipelines, headless_app, render_target};
 
     use super::*;
     use crate::{SceneBound, SceneMaterial, EMPTY_SCENE_CELLS};

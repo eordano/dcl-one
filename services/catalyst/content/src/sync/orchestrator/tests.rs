@@ -197,8 +197,9 @@ async fn wait_for_bootstrap_returns_when_the_state_already_left_bootstrapping() 
 async fn bootstrap_callbacks_require_success_and_keep_parent_cancellation_scope() {
     use crate::batch_deployer::BatchDeployerConfig;
     use crate::bloom_filter::BloomFilter;
+    use crate::failed_deployments_store::LiveFailedDeploymentsStore;
     use crate::jobs::Jobs;
-    use crate::sync_deployer::{LiveFailedDeploymentsStore, LiveSyncDeployer, SyncValidation};
+    use crate::sync_deployer::{LiveSyncDeployer, SyncValidation};
     use std::sync::atomic::AtomicUsize;
 
     for (state, cancelled, expected) in [

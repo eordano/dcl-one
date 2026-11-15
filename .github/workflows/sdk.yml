@@ -5,11 +5,17 @@ on:
     paths:
       - library/js-sdk-toolchain/**
       - library/protocol/**
+      - apps/dcl-scene-cli/**
+      - apps/bevy-explorer/e2e/scenes/environment/**
+      - library/dcl-scene-build/**
       - .github/workflows/sdk.yml
   pull_request:
     paths:
       - library/js-sdk-toolchain/**
       - library/protocol/**
+      - apps/dcl-scene-cli/**
+      - apps/bevy-explorer/e2e/scenes/environment/**
+      - library/dcl-scene-build/**
       - .github/workflows/sdk.yml
 permissions:
   contents: read
@@ -59,6 +65,8 @@ jobs:
           cache-dependency-path: library/js-sdk-toolchain/package-lock.json
       - name: Install (builds library/protocol's out-ts first)
         run: make install
+      - name: Test the embedded CLI SDK contracts and declarations
+        run: node --test ../../apps/dcl-scene-cli/scripts/environment-sdk.test.mjs
       - name: Build
         id: build
         # a changed API report fails here; the regenerated files are still uploaded below

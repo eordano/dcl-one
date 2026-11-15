@@ -366,6 +366,6 @@ pub fn into_deploy_failure(errors: Vec<ValidationError>) -> super::write_deploye
     } else if unverifiable {
         DeployFailure::Unverifiable(messages)
     } else {
-        DeployFailure::Rejected(messages)
+        DeployFailure::Rejected(super::write_deployer::RejectionKind::Validation, messages)
     }
 }

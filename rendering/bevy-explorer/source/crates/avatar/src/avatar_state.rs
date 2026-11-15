@@ -20,32 +20,36 @@ use crate::{
     AvatarDefinition, AvatarLoaded, AvatarProcessed, AvatarSelection, PreviousAvatar,
 };
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<AvatarStateCommand, _>(avatar_state_cmd);
+pub(super) struct AvatarStatePlugin;
 
-    app.add_debug_section(DebugSection {
-        title: "Avatar",
-        query: "/avatar_state --panel",
-        fields: &[
-            ("Body shape", "rendered.bodyShape"),
-            ("Address", "address"),
-            ("Rendered wearables", "rendered.wearables"),
-            ("Hidden slots", "rendered.hidden"),
-            ("Equipped emotes", "selected.emotes"),
-            ("Animation", "emote.urn"),
-            ("Animation source", "emote.source"),
-        ],
-        actions: &[(
-            "Play wave",
-            "/emote urn:decentraland:off-chain:base-emotes:wave",
-        )],
-        inputs: &[DebugInput {
-            label: "Play emote (URN or equipped slot)",
-            field: "",
-            command: "/emote {value}",
-            kind: DebugInputKind::Text,
-        }],
-    });
+impl Plugin for AvatarStatePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<AvatarStateCommand, _>(avatar_state_cmd);
+
+        app.add_debug_section(DebugSection {
+            title: "Avatar",
+            query: "/avatar_state --panel",
+            fields: &[
+                ("Body shape", "rendered.bodyShape"),
+                ("Address", "address"),
+                ("Rendered wearables", "rendered.wearables"),
+                ("Hidden slots", "rendered.hidden"),
+                ("Equipped emotes", "selected.emotes"),
+                ("Animation", "emote.urn"),
+                ("Animation source", "emote.source"),
+            ],
+            actions: &[(
+                "Play wave",
+                "/emote urn:decentraland:off-chain:base-emotes:wave",
+            )],
+            inputs: &[DebugInput {
+                label: "Play emote (URN or equipped slot)",
+                field: "",
+                command: "/emote {value}",
+                kind: DebugInputKind::Text,
+            }],
+        });
+    }
 }
 
 /// Report, as JSON, what avatars are selected to wear, what was built from that and the emote they

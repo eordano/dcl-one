@@ -1,22 +1,14 @@
-//! Enrolment, the progress/credits reads of a wallet (the wallet in the path
-//! must be the signer), the balance and the static seasons document (the
-//! seasons domain was removed upstream; the shape is kept for the clients).
-//! Money leaves as whole credits and integer cents: `usd.balanceCents` is
-//! the SPENDABLE balance (the live pledges subtracted), `usd.held` the
-//! pledges, so the Shop's credits page can show what is on hold and when it
-//! comes back; the legacy MANA-credit fields (`credits`, `totalCredits`,
-//! `totals`) are zero, as upstream answers a wallet without season credits.
+//! Signed enrollment, seasonal MANA progress and the separate paid USD balance.
 
 use axum::Json;
-use axum::extract::{OriginalUri, Path, State};
-use axum::http::{HeaderMap, HeaderName, StatusCode, header};
+use axum::extract::{OriginalUri, Path, Query, State};
+use axum::http::HeaderMap;
 use serde::Serialize;
 
 use super::signer_from;
 use crate::credits::SharedState;
 use crate::credits::dto::{
-    CreditsData, CreditsProgramProgressResponse, CreditsTotals, CurrentSeasonInfo, SeasonData,
-    SeasonsData, UsdCredits, UserCreditsResponse, UserData, Week,
+    CreditsProgramProgressResponse, CreditsTotals, SeasonsData, UsdCredits, UserCreditsResponse,
 };
 use crate::credits::errors::ApiError;
 use crate::credits::history::HeldOut;
@@ -26,10 +18,10 @@ pub async fn enroll(
     State(state): State<SharedState>,
     original: OriginalUri,
     headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let signer = signer_from(&state, &headers, "post", "/users", &original).await?;
-    state.credits.mark_started(signer.as_str()).await?;
-    Ok(StatusCode::OK)
+    crate::credits::goals::enroll(&state, signer.as_str()).await?;
+    Ok(Json(serde_json::json!({"ok":true})))
 }
 
 pub async fn progress(
@@ -46,39 +38,18 @@ pub async fn progress(
         return Err(ApiError::forbidden("walletId does not match signer"));
     }
 
-    let (has_started, credits_row) = state.credits.user_progress(&wallet).await?;
+    Ok(Json(
+        crate::credits::goals::progress(&state, &wallet).await?,
+    ))
+}
 
-    let credits = match credits_row {
-        Some(c) => {
-            let available = UsdCents::new(c.available_cents).credits_floor();
-            let earned = UsdCents::new(c.earned_cents).credits_floor();
-            CreditsData {
-                available,
-                earned,
-                paid: available - earned,
-                expires_in: 0,
-                is_blocked_for_claiming: c.is_blocked_for_claiming,
-            }
-        }
-        None => CreditsData {
-            available: 0,
-            earned: 0,
-            paid: 0,
-            expires_in: 0,
-            is_blocked_for_claiming: false,
-        },
-    };
-
-    Ok(Json(CreditsProgramProgressResponse {
-        user: UserData {
-            has_started_program: has_started,
-        },
-        credits,
-        goals: Vec::new(),
-    }))
+#[derive(serde::Deserialize)]
+pub struct CreditsQuery {
+    pub status: Option<String>,
 }
 
 pub async fn user_credits(
+    Query(query): Query<CreditsQuery>,
     State(state): State<SharedState>,
     Path(wallet_id): Path<String>,
     original: OriginalUri,
@@ -94,20 +65,37 @@ pub async fn user_credits(
 
     let spendable = state.credits.spendable(&wallet).await?;
     let held = state.credits.held(&wallet).await?;
-    Ok(Json(user_credits_response(
-        spendable.spendable_cents(),
-        held,
-    )))
+    let mut response = user_credits_response(spendable.spendable_cents(), held);
+    let (credits, total, _) =
+        crate::credits::goals::user_credits(&state, &wallet, query.status.as_deref()).await?;
+    response.credits = credits;
+    response.total_credits = total;
+    response.totals.expiring = total;
+    let mut conn = state.credits.pool.acquire().await?;
+    if let Some((at, reason)) = crate::credits::goals::flag_reason(&mut conn, &wallet).await? {
+        response.credits.clear();
+        response.total_credits = 0.0;
+        response.totals.expiring = 0.0;
+        response.message = Some(format!(
+            "User {wallet} was flagged for multi-accounting at {at} UTC"
+        ));
+        response.reason = Some(reason);
+        response.is_blocked_for_claiming = Some(true);
+    }
+    Ok(Json(response))
 }
 
 fn user_credits_response(spendable_cents: i64, held: Option<HeldOut>) -> UserCreditsResponse {
     let cents = UsdCents::new(spendable_cents);
     UserCreditsResponse {
+        message: None,
+        reason: None,
+        is_blocked_for_claiming: None,
         credits: Vec::new(),
-        total_credits: 0,
+        total_credits: 0.0,
         totals: CreditsTotals {
-            expiring: 0,
-            non_expiring: 0,
+            expiring: 0.0,
+            non_expiring: 0.0,
         },
         usd: UsdCredits {
             balance_cents: cents.get(),
@@ -146,20 +134,55 @@ pub async fn balance(
     }))
 }
 
-/// Static placeholder data: the seasons domain was removed upstream; clients
-/// and proxies hold the document for a while.
-pub async fn seasons() -> ([(HeaderName, &'static str); 1], Json<SeasonsData>) {
-    (
-        [(header::CACHE_CONTROL, "public, max-age=300")],
-        Json(SeasonsData {
-            last_season: SeasonData::default(),
-            current_season: CurrentSeasonInfo {
-                season: SeasonData::default(),
-                week: Week::default(),
-            },
-            next_season: SeasonData::default(),
-        }),
+pub async fn seasons(State(state): State<SharedState>) -> Result<Json<SeasonsData>, ApiError> {
+    Ok(Json(crate::credits::goals::season_document(&state).await?))
+}
+
+pub async fn status(
+    State(state): State<SharedState>,
+    Path(wallet): Path<String>,
+    original: OriginalUri,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let signer = signer_from(
+        &state,
+        &headers,
+        "get",
+        &format!("/users/{wallet}/status"),
+        &original,
     )
+    .await?;
+    if !signer.as_str().eq_ignore_ascii_case(&wallet) {
+        return Err(ApiError::forbidden("walletId does not match signer"));
+    }
+    Ok(Json(
+        crate::credits::goals::status(&state, signer.as_str()).await?,
+    ))
+}
+
+pub async fn unregister(
+    State(state): State<SharedState>,
+    Path(wallet): Path<String>,
+    original: OriginalUri,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let signer = signer_from(
+        &state,
+        &headers,
+        "delete",
+        &format!("/users/{wallet}"),
+        &original,
+    )
+    .await?;
+    if !signer.as_str().eq_ignore_ascii_case(&wallet) {
+        return Err(ApiError::forbidden("walletId does not match signer"));
+    }
+    crate::credits::goals::opt_out(&state, signer.as_str()).await?;
+    Ok(Json(serde_json::json!({"ok":true})))
+}
+
+pub async fn season(State(state): State<SharedState>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(crate::credits::goals::season_status(&state).await?))
 }
 
 #[cfg(test)]

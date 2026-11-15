@@ -54,25 +54,29 @@ pub struct PhotoModeChanged {
 #[derive(Component)]
 struct HiddenForPhotoMode(Display);
 
-pub(crate) fn register(app: &mut App) {
-    app.init_resource::<PhotoCameraSettings>()
-        .add_event::<PhotoModeRequest>()
-        .add_event::<PhotoModeChanged>()
-        .add_systems(
-            Update,
-            (
-                read_photo_mode_keys,
-                apply_photo_mode_requests,
-                hide_scene_ui_in_photo_mode,
+pub(crate) struct PhotoModePlugin;
+
+impl Plugin for PhotoModePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PhotoCameraSettings>()
+            .add_event::<PhotoModeRequest>()
+            .add_event::<PhotoModeChanged>()
+            .add_systems(
+                Update,
+                (
+                    read_photo_mode_keys,
+                    apply_photo_mode_requests,
+                    hide_scene_ui_in_photo_mode,
+                )
+                    .chain()
+                    .in_set(SceneSets::Input)
+                    .after(update_pointer_lock),
             )
-                .chain()
-                .in_set(SceneSets::Input)
-                .after(update_pointer_lock),
-        )
-        .add_systems(
-            PostUpdate,
-            move_photo_camera.in_set(PostUpdateSets::CameraUpdate),
-        );
+            .add_systems(
+                PostUpdate,
+                move_photo_camera.in_set(PostUpdateSets::CameraUpdate),
+            );
+    }
 }
 
 /// The keys read inside photo mode: the nametag and HUD keys and the cursor lock toggle. A scene

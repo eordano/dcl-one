@@ -1434,6 +1434,7 @@ dependencies = [
  "input_manager",
  "ipfs",
  "naga_oil",
+ "pipeline_test",
  "platform",
  "rand 0.8.8",
  "rapier3d-f64",
@@ -7119,7 +7120,6 @@ name = "imposters"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "assets",
  "async-fs",
  "bevy",
  "bevy_console",
@@ -7131,6 +7131,7 @@ dependencies = [
  "futures-lite",
  "ipfs",
  "naga_oil",
+ "pipeline_test",
  "platform",
  "reqwest",
  "scene_material",
@@ -9722,6 +9723,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
+name = "pipeline_test"
+version = "0.1.0"
+dependencies = [
+ "assets",
+ "bevy",
+]
+
+[[package]]
 name = "piper"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11199,12 +11208,12 @@ dependencies = [
 name = "scene_material"
 version = "0.1.0"
 dependencies = [
- "assets",
  "bevy",
  "boimp",
  "common",
  "naga_oil",
  "nonmax",
+ "pipeline_test",
 ]
 
 [[package]]
@@ -13674,6 +13683,7 @@ dependencies = [
  "ipfs",
  "naga_oil",
  "noise",
+ "pipeline_test",
  "scene_material",
  "scene_runner",
  "serde_json",

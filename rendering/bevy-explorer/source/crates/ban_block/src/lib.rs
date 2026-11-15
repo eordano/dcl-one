@@ -26,8 +26,8 @@ pub struct BanBlockPlugin;
 
 impl Plugin for BanBlockPlugin {
     fn build(&self, app: &mut App) {
-        platform_ban::register(app);
-        debug::register(app);
+        app.add_plugins(platform_ban::PlatformBanPlugin);
+        app.add_plugins(debug::BanBlockDebugPlugin);
     }
 }
 

@@ -22,7 +22,6 @@
 //! rows of the same index, written by the events write routes.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
@@ -106,11 +105,9 @@ fn served_type(upstream: Option<&str>, sniffed: &'static str) -> String {
     }
 }
 
-type Flights = HashMap<(Kind, String), Arc<tokio::sync::Mutex<()>>>;
-
 #[derive(Default)]
 pub struct PosterState {
-    locks: Mutex<Flights>,
+    locks: crate::keyed_locks::KeyedLocks<(Kind, String)>,
     misses: Mutex<HashMap<(Kind, String), Instant>>,
 }
 
@@ -192,13 +189,7 @@ pub async fn serve(state: &Shared, kind: Kind, file: &str) -> anyhow::Result<Ser
     if state.posters.is_known_miss(&key) {
         return Ok(Served::Miss);
     }
-    let lock = state
-        .posters
-        .locks
-        .lock()
-        .entry(key.clone())
-        .or_default()
-        .clone();
+    let lock = state.posters.locks.claim(&key);
     let result = async {
         let _guard = lock.lock().await;
         if let Some(hit) = lookup(state, kind, file).await? {
@@ -244,11 +235,6 @@ pub async fn serve(state: &Shared, kind: Kind, file: &str) -> anyhow::Result<Ser
         }
     }
     .await;
-    let mut locks = state.posters.locks.lock();
-    drop(lock);
-    if locks.get(&key).is_some_and(|l| Arc::strong_count(l) == 1) {
-        locks.remove(&key);
-    }
     result
 }
 

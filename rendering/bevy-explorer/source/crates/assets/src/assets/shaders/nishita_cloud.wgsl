@@ -32,6 +32,14 @@ struct Nishita {
     cloud_lacunarity: f32,
     cloud_sharpness: f32,
     cloud_sharp_mid: f32,
+    scene_zenith: vec4<f32>,
+    scene_horizon: vec4<f32>,
+    scene_nadir: vec4<f32>,
+    scene_rim: vec4<f32>,
+    scene_cloud_color: vec4<f32>,
+    scene_cloud_opacity: f32,
+    scene_cloud_rotation: f32,
+    scene_sun_visible: f32,
 }
 
 const PI: f32 = 3.141592653589793;
@@ -219,6 +227,7 @@ fn lighting(p: vec3<f32>, dir: vec3<f32>, sun: vec3<f32>, m: mat3x3<f32>) -> f32
 }
 
 fn render_cloud(sky: vec3<f32>, pos: vec3<f32>, dir: vec3<f32>) -> vec4<f32> {
+    if nishita.scene_cloud_opacity <= 0.0 { return vec4<f32>(sky, 0.0); }
     let p_sun = normalize(nishita.sun_position);
     let sun_amount: f32 = max(dot(dir, p_sun), 0.0);
 
@@ -286,7 +295,9 @@ fn render_cloud(sky: vec3<f32>, pos: vec3<f32>, dir: vec3<f32>) -> vec4<f32> {
     var clouds = mix(light_cloud_color, vec3(nishita.cloud_shadow), pow(shade_sum.x, 3.0));
     // undersides: the more of the cloud's density sits low in the layer, the darker
     clouds *= 1.0 - CLOUD_HEIGHT_DARKEN * lowness;
-    let result = mix(sky, min(clouds, vec3<f32>(1.0)), shade_sum.y);
+    clouds = mix(min(clouds, vec3<f32>(1.0)), nishita.scene_cloud_color.rgb, nishita.scene_cloud_color.a);
+    shade_sum.y *= nishita.scene_cloud_opacity;
+    let result = mix(sky, clouds, shade_sum.y);
     // no upper clamp: the sun disc keeps its HDR brightness; alpha carries the cloud
     // coverage for effects that treat clouds differently from the clear sky
     return vec4<f32>(max(result, vec3<f32>(0.0)), shade_sum.y);
@@ -344,9 +355,11 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
         }
     }
 
-    var initial_y = normalize(ray).y;
+    let original_ray = normalize(ray);
+    var initial_y = original_ray.y;
+    let scene_bands = max(max(nishita.scene_zenith.a, nishita.scene_horizon.a), max(nishita.scene_nadir.a, nishita.scene_rim.a));
     // the store below blends fully to black at and under -0.5: nothing to evaluate
-    if initial_y <= -0.5 {
+    if initial_y <= -0.5 && scene_bands == 0.0 {
         textureStore(
             image,
             vec2<i32>(invocation_id.xy),
@@ -357,6 +370,11 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
     }
     if ray.y < 0.0 {
         ray.y = 0.0;
+    }
+    // At the nadir, projecting onto the horizon leaves a zero vector. The procedural
+    // fallback still needs a finite direction even where its final weight is zero.
+    if dot(ray, ray) == 0.0 {
+        ray = vec3<f32>(0.0, 0.0, 1.0);
     }
     ray = normalize(ray);
 
@@ -385,16 +403,28 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
         render_base += nishita.night_color
             * (max(-1.0, -dot(normalize(nishita.sun_position), ray)) * 0.25 + 0.75);
 
-        // // add sun
-        let sun_weight = dot(ray, normalize(nishita.sun_position));
-        if sun_weight >= 0.997 {
-            render_base = max(render_base, mix(render_base, nishita.sun_color, smoothstep(0.997, 0.999, sun_weight)));
-        }
-        // sun 2 ..
-        let angle = 0.3;
-        let cosa = cos(angle);
-        let sina = sin(angle);
-        let sun_weight_2 = dot(ray, normalize(nishita.sun_position - vec3(0.3, 0.3, 0.3)));
+    }
+
+    let disc_ray = select(ray, original_ray, scene_bands > 0.0);
+
+    // Each missing band retains the procedural color in that direction.
+    // Authored colors also feed ambient lighting when an image replaces the visible sky.
+    if scene_bands > 0.0 {
+        let fallback = render_base * smoothstep(-0.5, 0.0, initial_y);
+        let pole_weight = smoothstep(0.0, 1.0, abs(initial_y));
+        let pole = select(nishita.scene_nadir, nishita.scene_zenith, initial_y >= 0.0);
+        let horizon_weight = (1.0 - pole_weight) * nishita.scene_horizon.a;
+        let authored_pole_weight = pole_weight * pole.a;
+        render_base = fallback * (1.0 - horizon_weight - authored_pole_weight)
+            + nishita.scene_horizon.rgb * horizon_weight + pole.rgb * authored_pole_weight;
+        let rim_weight = (1.0 - smoothstep(0.0, 0.08, abs(initial_y))) * nishita.scene_rim.a;
+        render_base = mix(render_base, nishita.scene_rim.rgb, rim_weight);
+    }
+
+    if nishita.scene_sun_visible > 0.0 && nishita.dir_light_intensity > 0.0 {
+        let sun_weight = dot(disc_ray, normalize(nishita.sun_position));
+        render_base = max(render_base, mix(render_base, nishita.sun_color, smoothstep(0.997, 0.999, sun_weight)));
+        let sun_weight_2 = dot(disc_ray, normalize(nishita.sun_position - vec3(0.3, 0.3, 0.3)));
         if sun_weight_2 >= 0.998 {
             render_base = max(render_base, mix(render_base, nishita.sun_color, smoothstep(0.999, 1.0, sun_weight_2)));
         }
@@ -403,13 +433,13 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
     // night: how far the sun is below the horizon (not intensity, which floors
     // at the horizon). the stars themselves are drawn after depth of field, in
     // stars.wgsl
-    let night_amount = smoothstep(0.0, 0.15, -normalize(nishita.sun_position).y);
+    let night_amount = smoothstep(0.0, 0.15, -normalize(nishita.sun_position).y) * nishita.scene_sun_visible;
 
     // moon: a plain disc (no tint) on its own low orbit, fading in with the
     // night. A crescent is carved by subtracting a second disc of the same size
     // offset toward the anti-sun side, so the lit limb faces the sun.
     let moon_dir = normalize(nishita.moon_position);
-    let moon_dot = dot(ray, moon_dir);
+    let moon_dot = dot(disc_ray, moon_dir);
     let moon_disc = smoothstep(0.99914, 0.99971, moon_dot);
     // tangent direction on the disc pointing away from the sun
     let to_sun = normalize(nishita.sun_position);
@@ -418,15 +448,20 @@ fn main(@builtin(global_invocation_id) original_invocation_id: vec3<u32>, @built
     // smaller offset -> thinner crescent; bite disc is 5% larger than the moon
     // disc so it carves a slightly deeper inner terminator
     let bite_dir = normalize(moon_dir + away * 0.012);
-    let bite = smoothstep(0.99905, 0.99968, dot(ray, bite_dir));
+    let bite = smoothstep(0.99905, 0.99968, dot(disc_ray, bite_dir));
     let crescent = moon_disc * (1.0 - bite);
     render_base += vec3<f32>(1.6) * crescent * night_amount;
     // faint cool halo (full circle)
     render_base += vec3<f32>(0.5, 0.5, 0.6) * pow(max(moon_dot, 0.0), 250.0) * night_amount * 0.3;
 
-    let render = render_cloud(render_base, nishita.ray_origin * 0.0, normalize(ray));
-
-    let store_value = mix(render.rgb, vec3(0.0), 1.0 - smoothstep(-0.5, 0.0, initial_y));
+    let angle = nishita.scene_cloud_rotation;
+    let cloud_ray = vec3<f32>(cos(angle) * ray.x - sin(angle) * ray.z, ray.y, sin(angle) * ray.x + cos(angle) * ray.z);
+    var render = render_cloud(render_base, vec3<f32>(0.0), cloud_ray);
+    if initial_y < 0.0 && scene_bands > 0.0 {
+        render = vec4<f32>(render_base, 0.0);
+    }
+    let ground_fade = (1.0 - smoothstep(-0.5, 0.0, initial_y)) * (1.0 - scene_bands);
+    let store_value = mix(render.rgb, vec3(0.0), ground_fade);
 
     textureStore(
         image,

@@ -1,4 +1,4 @@
-use super::{AppConfig, Settings};
+use super::{AppConfig, SettingInfo, Settings};
 use bevy::prelude::*;
 use bevy_console::ConsoleCommand;
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
@@ -18,22 +18,26 @@ fn panel_number(value: f32, step: f32) -> f64 {
     f64::from((value / step).round()) / f64::from(step.recip())
 }
 
-pub(super) fn register(app: &mut App, settings: &Settings) {
-    app.add_console_command::<QualityCommand, _>(quality);
-    for &(category, title) in GROUPS {
-        register_group(app, settings, category, title);
+pub(super) struct DebugQualityPlugin;
+
+impl Plugin for DebugQualityPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<QualityCommand, _>(quality);
+        let settings = app.world().resource::<Settings>().get();
+        for &(category, title) in GROUPS {
+            register_group(app, &settings, category, title);
+        }
     }
 }
 
-fn register_group(app: &mut App, settings: &Settings, category: &str, title: &str) {
+fn register_group(app: &mut App, settings: &[SettingInfo], category: &str, title: &str) {
     let rows: Vec<_> = settings
-        .settings
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.info.category == category)
+        .filter(|(_, s)| s.category == category)
         .map(|(i, s)| {
             (
-                &s.info,
+                s,
                 i.to_string(),
                 format!("/debug_settings {category} {i} {{value}}"),
             )

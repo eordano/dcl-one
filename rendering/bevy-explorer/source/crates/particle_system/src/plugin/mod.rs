@@ -65,7 +65,7 @@ impl Plugin for ParticleSystemPlugin {
 
         app.init_resource::<ActiveScenes>();
         app.init_resource::<ParticleMeshes>();
-        debug_panel::register(app);
+        app.add_plugins(debug_panel::ParticleDebugPanelPlugin);
 
         app.add_crdt_lww_component::<PbParticleSystem, ParticleSystem>(
             SceneComponentId::PARTICLE_SYSTEM,

@@ -160,10 +160,24 @@ fn objects_to_inspect<'a>(value: &'a Value, out: &mut Vec<&'a Map<String, Value>
     }
 }
 
-/// `assertLegacyMetadataKeys`: the message for the first declared key whose
-/// delivered spelling differs (keys only; values such as `secret` are
-/// case-sensitive and travel verbatim).
-fn first_respelled_key(metadata: &Value, canonical_keys: &[&str]) -> Option<String> {
+/// The first mismatch in declared-path, segment and array order. Values and
+/// undeclared keys are not inspected for spelling.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MetadataKeyMismatch<'a> {
+    Spelling {
+        expected: &'a str,
+        delivered: &'a str,
+    },
+    Collision {
+        expected: &'a str,
+        count: usize,
+    },
+}
+
+pub(crate) fn first_metadata_key_mismatch<'a>(
+    metadata: &'a Value,
+    canonical_keys: &[&'a str],
+) -> Option<MetadataKeyMismatch<'a>> {
     for declared_path in canonical_keys {
         let mut containers: Vec<&Value> = vec![metadata];
         for segment in declared_path.split('.') {
@@ -182,18 +196,16 @@ fn first_respelled_key(metadata: &Value, canonical_keys: &[&str]) -> Option<Stri
                     [] => continue,
                     [one] if one.as_str() == segment => {}
                     [one] => {
-                        return Some(format!(
-                            "Invalid chain metadata: expected \"{}\", got \"{}\"",
-                            safe(segment),
-                            safe(one)
-                        ));
+                        return Some(MetadataKeyMismatch::Spelling {
+                            expected: segment,
+                            delivered: one,
+                        });
                     }
                     many => {
-                        return Some(format!(
-                            "Invalid chain metadata: \"{}\" delivered under {} spellings",
-                            safe(segment),
-                            many.len()
-                        ));
+                        return Some(MetadataKeyMismatch::Collision {
+                            expected: segment,
+                            count: many.len(),
+                        });
                     }
                 }
                 if let Some(value) = object.get(segment) {
@@ -207,6 +219,25 @@ fn first_respelled_key(metadata: &Value, canonical_keys: &[&str]) -> Option<Stri
         }
     }
     None
+}
+
+/// Render the signed-fetch refusal without exposing untrusted key contents.
+fn first_respelled_key(metadata: &Value, canonical_keys: &[&str]) -> Option<String> {
+    first_metadata_key_mismatch(metadata, canonical_keys).map(|mismatch| match mismatch {
+        MetadataKeyMismatch::Spelling {
+            expected,
+            delivered,
+        } => format!(
+            "Invalid chain metadata: expected \"{}\", got \"{}\"",
+            safe(expected),
+            safe(delivered)
+        ),
+        MetadataKeyMismatch::Collision { expected, count } => format!(
+            "Invalid chain metadata: \"{}\" delivered under {} spellings",
+            safe(expected),
+            count
+        ),
+    })
 }
 
 async fn validate_over_paths(
@@ -346,6 +377,54 @@ pub fn map_auth_error_api(e: SignedFetchRefusal) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_traversal_keeps_path_array_and_segment_precedence() {
+        let metadata = serde_json::json!({
+            "rows": [[null, {"nested": [{"SceneId": "value"}]}], {"Nested": {"sceneId": "value"}}],
+            "Other": true
+        });
+        // Every container at a segment is checked before descending further.
+        assert_eq!(
+            first_respelled_key(&metadata, &["rows.nested.sceneId", "other"]).as_deref(),
+            Some("Invalid chain metadata: expected \"nested\", got \"Nested\"")
+        );
+        assert_eq!(
+            first_respelled_key(&metadata, &["other", "rows.nested.sceneId"]).as_deref(),
+            Some("Invalid chain metadata: expected \"other\", got \"Other\"")
+        );
+        let metadata = serde_json::json!({"rows": [[{"SceneId": "first"}], {"SCENEID": "second"}]});
+        assert_eq!(
+            first_respelled_key(&metadata, &["rows.sceneId"]).as_deref(),
+            Some("Invalid chain metadata: expected \"sceneId\", got \"SceneId\"")
+        );
+    }
+
+    #[test]
+    fn metadata_traversal_preserves_unicode_collisions_and_absent_paths() {
+        let metadata = serde_json::json!({"rows": [[{"Ä": 1, "ä": 2}]]});
+        assert_eq!(
+            first_respelled_key(&metadata, &["rows.ä"]).as_deref(),
+            Some("Invalid chain metadata: \"ä\" delivered under 2 spellings")
+        );
+        for metadata in [
+            serde_json::json!({"rows": [null, 1, [], {"other": "SceneId"}]}),
+            serde_json::json!({"rows": [{"sceneId": "UPPERCASE VALUE"}]}),
+            serde_json::json!(null),
+        ] {
+            assert_eq!(
+                first_metadata_key_mismatch(&metadata, &["rows.sceneId"]),
+                None
+            );
+        }
+        let metadata = serde_json::json!({"İ": true});
+        assert!(matches!(
+            first_metadata_key_mismatch(&metadata, &["i\u{307}"]),
+            Some(MetadataKeyMismatch::Spelling {
+                delivered: "İ", ..
+            })
+        ));
+    }
 
     #[test]
     fn echoed_fragments_are_cut_like_crypto_middleware() {

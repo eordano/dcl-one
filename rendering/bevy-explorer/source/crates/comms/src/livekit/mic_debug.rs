@@ -14,74 +14,78 @@ use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddCo
 use serde_json::json;
 use std::collections::BTreeSet;
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<MicrophoneInfo, _>(microphone_info)
-        .add_console_command::<NearbyVoice, _>(nearby_voice)
-        .add_console_command::<VoicePanning, _>(voice_panning)
-        .add_debug_section(DebugSection {
-            title: "Voice chat",
-            query: "/microphone_info",
-            fields: &[
-                ("Microphone available", "available"),
-                ("Microphone enabled", "enabled"),
-                ("Room connected", "connected"),
-                ("Permission", "permission"),
-                ("Local microphone track active", "transmitting"),
-                ("Active remote speakers (up to 32)", "speakers"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Available input devices", "devices"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Current input device", "device"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Capture sample rate (Hz)", "rate"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Capture channels", "channels"),
-            ],
-            actions: &[],
-            inputs: &[],
-        })
-        .add_debug_section(DebugSection {
-            title: "Nearby voice chat",
-            query: "/nearby_voice",
-            fields: &[
-                ("Island connected", "connected"),
-                ("Local speaking", "speaking"),
-                ("Remote participants", "participants"),
-                ("Active speakers", "speakerCount"),
-                ("Speakers (up to 32)", "speakers"),
-                ("Subscribed microphone tracks (all rooms)", "tracks"),
-                ("Player audio sources (all transports)", "sources"),
-                (
-                    "Sources with a selected transport (all transports)",
-                    "assigned",
-                ),
-            ],
-            actions: &[],
-            inputs: &[
-                DebugInput {
-                    label: "Spatialize",
-                    field: "spatialize",
-                    command: "/voice_panning spatialize {value}",
-                    kind: DebugInputKind::Toggle,
-                },
-                DebugInput {
-                    label: "Smooth panning",
-                    field: "smooth",
-                    command: "/voice_panning smooth {value}",
-                    kind: DebugInputKind::Toggle,
-                },
-                DebugInput {
-                    label: "Stereo panning strength",
-                    field: "strength",
-                    command: "/voice_panning strength {value}",
-                    kind: DebugInputKind::Number {
-                        min: 0.0,
-                        max: 1.0,
-                        step: 0.05,
+pub(super) struct MicDebugPlugin;
+
+impl Plugin for MicDebugPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<MicrophoneInfo, _>(microphone_info)
+            .add_console_command::<NearbyVoice, _>(nearby_voice)
+            .add_console_command::<VoicePanning, _>(voice_panning)
+            .add_debug_section(DebugSection {
+                title: "Voice chat",
+                query: "/microphone_info",
+                fields: &[
+                    ("Microphone available", "available"),
+                    ("Microphone enabled", "enabled"),
+                    ("Room connected", "connected"),
+                    ("Permission", "permission"),
+                    ("Local microphone track active", "transmitting"),
+                    ("Active remote speakers (up to 32)", "speakers"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Available input devices", "devices"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Current input device", "device"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Capture sample rate (Hz)", "rate"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Capture channels", "channels"),
+                ],
+                actions: &[],
+                inputs: &[],
+            })
+            .add_debug_section(DebugSection {
+                title: "Nearby voice chat",
+                query: "/nearby_voice",
+                fields: &[
+                    ("Island connected", "connected"),
+                    ("Local speaking", "speaking"),
+                    ("Remote participants", "participants"),
+                    ("Active speakers", "speakerCount"),
+                    ("Speakers (up to 32)", "speakers"),
+                    ("Subscribed microphone tracks (all rooms)", "tracks"),
+                    ("Player audio sources (all transports)", "sources"),
+                    (
+                        "Sources with a selected transport (all transports)",
+                        "assigned",
+                    ),
+                ],
+                actions: &[],
+                inputs: &[
+                    DebugInput {
+                        label: "Spatialize",
+                        field: "spatialize",
+                        command: "/voice_panning spatialize {value}",
+                        kind: DebugInputKind::Toggle,
                     },
-                },
-            ],
-        });
+                    DebugInput {
+                        label: "Smooth panning",
+                        field: "smooth",
+                        command: "/voice_panning smooth {value}",
+                        kind: DebugInputKind::Toggle,
+                    },
+                    DebugInput {
+                        label: "Stereo panning strength",
+                        field: "strength",
+                        command: "/voice_panning strength {value}",
+                        kind: DebugInputKind::Number {
+                            min: 0.0,
+                            max: 1.0,
+                            step: 0.05,
+                        },
+                    },
+                ],
+            });
+    }
 }
 
 /// Report the microphone device and capture state.

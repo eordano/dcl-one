@@ -65,16 +65,20 @@ pub use machine::{
 };
 use machine::{ENTITY_NOT_LIVE, HUD_HOLDS_INPUT};
 
-pub(crate) fn register(app: &mut App) {
-    app.init_resource::<PointerJob>()
-        .add_console_command::<HoverEntityCommand, _>(hover_entity_cmd)
-        .add_console_command::<ClickEntityCommand, _>(click_entity_cmd)
-        .add_systems(
-            Update,
-            (settle_release, drive_pointer_job)
-                .chain()
-                .after(SceneSets::Input),
-        );
+pub(crate) struct AutomationPointerPlugin;
+
+impl Plugin for AutomationPointerPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PointerJob>()
+            .add_console_command::<HoverEntityCommand, _>(hover_entity_cmd)
+            .add_console_command::<ClickEntityCommand, _>(click_entity_cmd)
+            .add_systems(
+                Update,
+                (settle_release, drive_pointer_job)
+                    .chain()
+                    .after(SceneSets::Input),
+            );
+    }
 }
 
 /// The input script step pressing or releasing `binding`; `None` for a gamepad binding.

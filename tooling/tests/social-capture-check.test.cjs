@@ -200,3 +200,29 @@ test('syntax check covers captures, helpers and tests without executing them', t
     fs.writeFileSync(path.join(root, relative), sentinel)
   }
 })
+
+test('the workflow starts for every file the job reads', () => {
+  const workflow = fs.readFileSync(path.join(ROOT, '.github/workflows/social-captures.yml'), 'utf8')
+  const lists = workflow.split(/^ {4}paths:\n/m).slice(1)
+    .map(block => block.match(/^(?: {6}- '[^']+'\n)+/)[0].trim().split('\n').map(line => line.trim().slice(3, -1)))
+  assert.equal(lists.length, 2, 'push and pull_request each need a paths list')
+  assert.deepEqual(lists[0], lists[1])
+  // GitHub path filters: '**' crosses folders, '*' stays inside one.
+  const patterns = lists[0].map(glob => new RegExp('^' + glob.split('**').map(part =>
+    part.split('*').map(text => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')).join('.*') + '$'))
+  const tooling = directory => fs.readdirSync(path.join(ROOT, directory)).filter(name => name.startsWith('social-'))
+    .map(name => `${directory}/${name}`)
+  const read = new Set(['.github/CODEOWNERS', '.github/workflows/social-captures.yml', 'ownership.json', 'tooling/owners.py',
+    'library/dcl-http/tests/fixtures/social-analytics-source-cases.json', ...tooling('tooling'), ...tooling('tooling/tests')])
+  for (const entry of catalog.captures) for (const file of [entry.script, entry.fixture]) read.add(file)
+  for (const file of [...read]) {
+    if (!file.endsWith('.cjs')) continue
+    const source = fs.readFileSync(path.join(ROOT, file), 'utf8')
+    for (const [, relative] of source.matchAll(/require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)) {
+      read.add(path.posix.normalize(path.posix.join(path.posix.dirname(file), relative)))
+    }
+  }
+  assert.ok(read.size > 100, 'the inventory lost its files')
+  const outside = [...read].filter(file => !patterns.some(pattern => pattern.test(file))).sort()
+  assert.deepEqual(outside, [], 'add these files to both paths lists in .github/workflows/social-captures.yml')
+})

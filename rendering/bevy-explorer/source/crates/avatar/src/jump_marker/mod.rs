@@ -123,7 +123,7 @@ impl Plugin for JumpMarkerPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<JumpMarkerMaterial>::default());
         app.insert_resource(JumpMarkerEnabled(true));
-        diagnostics::register(app);
+        app.add_plugins(diagnostics::JumpMarkerDiagnosticsPlugin);
         app.add_systems(Startup, spawn_jump_marker.in_set(SetupSets::Main));
         // after the movement writes this frame's position and ground distance, before the
         // transforms propagate, so the box sits over the ground the player is over this frame
@@ -367,8 +367,8 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn jump_marker_pipeline_compiles() {
-        use assets::test_support::{compile_pipelines, headless_app, render_target};
         use bevy::render::camera::RenderTarget;
+        use pipeline_test::{compile_pipelines, headless_app, render_target};
 
         let mut app = headless_app();
         app.add_plugins((

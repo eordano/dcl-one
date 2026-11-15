@@ -75,7 +75,7 @@ fn app(phase: AutopilotPhase) -> (App, Entity, Entity) {
         .insert_resource(AutopilotWalk {
             to: IVec2::new(0, 0),
         });
-    register(&mut app);
+    app.add_plugins(AutopilotWalkPlugin);
     let start = parcel_to_vec3(IVec2::new(0, -2)).xz();
     let player = app
         .world_mut()

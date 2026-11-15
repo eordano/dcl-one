@@ -435,26 +435,8 @@ mod tests {
             .connect_with(opts.database("postgres"))
             .await
             .unwrap();
-        let name = format!(
-            "catalyst_test_prune_{}",
-            &uuid::Uuid::new_v4().simple().to_string()[..12]
-        );
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let mut url = url::Url::parse(&base_url).unwrap();
-        url.set_path(&format!("/{name}"));
-        let pool = crate::db::connect_pool(
-            url.as_str(),
-            &crate::db::PoolSettings {
-                max_connections: 2,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        crate::db::apply_schema(&pool).await.unwrap();
+        let pool = crate::db::scratch::isolated_pool(2).await?;
+        let name = pool.connect_options().get_database().unwrap().to_string();
         Some((pool, admin, name))
     }
 

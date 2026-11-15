@@ -15,8 +15,11 @@ use tracing::{debug, error, info, warn};
 
 use super::{DeploymentContext, FailedDeployment, FailureReason, SyncError};
 use crate::deploy_remote_entity::{ContentSource, RemoteDeployment, deploy_entity_streaming};
+use crate::failed_deployments_store::{
+    DueCursor, LiveFailedDeploymentsStore, prune_failed_deployments,
+};
 use crate::storage::Storage;
-use crate::sync_deployer::{DueCursor, LiveFailedDeploymentsStore, LiveSyncDeployer};
+use crate::sync_deployer::LiveSyncDeployer;
 
 const BASE_RETRY_INTERVAL_MS: u64 = 900_000;
 const MAX_RETRY_INTERVAL_MS: u64 = 86_400_000;
@@ -426,24 +429,6 @@ pub struct RetryStats {
     pub skipped: u64,
     /// Due pages the cycle fetched, the page the peer guard turned back included.
     pub pages: u64,
-}
-
-/// One pass of the old daily prune: records whose first failure is older than `ttl_days`.
-/// Undecided records stay: the retry worker gives up on them after [`UNDECIDED_GIVE_UP_MS`].
-pub async fn prune_failed_deployments(
-    pool: &sqlx::PgPool,
-    ttl_days: i64,
-) -> Result<u64, SyncError> {
-    let result = sqlx::query(
-        "DELETE FROM content.failed_deployments
-         WHERE failure_time < timezone('UTC', now()) - make_interval(days => $1)
-           AND reason <> 'Validation undecided'",
-    )
-    .bind(ttl_days as i32)
-    .execute(pool)
-    .await
-    .map_err(|e| SyncError::Storage(e.to_string()))?;
-    Ok(result.rows_affected())
 }
 
 pub async fn run_prune_loop(

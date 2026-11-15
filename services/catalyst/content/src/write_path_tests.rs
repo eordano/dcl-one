@@ -222,11 +222,14 @@ fn attach(
             ..Default::default()
         },
     );
-    let deployer =
-        WriteDeployer::with_optional_eip1654(state.pool.clone(), state.storage.clone(), None)
-            .with_land_authz(land)
-            .with_validator(Arc::new(sources))
-            .with_denylist(state.denylist.clone());
+    let deployer = WriteDeployer::new(
+        state.pool.clone(),
+        state.storage.clone(),
+        None,
+        Arc::new(sources),
+    )
+    .with_land_authz(land)
+    .with_denylist(state.denylist.clone());
     assert!(state.attach_writes(enabled, Arc::new(deployer)));
 }
 
@@ -646,7 +649,7 @@ struct OwnDb {
 }
 
 impl OwnDb {
-    async fn create(tag: &str) -> Option<Self> {
+    async fn create() -> Option<Self> {
         let base = std::env::var("CATALYST_TEST_DATABASE_URL").ok()?;
         let opts: PgConnectOptions = base.parse().unwrap();
         let admin = PgPoolOptions::new()
@@ -654,26 +657,8 @@ impl OwnDb {
             .connect_with(opts.database("postgres"))
             .await
             .unwrap();
-        let name = format!(
-            "catalyst_test_{tag}_{}",
-            &uuid::Uuid::new_v4().simple().to_string()[..12]
-        );
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let mut url = url::Url::parse(&base).unwrap();
-        url.set_path(&format!("/{name}"));
-        let pool = crate::db::connect_pool(
-            url.as_str(),
-            &crate::db::PoolSettings {
-                max_connections: 6,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        crate::db::apply_schema(&pool).await.unwrap();
+        let pool = crate::db::scratch::isolated_pool(6).await?;
+        let name = pool.connect_options().get_database().unwrap().to_string();
         Some(Self { admin, name, pool })
     }
 
@@ -761,7 +746,7 @@ async fn a_signed_positional_scene_keeps_metadata_and_immutable_bytes() {
 }
 
 async fn signed_scene_roundtrip(positional: bool) {
-    require_test_db!(Some(db) = OwnDb::create("contentw").await);
+    require_test_db!(Some(db) = OwnDb::create().await);
     let (owner, stranger) = (key(OWNER_KEY), key(STRANGER_KEY));
     let (x, y) = (37, -11);
     let parcel = format!("{x},{y}");
@@ -1092,7 +1077,7 @@ async fn signed_scene_roundtrip(positional: bool) {
 /// scene occupied one of them before.
 #[tokio::test]
 async fn unpublishing_a_scene_needs_rights_on_every_parcel_and_empties_them() {
-    require_test_db!(Some(db) = OwnDb::create("contentu").await);
+    require_test_db!(Some(db) = OwnDb::create().await);
     let (owner, neighbour) = (key(OWNER_KEY), key(STRANGER_KEY));
     let (x, y) = (41, -13);
     let (a, b) = (format!("{x},{y}"), format!("{},{y}", x + 1));
@@ -1332,7 +1317,7 @@ async fn seed_local_scene(pool: &PgPool, entity_id: &str, pointer: &str) {
 /// the scene down first leaves this one a 404.
 #[tokio::test]
 async fn an_unpublish_raced_by_another_write_answers_409_or_404() {
-    require_test_db!(Some(db) = OwnDb::create("contentr").await);
+    require_test_db!(Some(db) = OwnDb::create().await);
     let owner = key(OWNER_KEY);
     let race = Arc::new(parking_lot::Mutex::new(None));
     let subgraph = serve_racing_land_subgraph(db.pool.clone(), address(&owner), race.clone()).await;

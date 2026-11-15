@@ -21,13 +21,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, bail};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 
 use super::events::{ALL_TOPICS, AuthzEvent, DecodeError, decode_log};
 use super::{KIND_ADD_LAND, KIND_REMOVE_LAND, LandAuthzState, Settings};
 use crate::jobs::JobContext;
+
+use crate::chain_index::rpc::{BlockHeader, HEADER_BATCH, RpcLog, hex_to_i64};
+use crate::chain_index::rpc::{Rpc, RpcError};
+
+impl From<RpcError> for IndexError {
+    fn from(error: RpcError) -> Self {
+        match error {
+            RpcError::Budget { upper, requests } => Self::Budget { upper, requests },
+            RpcError::Transport(message) => Self::Transport(message),
+            RpcError::Rpc(message) => Self::Rpc(message),
+        }
+    }
+}
 
 /// Publish a fold only when the head has not moved further than this past
 /// the indexed block: a fold of an old snapshot is not "current rights".
@@ -36,11 +48,6 @@ pub const HEAD_LAG_BLOCKS: u64 = 25;
 pub const READY_WINDOW: ChronoDuration = ChronoDuration::minutes(30);
 /// Rows per `INSERT ... UNNEST` statement.
 const INSERT_CHUNK: usize = 1_000;
-const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-/// A filtered `eth_getLogs` answer for 10,000 logs is a few MB; this caps a misbehaving endpoint.
-const RPC_BODY_CAP: usize = 64 * 1024 * 1024;
-/// Headers per JSON-RPC batch request ([`Rpc::block_headers`]).
-pub const HEADER_BATCH: usize = 100;
 /// Chain/host clocks may differ slightly; authorization still uses strict chain time.
 pub const HEADER_CLOCK_SKEW_SECONDS: i64 = 60;
 /// Retry batch support after this many fallback fetches, without restarting.
@@ -67,435 +74,88 @@ pub enum IndexError {
     },
 }
 
-#[derive(Debug, Deserialize)]
-pub struct RpcLog {
-    pub address: String,
-    pub topics: Vec<String>,
-    pub data: String,
-    #[serde(rename = "blockNumber")]
-    pub block_number: String,
-    #[serde(rename = "logIndex")]
-    pub log_index: String,
-    #[serde(rename = "blockTimestamp")]
-    pub block_timestamp: Option<String>,
-    #[serde(rename = "blockHash", default)]
-    pub block_hash: Option<String>,
-    #[serde(rename = "transactionHash", default)]
-    pub transaction_hash: Option<String>,
-}
-
-pub fn hex_to_i64(s: &str) -> Option<i64> {
-    i64::from_str_radix(s.trim_start_matches("0x"), 16).ok()
-}
-
-/// The public RPC caps a filtered `eth_getLogs` at ten thousand rows but names
-/// a range that would fit; following that hint is what keeps a full history
-/// scan to tens of requests instead of thousands of fixed-width windows.
-pub fn suggested_upper_bound(message: &str) -> Option<u64> {
-    let open = message.rfind('[')?;
-    let close = message[open..].find(']')? + open;
-    let inner = &message[open + 1..close];
-    let (_, hi) = inner.split_once(',')?;
-    u64::from_str_radix(hi.trim().trim_start_matches("0x"), 16).ok()
-}
-
-/// The other refusal shape the public endpoints answer (observed on
-/// rpc.decentraland.org's second backend, 2026-09-25): "range 50000 exceeds
-/// limit of 10000" names the widest window it takes, not a block.
-pub fn suggested_range_limit(message: &str) -> Option<u64> {
-    let (_, tail) = message.split_once("exceeds limit of ")?;
-    let digits: String = tail
-        .trim_start()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse::<u64>().ok().filter(|n| *n > 0)
-}
-
-/// A refusal no block range fixes: the filter names more addresses than
-/// the endpoint takes ("exceed max addresses or topics per search
-/// position"). The caller splits its address list instead of the range.
-pub fn is_address_limit(message: &str) -> bool {
-    let m = message.to_ascii_lowercase();
-    m.contains("max addresses") || m.contains("too many addresses")
-}
-
-/// One block header's identity: the reorg check and the time bound of the
-/// marketplace indexers read it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlockHeader {
-    pub number: u64,
-    pub hash: String,
-    pub timestamp: i64,
-}
-
-/// The LAND registries' reader over the shared JSON-RPC client
-/// (`crate::http::jsonrpc`): the endpoint is `ETH_RPC_URL` (https to a
-/// public host, `Config::eth_rpc_url`), the same one the EIP-1654 validator
-/// uses. The marketplace indexers reuse it over their own
-/// endpoints and filters ([`Rpc::at`], [`Rpc::get_logs_matching`]).
-pub struct Rpc<'a> {
-    http: &'a crate::http::Outbound,
-    url: &'a str,
-    land_registry: &'a str,
-    estate_registry: &'a str,
-}
-
-impl<'a> Rpc<'a> {
-    pub fn new(http: &'a crate::http::Outbound, url: &'a str, settings: &'a Settings) -> Self {
-        Self {
-            http,
-            url,
-            land_registry: &settings.land_registry,
-            estate_registry: &settings.estate_registry,
-        }
+/// Resolve a bounded set within the remaining request budget. Some RPC
+/// endpoints reject batches or omit individual responses. Keep their valid
+/// answers, then use single requests for a bounded number of fetches before
+/// probing batches again. Two-request passes still make progress between
+/// probes, while transient failures cannot permanently disable batching.
+async fn timestamp_headers(
+    rpc: &Rpc<'_>,
+    numbers: &[u64],
+    singles: &AtomicUsize,
+    budget: usize,
+    requests: &mut usize,
+) -> std::collections::HashMap<u64, BlockHeader> {
+    let mut out = std::collections::HashMap::new();
+    if numbers.is_empty() || budget == 0 {
+        return out;
     }
-
-    /// The client over another endpoint, for callers that pass their own
-    /// filter to [`Rpc::get_logs_matching`].
-    pub fn at(http: &'a crate::http::Outbound, url: &'a str) -> Self {
-        Self {
-            http,
-            url,
-            land_registry: "",
-            estate_registry: "",
-        }
-    }
-
-    fn jsonrpc(&self) -> crate::http::jsonrpc::Rpc<'a> {
-        crate::http::jsonrpc::Rpc::new(self.http, self.url)
-            .with_timeout(RPC_TIMEOUT)
-            .with_body_cap(RPC_BODY_CAP)
-    }
-
-    /// The whole envelope: the log readers act on the `error` message (a
-    /// range hint), so the shared client hands it over unread.
-    pub async fn call(&self, method: &str, params: Value) -> Result<Value, IndexError> {
-        self.jsonrpc()
-            .envelope(method, params)
-            .await
-            .map_err(|e| IndexError::Transport(format!("{method}: {e}")))
-    }
-
-    pub async fn head_block(&self) -> Result<u64, IndexError> {
-        let v = self.call("eth_blockNumber", json!([])).await?;
-        v.get("result")
-            .and_then(Value::as_str)
-            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
-            .ok_or_else(|| IndexError::Rpc(format!("eth_blockNumber returned {v}")))
-    }
-
-    pub async fn finalized_header(&self) -> Result<BlockHeader, IndexError> {
-        let v = self
-            .call("eth_getBlockByNumber", json!(["finalized", false]))
-            .await?;
-        let block = &v["result"];
-        let number = block["number"]
-            .as_str()
-            .and_then(hex_to_i64)
-            .filter(|n| *n >= 0)
-            .ok_or_else(|| IndexError::Rpc("invalid finalized number".into()))?
-            as u64;
-        let hash = block["hash"]
-            .as_str()
-            .filter(|h| {
-                h.len() == 66
-                    && h.starts_with("0x")
-                    && h[2..].bytes().all(|c| c.is_ascii_hexdigit())
-            })
-            .ok_or_else(|| IndexError::Rpc("invalid finalized hash".into()))?
-            .to_ascii_lowercase();
-        let timestamp = block["timestamp"]
-            .as_str()
-            .and_then(hex_to_i64)
-            .filter(|t| *t >= 0)
-            .ok_or_else(|| IndexError::Rpc("invalid finalized timestamp".into()))?;
-        Ok(BlockHeader {
-            number,
-            hash,
-            timestamp,
+    debug_assert!(numbers.len() <= HEADER_BATCH);
+    let start = *requests;
+    let retry_batch = singles
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            remaining.checked_sub(1)
         })
-    }
-
-    /// `eth_getBlockByNumber` without transactions: the hash and time of one block.
-    pub async fn block_header(&self, number: u64) -> Result<BlockHeader, IndexError> {
-        let v = self
-            .call(
-                "eth_getBlockByNumber",
-                json!([format!("0x{number:x}"), false]),
-            )
-            .await?;
-        let block = v.get("result").filter(|r| !r.is_null()).ok_or_else(|| {
-            IndexError::Rpc(format!("eth_getBlockByNumber {number} returned {v}"))
-        })?;
-        if block
-            .get("number")
-            .and_then(Value::as_str)
-            .and_then(hex_to_i64)
-            != i64::try_from(number).ok()
-        {
-            return Err(IndexError::Rpc("block header number mismatch".into()));
-        }
-        let hash = block
-            .get("hash")
-            .and_then(Value::as_str)
-            .filter(|h| {
-                h.len() == 66
-                    && h.starts_with("0x")
-                    && h[2..].bytes().all(|c| c.is_ascii_hexdigit())
+        .is_err();
+    if retry_batch {
+        let body: Vec<Value> = numbers
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                crate::http::jsonrpc::request(
+                    i as u64,
+                    "eth_getBlockByNumber",
+                    json!([format!("0x{n:x}"), false]),
+                )
             })
-            .map(str::to_ascii_lowercase);
-        let timestamp = block
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(hex_to_i64);
-        match (hash, timestamp) {
-            (Some(hash), Some(timestamp)) => Ok(BlockHeader {
-                number,
-                hash,
-                timestamp,
-            }),
-            _ => Err(IndexError::Rpc(format!(
-                "eth_getBlockByNumber {number}: no hash or timestamp"
-            ))),
-        }
-    }
-
-    /// `eth_getBlockByNumber` for many blocks, in JSON-RPC batches of at
-    /// most [`HEADER_BATCH`] (one HTTP request each), keyed by number, and
-    /// the requests it took. A batch the endpoint answers without an element
-    /// leaves that block to one single call. The marketplace indexes need it:
-    /// 4 in 10 of rpc.decentraland.org/polygon's backends omit a log's
-    /// `blockTimestamp` (sampled 2026-09-25), and a window can hold a
-    /// thousand distinct blocks.
-    pub async fn block_headers(
-        &self,
-        numbers: &[u64],
-    ) -> Result<(std::collections::HashMap<u64, BlockHeader>, usize), IndexError> {
-        let mut out = std::collections::HashMap::new();
-        let mut requests = 0usize;
-        for chunk in numbers.chunks(HEADER_BATCH) {
-            let body: Vec<Value> = chunk
-                .iter()
-                .enumerate()
-                .map(|(i, n)| {
-                    crate::http::jsonrpc::request(
-                        i as u64,
-                        "eth_getBlockByNumber",
-                        json!([format!("0x{n:x}"), false]),
-                    )
-                })
-                .collect();
-            let items =
-                self.jsonrpc().batch(&body).await.map_err(|e| {
-                    IndexError::Transport(format!("eth_getBlockByNumber batch: {e}"))
-                })?;
-            requests += 1;
-            {
+            .collect();
+        *requests += 1;
+        match rpc.batch(&body).await {
+            Ok(items) => {
                 for item in items {
-                    let Some(block) = item.get("result").filter(|r| !r.is_null()) else {
+                    let Some(id) = item["id"]
+                        .as_u64()
+                        .and_then(|id| usize::try_from(id).ok())
+                        .filter(|id| *id < numbers.len())
+                    else {
                         continue;
                     };
-                    let number = block
-                        .get("number")
-                        .and_then(Value::as_str)
-                        .and_then(hex_to_i64);
-                    let hash = block
-                        .get("hash")
-                        .and_then(Value::as_str)
-                        .map(str::to_ascii_lowercase);
-                    let timestamp = block
-                        .get("timestamp")
-                        .and_then(Value::as_str)
-                        .and_then(hex_to_i64);
-                    if let (Some(number), Some(hash), Some(timestamp)) = (number, hash, timestamp) {
-                        out.insert(
-                            number as u64,
-                            BlockHeader {
-                                number: number as u64,
-                                hash,
-                                timestamp,
-                            },
-                        );
+                    if let Some(header) = timestamp_header(&item["result"], numbers[id]) {
+                        out.insert(header.number, header);
                     }
                 }
             }
-            for n in chunk {
-                if !out.contains_key(n) {
-                    let header = self.block_header(*n).await?;
-                    requests += 1;
-                    out.insert(*n, header);
-                }
+            Err(error) => {
+                tracing::warn!(%error, "land-authz: timestamp batch unavailable; using budgeted single headers")
             }
         }
-        Ok((out, requests))
+        if out.len() < numbers.len() {
+            singles.store(HEADER_BATCH_RETRY_FETCHES, Ordering::SeqCst);
+        }
     }
-
-    /// Resolve a bounded set within the remaining request budget. Some RPC
-    /// endpoints reject batches or omit individual responses. Keep their valid
-    /// answers, then use single requests for a bounded number of fetches before
-    /// probing batches again. Two-request passes still make progress between
-    /// probes, while transient failures cannot permanently disable batching.
-    async fn timestamp_headers(
-        &self,
-        numbers: &[u64],
-        singles: &AtomicUsize,
-        budget: usize,
-        requests: &mut usize,
-    ) -> std::collections::HashMap<u64, BlockHeader> {
-        let mut out = std::collections::HashMap::new();
-        if numbers.is_empty() || budget == 0 {
-            return out;
+    for number in numbers {
+        if out.contains_key(number) {
+            continue;
         }
-        debug_assert!(numbers.len() <= HEADER_BATCH);
-        let start = *requests;
-        let retry_batch = singles
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_err();
-        if retry_batch {
-            let body: Vec<Value> = numbers
-                .iter()
-                .enumerate()
-                .map(|(i, n)| {
-                    crate::http::jsonrpc::request(
-                        i as u64,
-                        "eth_getBlockByNumber",
-                        json!([format!("0x{n:x}"), false]),
-                    )
-                })
-                .collect();
-            *requests += 1;
-            match self.jsonrpc().batch(&body).await {
-                Ok(items) => {
-                    for item in items {
-                        let Some(id) = item["id"]
-                            .as_u64()
-                            .and_then(|id| usize::try_from(id).ok())
-                            .filter(|id| *id < numbers.len())
-                        else {
-                            continue;
-                        };
-                        if let Some(header) = timestamp_header(&item["result"], numbers[id]) {
-                            out.insert(header.number, header);
-                        }
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "land-authz: timestamp batch unavailable; using budgeted single headers")
-                }
-            }
-            if out.len() < numbers.len() {
-                singles.store(HEADER_BATCH_RETRY_FETCHES, Ordering::SeqCst);
-            }
+        if *requests - start >= budget {
+            break;
         }
-        for number in numbers {
-            if out.contains_key(number) {
-                continue;
+        *requests += 1;
+        match rpc.block_header(*number).await {
+            Ok(header) if valid_header_time(header.timestamp) => {
+                out.insert(*number, header);
             }
-            if *requests - start >= budget {
+            result => {
+                tracing::warn!(
+                    block = number,
+                    ?result,
+                    "land-authz: timestamp header unresolved; retaining verified prefix"
+                );
                 break;
             }
-            *requests += 1;
-            match self.block_header(*number).await {
-                Ok(header) if valid_header_time(header.timestamp) => {
-                    out.insert(*number, header);
-                }
-                result => {
-                    tracing::warn!(
-                        block = number,
-                        ?result,
-                        "land-authz: timestamp header unresolved; retaining verified prefix"
-                    );
-                    break;
-                }
-            }
-        }
-        out
-    }
-
-    /// The logs of `[from, upper]` for some `upper <= to` the endpoint
-    /// accepted, plus the number of requests it took: a refusal that names
-    /// a range narrows to it, one that does not halves the window.
-    pub async fn get_logs(
-        &self,
-        from: u64,
-        to: u64,
-    ) -> Result<(Vec<RpcLog>, u64, usize), IndexError> {
-        self.get_logs_matching(
-            from,
-            to,
-            &json!([self.land_registry, self.estate_registry]),
-            &json!([ALL_TOPICS]),
-        )
-        .await
-    }
-
-    /// [`Rpc::get_logs`] over any filter: `address` and `topics` are the
-    /// `eth_getLogs` fields as given. A refusal naming a block
-    /// (`[from, hi]`) or a window width ("exceeds limit of N") narrows to
-    /// it, one naming neither halves the window, and an address-count
-    /// refusal is returned at once for the caller to split its list.
-    pub async fn get_logs_matching(
-        &self,
-        from: u64,
-        to: u64,
-        address: &Value,
-        topics: &Value,
-    ) -> Result<(Vec<RpcLog>, u64, usize), IndexError> {
-        self.get_logs_bounded(from, to, address, topics, usize::MAX)
-            .await
-    }
-
-    async fn get_logs_bounded(
-        &self,
-        from: u64,
-        to: u64,
-        address: &Value,
-        topics: &Value,
-        budget: usize,
-    ) -> Result<(Vec<RpcLog>, u64, usize), IndexError> {
-        let mut upper = to;
-        let mut requests = 0usize;
-        loop {
-            if requests >= budget {
-                return Err(IndexError::Budget { upper, requests });
-            }
-            requests += 1;
-            let params = json!([{
-                "fromBlock": format!("0x{from:x}"),
-                "toBlock": format!("0x{upper:x}"),
-                "address": address,
-                "topics": topics,
-            }]);
-            let v = self.call("eth_getLogs", params).await?;
-            if let Some(result) = v.get("result").filter(|r| !r.is_null()) {
-                let logs: Vec<RpcLog> = serde_json::from_value(result.clone())
-                    .map_err(|e| IndexError::Rpc(format!("cannot read logs: {e}")))?;
-                return Ok((logs, upper, requests));
-            }
-            let message = v
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .unwrap_or("no result and no error")
-                .to_string();
-            if is_address_limit(&message) {
-                return Err(IndexError::Rpc(message));
-            }
-            let by_width = suggested_range_limit(&message).map(|n| from + n.saturating_sub(1));
-            match suggested_upper_bound(&message).or(by_width) {
-                Some(hi) if hi >= from && hi < upper => upper = hi,
-                _ => {
-                    let halved = from + (upper - from) / 2;
-                    if halved <= from && upper == from {
-                        return Err(IndexError::Rpc(message));
-                    }
-                    upper = halved.max(from);
-                }
-            }
         }
     }
+    out
 }
 
 pub fn decode_logs(logs: &[RpcLog]) -> Result<Vec<AuthzEvent>, IndexError> {
@@ -586,9 +246,14 @@ async fn fill_missing_timestamps(
         })
         .collect::<Result<_, _>>()?;
     let numbers: Vec<u64> = blocks.into_iter().collect();
-    let headers = rpc
-        .timestamp_headers(&numbers, &state.single_timestamp_headers, budget, requests)
-        .await;
+    let headers = timestamp_headers(
+        rpc,
+        &numbers,
+        &state.single_timestamp_headers,
+        budget,
+        requests,
+    )
+    .await;
     let mut barrier = numbers
         .iter()
         .copied()
@@ -652,14 +317,14 @@ async fn repair_timestamps(
                 u64::try_from(*n).map_err(|_| IndexError::Rpc("negative historical block".into()))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let headers = rpc
-            .timestamp_headers(
-                &numbers,
-                &state.single_timestamp_headers,
-                budget - (*requests - start),
-                requests,
-            )
-            .await;
+        let headers = timestamp_headers(
+            rpc,
+            &numbers,
+            &state.single_timestamp_headers,
+            budget - (*requests - start),
+            requests,
+        )
+        .await;
         if headers.is_empty() {
             return Ok(());
         }
@@ -1436,6 +1101,7 @@ pub async fn sync_range(
                 request_budget - outcome.requests,
             )
             .await
+            .map_err(IndexError::from)
         {
             Ok(result) => result,
             Err(IndexError::Budget { upper, requests }) => {
@@ -1585,7 +1251,7 @@ pub async fn run_pass(state: &LandAuthzState, ctx: &JobContext) -> anyhow::Resul
             .context("cursor row after the replay rewind")?;
         tracing::warn!(network = %settings.network, from, "land-authz: replay started; readers use the subgraph until it is folded at head. Unset LAND_AUTHZ_REPLAY_FROM_BLOCK once it has published: while it is set, every restart replays again");
     }
-    let rpc = Rpc::new(&state.http, rpc_url, settings);
+    let rpc = Rpc::at(&state.http, rpc_url);
     let head = rpc.head_block().await.context("eth_blockNumber")?;
     let target = settings.stop_block.map_or(head, |s| s.min(head));
     let mut outcome = PassOutcome {
@@ -1669,39 +1335,6 @@ pub const ESTATE_KINDS: [&str; 2] = [KIND_ADD_LAND, KIND_REMOVE_LAND];
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_the_upper_bound_the_rpc_suggests() {
-        let msg =
-            "Log response size exceeded. ... this block range should work: [0x4b7fc2, 0xe95489]";
-        assert_eq!(suggested_upper_bound(msg), Some(0xe95489));
-        let infura = "query returned more than 10000 results. Try with this block range [0x4B7FC2, 0x4B8000].";
-        assert_eq!(suggested_upper_bound(infura), Some(0x4b8000));
-    }
-
-    #[test]
-    fn a_message_without_a_range_yields_nothing() {
-        assert_eq!(suggested_upper_bound("query timeout"), None);
-    }
-
-    #[test]
-    fn a_window_limit_and_an_address_limit_are_read_from_the_message() {
-        assert_eq!(
-            suggested_range_limit("range 50000 exceeds limit of 10000"),
-            Some(10_000)
-        );
-        assert_eq!(suggested_range_limit("query timeout"), None);
-        assert!(is_address_limit(
-            "exceed max addresses or topics per search position"
-        ));
-        assert!(!is_address_limit("range 50000 exceeds limit of 10000"));
-    }
-
-    #[test]
-    fn hex_block_numbers_parse() {
-        assert_eq!(hex_to_i64("0x589fce"), Some(5_808_078));
-        assert_eq!(hex_to_i64("0x0"), Some(0));
-    }
 
     #[test]
     fn index_readiness_requires_a_complete_recent_fold() {

@@ -38,8 +38,6 @@
 //! only over a configured RPC upstream: with none (an island) the resolver
 //! answers from this node's data alone.
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_primitives::U256;
@@ -52,7 +50,6 @@ use axum::routing::get;
 use base64::Engine as _;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
-use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -137,14 +134,14 @@ impl Settings {
 /// and one resolution per key at a time.
 pub struct Runtime {
     misses: TtlMap<String, Bytes>,
-    locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    locks: crate::keyed_locks::KeyedLocks<String>,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
         Self {
             misses: TtlMap::bounded(FALLBACK_MISS_TTL, FALLBACK_MISS_ENTRIES),
-            locks: Mutex::new(HashMap::new()),
+            locks: crate::keyed_locks::KeyedLocks::default(),
         }
     }
 }
@@ -748,13 +745,7 @@ pub async fn answer(state: &Shared, req: &NftRequest, now: NaiveDateTime) -> Res
     if let Some(body) = state.opensea.misses.get_fresh(&key) {
         return json_response(StatusCode::NOT_FOUND, body);
     }
-    let lock = state
-        .opensea
-        .locks
-        .lock()
-        .entry(key.clone())
-        .or_default()
-        .clone();
+    let lock = state.opensea.locks.claim(&key);
     let response = async {
         let _guard = lock.lock().await;
         if let Ok(Some(c)) = read_cache(&state.pool, req).await
@@ -803,11 +794,6 @@ pub async fn answer(state: &Shared, req: &NftRequest, now: NaiveDateTime) -> Res
         }
     }
     .await;
-    let mut locks = state.opensea.locks.lock();
-    drop(lock);
-    if locks.get(&key).is_some_and(|l| Arc::strong_count(l) == 1) {
-        locks.remove(&key);
-    }
     response
 }
 

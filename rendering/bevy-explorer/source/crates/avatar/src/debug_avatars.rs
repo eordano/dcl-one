@@ -27,96 +27,100 @@ const CREATOR_EMOTES: &[(&str, &str)] = &[
     ("Tik", "tik"),
 ];
 
-pub(super) fn register(app: &mut App) {
-    if !app
-        .world()
-        .get_resource::<common::structs::PreviewMode>()
-        .is_some_and(|p| p.is_preview)
-    {
-        return;
-    }
-    app.init_resource::<Creator>()
-        .add_preview_console_command::<DemoCommand, _>(demo_command)
-        .add_preview_console_command::<LookCommand, _>(look_command)
-        .add_observer(clear_on_logout)
-        .add_systems(
-            Update,
-            (
-                forget_displayed_profile.after(crate::update_base_avatar_shape),
-                fetch_look
-                    .after(look_command)
-                    .run_if(any_with_component::<PendingProfile>),
+pub(super) struct DebugAvatarsPlugin;
+
+impl Plugin for DebugAvatarsPlugin {
+    fn build(&self, app: &mut App) {
+        if !app
+            .world()
+            .get_resource::<common::structs::PreviewMode>()
+            .is_some_and(|p| p.is_preview)
+        {
+            return;
+        }
+        app.init_resource::<Creator>()
+            .add_preview_console_command::<DemoCommand, _>(demo_command)
+            .add_preview_console_command::<LookCommand, _>(look_command)
+            .add_observer(clear_on_logout)
+            .add_systems(
+                Update,
+                (
+                    forget_displayed_profile.after(crate::update_base_avatar_shape),
+                    fetch_look
+                        .after(look_command)
+                        .run_if(any_with_component::<PendingProfile>),
+                )
+                    .chain(),
             )
-                .chain(),
-        )
-        .add_debug_section(DebugSection {
-            title: "Avatar debug",
-            query: "/avatar_demo",
-            fields: &[("Spawned demo avatars", "count")],
-            actions: &[
-                ("Destroy demo avatars", "/avatar_demo clear"),
-                ("Destroy random number", "/avatar_demo remove-random"),
-                ("Randomize demo wearables", "/avatar_demo randomize"),
-            ],
-            inputs: &[
-                DebugInput {
-                    label: "Force male for random avatars",
-                    field: "maleOnly",
-                    command: "/avatar_demo male-only {value}",
-                    kind: DebugInputKind::Toggle,
-                },
-                DebugInput {
-                    label: "Spawn random avatars",
-                    field: "",
-                    command: "/avatar_demo spawn {value}",
-                    kind: DebugInputKind::Number {
-                        min: 1.0,
-                        max: MAX_DEMOS as f64,
-                        step: 1.0,
+            .add_debug_section(DebugSection {
+                title: "Avatar debug",
+                query: "/avatar_demo",
+                fields: &[("Spawned demo avatars", "count")],
+                actions: &[
+                    ("Destroy demo avatars", "/avatar_demo clear"),
+                    ("Destroy random number", "/avatar_demo remove-random"),
+                    ("Randomize demo wearables", "/avatar_demo randomize"),
+                ],
+                inputs: &[
+                    DebugInput {
+                        label: "Force male for random avatars",
+                        field: "maleOnly",
+                        command: "/avatar_demo male-only {value}",
+                        kind: DebugInputKind::Toggle,
                     },
-                },
-            ],
-        })
-        .add_debug_section(DebugSection {
-            title: "Avatar creator",
-            query: "/avatar_demo",
-            fields: &[],
-            actions: &[
-                ("Instantiate male", "/avatar_demo male"),
-                ("Instantiate female", "/avatar_demo female"),
-                ("Clear wearables", "/avatar_demo wearables"),
-            ],
-            inputs: &[
-                DebugInput {
-                    label: "Wearable URNs (up to three, comma-separated)",
-                    field: "wearables",
-                    command: "/avatar_demo wearables {value}",
+                    DebugInput {
+                        label: "Spawn random avatars",
+                        field: "",
+                        command: "/avatar_demo spawn {value}",
+                        kind: DebugInputKind::Number {
+                            min: 1.0,
+                            max: MAX_DEMOS as f64,
+                            step: 1.0,
+                        },
+                    },
+                ],
+            })
+            .add_debug_section(DebugSection {
+                title: "Avatar creator",
+                query: "/avatar_demo",
+                fields: &[],
+                actions: &[
+                    ("Instantiate male", "/avatar_demo male"),
+                    ("Instantiate female", "/avatar_demo female"),
+                    ("Clear wearables", "/avatar_demo wearables"),
+                ],
+                inputs: &[
+                    DebugInput {
+                        label: "Wearable URNs (up to three, comma-separated)",
+                        field: "wearables",
+                        command: "/avatar_demo wearables {value}",
+                        kind: DebugInputKind::Text,
+                    },
+                    DebugInput {
+                        label: "Emote for new avatars",
+                        field: "emote",
+                        command: "/avatar_demo emote {value}",
+                        kind: DebugInputKind::Select(CREATOR_EMOTES),
+                    },
+                ],
+            })
+            .add_debug_section(DebugSection {
+                title: "Profile avatar shape",
+                query: "/avatar_look",
+                fields: &[
+                    ("Displayed profile", "displayed"),
+                    ("Requested profile", "requested"),
+                    ("Status", "status"),
+                ],
+                actions: &[("Restore own appearance", "/avatar_look reset")],
+                inputs: &[DebugInput {
+                    label: "Preview profile address",
+                    field: "",
+                    command: "/avatar_look {value}",
                     kind: DebugInputKind::Text,
-                },
-                DebugInput {
-                    label: "Emote for new avatars",
-                    field: "emote",
-                    command: "/avatar_demo emote {value}",
-                    kind: DebugInputKind::Select(CREATOR_EMOTES),
-                },
-            ],
-        })
-        .add_debug_section(DebugSection {
-            title: "Profile avatar shape",
-            query: "/avatar_look",
-            fields: &[
-                ("Displayed profile", "displayed"),
-                ("Requested profile", "requested"),
-                ("Status", "status"),
-            ],
-            actions: &[("Restore own appearance", "/avatar_look reset")],
-            inputs: &[DebugInput {
-                label: "Preview profile address",
-                field: "",
-                command: "/avatar_look {value}",
-                kind: DebugInputKind::Text,
-            }],
-        });
+                }],
+            });
+    }
 }
 
 #[derive(Component)]

@@ -770,7 +770,9 @@ async fn the_usage_index_resumes_after_a_kill_folds_each_credit_once_and_gates_t
 
 #[test]
 fn the_tick_and_the_sweep_share_one_expiry_bound() {
-    assert!(super::checkout::OUTBOX_TICK_SQL.contains(&super::usage::expiry_bound_sql("$2", "$5")));
+    assert!(
+        super::fulfillment::OUTBOX_TICK_SQL.contains(&super::usage::expiry_bound_sql("$2", "$5"))
+    );
 }
 
 /// `cargo test --lib credits::tests::live -- --ignored`: the CreditUsed

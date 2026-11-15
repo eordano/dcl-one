@@ -10,12 +10,14 @@ import type { CheckoutOut } from "@catalyst-api/credits/CheckoutOut";
 import type { CheckoutSessionOut } from "@catalyst-api/credits/CheckoutSessionOut";
 import type { CheckoutStartOut } from "@catalyst-api/credits/CheckoutStartOut";
 import type { ClaimCreditsResponse } from "@catalyst-api/credits/ClaimCreditsResponse";
+import type { CreditFlagReason } from "@catalyst-api/credits/CreditFlagReason";
 import type { CreditsData } from "@catalyst-api/credits/CreditsData";
 import type { CreditsOrderStatusOut } from "@catalyst-api/credits/CreditsOrderStatusOut";
 import type { CreditsProgramProgressResponse } from "@catalyst-api/credits/CreditsProgramProgressResponse";
 import type { CreditsTotals } from "@catalyst-api/credits/CreditsTotals";
 import type { CurrentSeasonInfo } from "@catalyst-api/credits/CurrentSeasonInfo";
 import type { GoalData } from "@catalyst-api/credits/GoalData";
+import type { GoalMetadata } from "@catalyst-api/credits/GoalMetadata";
 import type { GoalProgressData } from "@catalyst-api/credits/GoalProgressData";
 import type { HeldOut } from "@catalyst-api/credits/HeldOut";
 import type { HeldPurchaseOut } from "@catalyst-api/credits/HeldPurchaseOut";
@@ -28,9 +30,12 @@ import type { MockTopupOut } from "@catalyst-api/credits/MockTopupOut";
 import type { PackIntentOut } from "@catalyst-api/credits/PackIntentOut";
 import type { PackOut } from "@catalyst-api/credits/PackOut";
 import type { PriceQuotesOut } from "@catalyst-api/credits/PriceQuotesOut";
+import type { ProgressSeason } from "@catalyst-api/credits/ProgressSeason";
+import type { ProgressWeek } from "@catalyst-api/credits/ProgressWeek";
 import type { PurchaseIntentIn } from "@catalyst-api/credits/PurchaseIntentIn";
 import type { SeasonData } from "@catalyst-api/credits/SeasonData";
 import type { SeasonsData } from "@catalyst-api/credits/SeasonsData";
+import type { SeasonSummary } from "@catalyst-api/credits/SeasonSummary";
 import type { UnityCreditPack } from "@catalyst-api/credits/UnityCreditPack";
 import type { UnityCreditPacksResponse } from "@catalyst-api/credits/UnityCreditPacksResponse";
 import type { UsdCredits } from "@catalyst-api/credits/UsdCredits";
@@ -104,14 +109,19 @@ export const CheckoutStartOutSchema = z.object({
 
 export const ClaimCreditsResponseSchema = z.object({
   ok: z.boolean(),
+  message: z.string(),
   credits_granted: z.number(),
   isBlockedForClaiming: z.boolean(),
 });
 
+export const CreditFlagReasonSchema = z.object({
+  message: z.string(),
+  ip: z.string().nullable(),
+  linkedAddresses: z.array(z.string()),
+});
+
 export const CreditsDataSchema = z.object({
   available: z.number(),
-  earned: z.number(),
-  paid: z.number(),
   expiresIn: z.number(),
   isBlockedForClaiming: z.boolean(),
 });
@@ -123,18 +133,37 @@ export const CreditsOrderStatusOutSchema = z.object({
   error: z.string(),
 });
 
+export const GoalMetadataSchema = z.object({
+  photosTaken: z.array(z.string()),
+});
+
 export const GoalProgressDataSchema = z.object({
+  metadata: GoalMetadataSchema,
   totalSteps: z.number(),
   completedSteps: z.number(),
 });
 
 export const GoalDataSchema = z.object({
+  isCompleted: z.boolean(),
+  completedAt: z.number().nullable(),
+  id: z.string(),
   title: z.string(),
-  description: z.string(),
+  description: z.string().nullable(),
   thumbnail: z.string(),
   progress: GoalProgressDataSchema,
   reward: z.number(),
   isClaimed: z.boolean(),
+});
+
+export const ProgressSeasonSchema = z.object({
+  timeLeft: z.number(),
+  startDate: z.string(),
+  endDate: z.string(),
+  seasonState: z.string(),
+});
+
+export const ProgressWeekSchema = z.object({
+  timeLeft: z.number(),
 });
 
 export const UserDataSchema = z.object({
@@ -142,6 +171,8 @@ export const UserDataSchema = z.object({
 });
 
 export const CreditsProgramProgressResponseSchema = z.object({
+  season: ProgressSeasonSchema,
+  currentWeek: ProgressWeekSchema,
   user: UserDataSchema,
   credits: CreditsDataSchema,
   goals: z.array(GoalDataSchema),
@@ -250,10 +281,18 @@ export const PurchaseIntentInSchema = z.object({
   expiresAt: z.number(),
 });
 
+export const SeasonSummarySchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  startDate: z.string(),
+  endDate: z.string(),
+  maxMana: z.string(),
+});
+
 export const SeasonsDataSchema = z.object({
-  lastSeason: SeasonDataSchema,
-  currentSeason: CurrentSeasonInfoSchema,
-  nextSeason: SeasonDataSchema,
+  lastSeason: SeasonSummarySchema.nullable(),
+  currentSeason: CurrentSeasonInfoSchema.nullable(),
+  nextSeason: SeasonSummarySchema.nullable(),
 });
 
 export const UnityCreditPackSchema = z.object({
@@ -292,6 +331,9 @@ export const UserCreditItemSchema = z.object({
 });
 
 export const UserCreditsResponseSchema = z.object({
+  message: z.string().optional(),
+  reason: CreditFlagReasonSchema.optional(),
+  isBlockedForClaiming: z.boolean().optional(),
   credits: z.array(UserCreditItemSchema),
   totalCredits: z.number(),
   totals: CreditsTotalsSchema,
@@ -311,12 +353,14 @@ export type _AssertCheckoutOut = Assert<Mutual<CheckoutOut, z.infer<typeof Check
 export type _AssertCheckoutSessionOut = Assert<Mutual<CheckoutSessionOut, z.infer<typeof CheckoutSessionOutSchema>>>;
 export type _AssertCheckoutStartOut = Assert<Mutual<CheckoutStartOut, z.infer<typeof CheckoutStartOutSchema>>>;
 export type _AssertClaimCreditsResponse = Assert<Mutual<ClaimCreditsResponse, z.infer<typeof ClaimCreditsResponseSchema>>>;
+export type _AssertCreditFlagReason = Assert<Mutual<CreditFlagReason, z.infer<typeof CreditFlagReasonSchema>>>;
 export type _AssertCreditsData = Assert<Mutual<CreditsData, z.infer<typeof CreditsDataSchema>>>;
 export type _AssertCreditsOrderStatusOut = Assert<Mutual<CreditsOrderStatusOut, z.infer<typeof CreditsOrderStatusOutSchema>>>;
 export type _AssertCreditsProgramProgressResponse = Assert<Mutual<CreditsProgramProgressResponse, z.infer<typeof CreditsProgramProgressResponseSchema>>>;
 export type _AssertCreditsTotals = Assert<Mutual<CreditsTotals, z.infer<typeof CreditsTotalsSchema>>>;
 export type _AssertCurrentSeasonInfo = Assert<Mutual<CurrentSeasonInfo, z.infer<typeof CurrentSeasonInfoSchema>>>;
 export type _AssertGoalData = Assert<Mutual<GoalData, z.infer<typeof GoalDataSchema>>>;
+export type _AssertGoalMetadata = Assert<Mutual<GoalMetadata, z.infer<typeof GoalMetadataSchema>>>;
 export type _AssertGoalProgressData = Assert<Mutual<GoalProgressData, z.infer<typeof GoalProgressDataSchema>>>;
 export type _AssertHeldOut = Assert<Mutual<HeldOut, z.infer<typeof HeldOutSchema>>>;
 export type _AssertHeldPurchaseOut = Assert<Mutual<HeldPurchaseOut, z.infer<typeof HeldPurchaseOutSchema>>>;
@@ -329,9 +373,12 @@ export type _AssertMockTopupOut = Assert<Mutual<MockTopupOut, z.infer<typeof Moc
 export type _AssertPackIntentOut = Assert<Mutual<PackIntentOut, z.infer<typeof PackIntentOutSchema>>>;
 export type _AssertPackOut = Assert<Mutual<PackOut, z.infer<typeof PackOutSchema>>>;
 export type _AssertPriceQuotesOut = Assert<Mutual<PriceQuotesOut, z.infer<typeof PriceQuotesOutSchema>>>;
+export type _AssertProgressSeason = Assert<Mutual<ProgressSeason, z.infer<typeof ProgressSeasonSchema>>>;
+export type _AssertProgressWeek = Assert<Mutual<ProgressWeek, z.infer<typeof ProgressWeekSchema>>>;
 export type _AssertPurchaseIntentIn = Assert<Mutual<PurchaseIntentIn, z.infer<typeof PurchaseIntentInSchema>>>;
 export type _AssertSeasonData = Assert<Mutual<SeasonData, z.infer<typeof SeasonDataSchema>>>;
 export type _AssertSeasonsData = Assert<Mutual<SeasonsData, z.infer<typeof SeasonsDataSchema>>>;
+export type _AssertSeasonSummary = Assert<Mutual<SeasonSummary, z.infer<typeof SeasonSummarySchema>>>;
 export type _AssertUnityCreditPack = Assert<Mutual<UnityCreditPack, z.infer<typeof UnityCreditPackSchema>>>;
 export type _AssertUnityCreditPacksResponse = Assert<Mutual<UnityCreditPacksResponse, z.infer<typeof UnityCreditPacksResponseSchema>>>;
 export type _AssertUsdCredits = Assert<Mutual<UsdCredits, z.infer<typeof UsdCreditsSchema>>>;

@@ -84,17 +84,21 @@ impl StagedBevyUpdates {
     }
 }
 
-pub fn add_write_commands(app: &mut App) {
-    app.add_console_command::<SetComponentCommand, _>(set_component_cmd);
-    app.add_console_command::<SetComponentRawCommand, _>(set_component_raw_cmd);
-    app.add_console_command::<NewEntityCommand, _>(new_entity_cmd);
-    app.add_console_command::<SaveCompositeCommand, _>(save_composite_cmd);
-    app.add_console_command::<DeleteComponentCommand, _>(delete_component_cmd);
-    app.add_console_command::<DeleteEntityCommand, _>(delete_entity_cmd);
-    app.add_console_command::<FreezeSceneCommand, _>(freeze_scene_cmd);
-    app.add_console_command::<UnfreezeSceneCommand, _>(unfreeze_scene_cmd);
-    app.add_console_command::<TickSceneCommand, _>(tick_scene_cmd);
-    app.add_console_command::<HighlightCommand, _>(highlight_cmd);
+pub struct WriteCommandsPlugin;
+
+impl Plugin for WriteCommandsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<SetComponentCommand, _>(set_component_cmd);
+        app.add_console_command::<SetComponentRawCommand, _>(set_component_raw_cmd);
+        app.add_console_command::<NewEntityCommand, _>(new_entity_cmd);
+        app.add_console_command::<SaveCompositeCommand, _>(save_composite_cmd);
+        app.add_console_command::<DeleteComponentCommand, _>(delete_component_cmd);
+        app.add_console_command::<DeleteEntityCommand, _>(delete_entity_cmd);
+        app.add_console_command::<FreezeSceneCommand, _>(freeze_scene_cmd);
+        app.add_console_command::<UnfreezeSceneCommand, _>(unfreeze_scene_cmd);
+        app.add_console_command::<TickSceneCommand, _>(tick_scene_cmd);
+        app.add_console_command::<HighlightCommand, _>(highlight_cmd);
+    }
 }
 
 // --- /set_component ---

@@ -775,24 +775,6 @@ async fn a_synced_expiration_the_peer_accepted_is_not_a_rejection() {
 
 use crate::sync_types::AuthLink;
 
-#[test]
-fn a_failure_reason_survives_the_column_round_trip() {
-    for reason in [
-        FailureReason::DeploymentError,
-        FailureReason::NoEntity,
-        FailureReason::ValidationUndecided,
-        FailureReason::Rejected,
-    ] {
-        let label = reason_label(&reason);
-        assert_eq!(reason_from_label(label), reason);
-    }
-    assert_eq!(reason_label(&FailureReason::NoEntity), "No entity");
-    assert_eq!(
-        reason_label(&FailureReason::DeploymentError),
-        "Deployment error"
-    );
-}
-
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let like = format!("{prefix}%");
     for sql in [

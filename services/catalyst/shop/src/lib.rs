@@ -156,13 +156,10 @@ fn pending(source: &'static str) -> MethodRouter {
 /// never shadowed.
 pub fn pending_router() -> Router {
     Router::new()
-        .route("/v1/users/{address}", pending("shop-credits-users"))
         .route(
             "/v1/users/{address}/credits/stream",
             pending("shop-credits-users"),
         )
-        .route("/v1/users/{address}/status", pending("shop-credits-users"))
-        .route("/v1/credit-program/season", pending("shop-credits-program"))
         .route(
             "/v2/credit-program/seasons",
             pending("shop-credits-program"),

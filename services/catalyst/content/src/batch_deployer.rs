@@ -14,9 +14,8 @@ use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 
 use super::bloom_filter::BloomFilter;
-use super::sync_deployer::{
-    LiveFailedDeploymentsStore, LiveSyncDeployer, deployed_entity_ids, is_entity_deployed,
-};
+use super::failed_deployments_store::LiveFailedDeploymentsStore;
+use super::sync_deployer::{LiveSyncDeployer, deployed_entity_ids, is_entity_deployed};
 use super::sync_types::{
     DeploymentContext, FailedDeployment, SyncDeployment, SyncError, Timestamp,
 };

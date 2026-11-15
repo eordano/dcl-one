@@ -1,13 +1,19 @@
 //! Periodic removal cleanup and room metadata reconciliation.
 use crate::explore::places::removed::{PlaceContext, RemovedPlace, RemovedPlaces};
+use crate::gatekeeper::streaming::notifications::{notification, owner};
 use crate::gatekeeper::{CommsState, admission::scene, errors::ApiError};
-use crate::interfaces::{StreamingNotification, StreamingNotificationKind};
+use crate::interfaces::StreamingNotificationKind;
+use serde_json::{Value, json};
+
+#[cfg(test)]
+use crate::interfaces::StreamingNotification;
+#[cfg(test)]
 use crate::{
     Address,
     world_identity::{Parcel, WorldName},
 };
+#[cfg(test)]
 use chrono::NaiveDateTime;
-use serde_json::{Value, json};
 
 fn info(context: &PlaceContext) -> scene::PlaceInfo {
     scene::PlaceInfo {
@@ -26,146 +32,6 @@ fn info(context: &PlaceContext) -> scene::PlaceInfo {
             .unwrap_or_else(|| vec![context.base_position.clone()]),
     }
 }
-async fn owner(state: &CommsState, context: &PlaceContext) -> Result<Address, ApiError> {
-    if let Some(address) = context
-        .owner_address
-        .as_deref()
-        .and_then(|a| Address::parse(a).ok())
-        .filter(|_| context.world)
-    {
-        return Ok(address);
-    }
-    if context.world {
-        let name = WorldName::parse(
-            context
-                .world_name
-                .as_deref()
-                .ok_or_else(|| ApiError::http(503, "place owner unavailable"))?,
-        )
-        .map_err(|_| ApiError::http(503, "place owner unavailable"))?;
-        return state
-            .policy
-            .world_owner(&name)
-            .await
-            .map_err(|_| ApiError::http(503, "place owner unavailable"))?
-            .ok_or_else(|| ApiError::http(503, "place owner unavailable"));
-    }
-    let parcel = Parcel::parse(&context.base_position)
-        .map_err(|_| ApiError::http(503, "place owner unavailable"))?;
-    let document = state
-        .policy
-        .land_document(parcel)
-        .await
-        .map_err(|_| ApiError::http(503, "place owner unavailable"))?;
-    document
-        .as_deref()
-        .and_then(|d| d.as_ref())
-        .and_then(|d| Address::parse(&d.owner).ok())
-        .ok_or_else(|| ApiError::http(503, "place owner unavailable"))
-}
-
-fn notification(
-    context: &PlaceContext,
-    recipient: Address,
-    key: &str,
-    kind: StreamingNotificationKind,
-    at: NaiveDateTime,
-) -> StreamingNotification {
-    let location = context
-        .world_name
-        .as_deref()
-        .filter(|_| context.world)
-        .unwrap_or(&context.base_position);
-    let (title, description) = match kind {
-        StreamingNotificationKind::KeyReset => (
-            "Stream Key Reset",
-            format!("Check the Admin Tools panel at {location} to get the new key."),
-        ),
-        StreamingNotificationKind::KeyRevoke => (
-            "Stream Key Deactivated",
-            format!("Check the Admin Tools panel at {location} if you need a new key."),
-        ),
-        StreamingNotificationKind::KeyExpired => (
-            "Stream Key Expired",
-            format!("Go to the Admin Tools panel at {location} if you need a new key."),
-        ),
-        StreamingNotificationKind::TimeExceeded => (
-            "Stream Timed Out",
-            format!(
-                "Restart your stream in your broadcasting software (e.g. OBS) if you'd like to continue streaming to the scene at {location}"
-            ),
-        ),
-        StreamingNotificationKind::PlaceUpdated => (
-            "Stream Location Altered",
-            format!(
-                "If you'd like to stream to {location} please generate a new stream key from the Admin Tools panel in Decentraland."
-            ),
-        ),
-    };
-    let query = if context.world {
-        format!("realm={location}")
-    } else {
-        format!("position={location}")
-    };
-    StreamingNotification {
-        event_key: key.to_string(),
-        recipient: recipient.clone(),
-        kind,
-        occurred_at: at,
-        metadata: json!({"title": title, "description": description, "position": context.base_position, "worldName": context.world_name, "isWorld": context.world, "url": format!("https://decentraland.org/jump/?{query}"), "address": recipient.as_str(), "image": "https://assets-cdn.decentraland.org/streaming/streaming-notification.png"}),
-    }
-}
-
-pub async fn prepare_streaming_for_context(
-    state: &CommsState,
-    context: &PlaceContext,
-    event_key: &str,
-    kind: StreamingNotificationKind,
-    occurred_at: NaiveDateTime,
-) -> Result<StreamingNotification, ApiError> {
-    let recipient = owner(state, context).await?;
-    Ok(notification(
-        context,
-        recipient,
-        event_key,
-        kind,
-        occurred_at,
-    ))
-}
-
-pub async fn prepare_streaming_for_place(
-    state: &CommsState,
-    place_id: &str,
-    event_key: &str,
-    kind: StreamingNotificationKind,
-    occurred_at: NaiveDateTime,
-) -> Result<StreamingNotification, ApiError> {
-    let context = RemovedPlaces::new(state.pool.clone())
-        .place(place_id)
-        .await?
-        .ok_or_else(|| ApiError::http(503, "place notification context unavailable"))?;
-    let recipient = owner(state, &context).await?;
-    Ok(notification(
-        &context,
-        recipient,
-        event_key,
-        kind,
-        occurred_at,
-    ))
-}
-
-pub async fn notify_streaming_for_place(
-    state: &CommsState,
-    place_id: &str,
-    event_key: &str,
-    kind: StreamingNotificationKind,
-    occurred_at: NaiveDateTime,
-) -> Result<(), ApiError> {
-    let event = prepare_streaming_for_place(state, place_id, event_key, kind, occurred_at).await?;
-    state.social.notify_streaming_notification(&event).await?;
-    Ok(())
-}
-
 async fn cleanup(
     state: &CommsState,
     feed: &RemovedPlaces,

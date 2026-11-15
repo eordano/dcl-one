@@ -2,9 +2,6 @@ use bevy::{asset::io::embedded::EmbeddedAssetRegistry, prelude::*};
 
 include!(concat!(env!("OUT_DIR"), "/generated_asset_embedding.rs"));
 
-#[cfg(feature = "test-support")]
-pub mod test_support;
-
 pub struct EmbedAssetsPlugin;
 
 impl Plugin for EmbedAssetsPlugin {

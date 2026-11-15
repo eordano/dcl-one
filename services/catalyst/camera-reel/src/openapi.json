@@ -1,0 +1,937 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Camera Reel Service",
+    "description": "Camera Reel API",
+    "license": {
+      "name": ""
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/images": {
+      "post": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "upload_image",
+        "requestBody": {
+          "description": "Image file and metadata in JSON format.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Upload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Uploaded image with its metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/images/{id}/visibility": {
+      "patch": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "update_image_visibility",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Update image visibility",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVisibility"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Image visibility updated successfully"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Image was not found"
+          },
+          "500": {
+            "description": "Failed to update image visibility"
+          }
+        }
+      }
+    },
+    "/api/images/{image_id}": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "get_image",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Get image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Image"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "delete_image",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "description": "Image database id to delete",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDataResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Image was not found"
+          },
+          "500": {
+            "description": "Failed to delete image"
+          }
+        }
+      }
+    },
+    "/api/images/{image_id}/metadata": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "get_metadata",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Get image metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Image"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/places/images": {
+      "post": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "get_multiple_places_images",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Object with a list of places IDs",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetMultiplePlacesImagesBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "List images for multiple places",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetMultiplePlacesImagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid place IDs format"
+          },
+          "502": {
+            "description": "Failed to resolve world name"
+          }
+        }
+      }
+    },
+    "/api/places/{place_id}/images": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "get_place_images",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "place_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List images for a given place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPlaceImagesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "502": {
+            "description": "Failed to resolve world name"
+          }
+        }
+      }
+    },
+    "/api/users/{user_address}": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "get_user_data",
+        "parameters": [
+          {
+            "name": "user_address",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Get user data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDataResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/users/{user_address}/images": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "get_user_images",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "user_address",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List images for a given user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetImagesResponse"
+                }
+              }
+            }
+          },
+          "210": {
+            "description": "List gallery images for a given user if `compact=true` (status code is 200, but was not possible to list multiple responses for one status code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetGalleryImagesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
+    "/api/wearables/{item}/images": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "operationId": "get_wearable_images",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "item",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public images of people wearing the item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetWearableImagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed item id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ForbiddenError": {
+        "type": "object",
+        "required": [
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ForbiddenReason"
+          }
+        }
+      },
+      "ForbiddenReason": {
+        "type": "string",
+        "enum": [
+          "maxLimitReached"
+        ]
+      },
+      "GalleryImage": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "thumbnailUrl",
+          "isPublic",
+          "dateTime"
+        ],
+        "properties": {
+          "dateTime": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isPublic": {
+            "type": "boolean"
+          },
+          "thumbnailUrl": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "GetGalleryImagesResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/UserDataResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "images"
+            ],
+            "properties": {
+              "images": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GalleryImage"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "GetImagesResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/UserDataResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "images"
+            ],
+            "properties": {
+              "images": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Image"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "GetMultiplePlacesImagesBody": {
+        "type": "object",
+        "required": [
+          "placesIds"
+        ],
+        "properties": {
+          "placesIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GetMultiplePlacesImagesResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PlaceDataResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "images"
+            ],
+            "properties": {
+              "images": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GalleryImageWithPlace"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "GetPlaceImagesResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PlaceDataResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "images"
+            ],
+            "properties": {
+              "images": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GalleryImage"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "GetWearableImagesResponse": {
+        "type": "object",
+        "required": [
+          "images",
+          "maxImages"
+        ],
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Image"
+            },
+            "description": "Full images rather than gallery rows: a consumer showing \"people wearing this\" needs who is in\nthe shot and where it was taken, and asking for the metadata of every photo it just received\nwould be one request per photo."
+          },
+          "maxImages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "Image": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "thumbnailUrl",
+          "isPublic",
+          "metadata"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "isPublic": {
+            "type": "boolean"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/Metadata"
+          },
+          "thumbnailUrl": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "Location": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "string"
+          },
+          "y": {
+            "type": "string"
+          }
+        }
+      },
+      "Metadata": {
+        "type": "object",
+        "required": [
+          "userName",
+          "userAddress",
+          "dateTime",
+          "realm",
+          "scene",
+          "visiblePeople",
+          "placeId"
+        ],
+        "properties": {
+          "dateTime": {
+            "type": "string"
+          },
+          "placeId": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/Scene"
+          },
+          "userAddress": {
+            "type": "string"
+          },
+          "userName": {
+            "type": "string"
+          },
+          "visiblePeople": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/User"
+            }
+          }
+        }
+      },
+      "PlaceDataResponse": {
+        "type": "object",
+        "required": [
+          "maxImages"
+        ],
+        "properties": {
+          "maxImages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ResponseError": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Scene": {
+        "type": "object",
+        "required": [
+          "name",
+          "location"
+        ],
+        "properties": {
+          "location": {
+            "$ref": "#/components/schemas/Location"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateVisibility": {
+        "type": "object",
+        "required": [
+          "is_public"
+        ],
+        "properties": {
+          "is_public": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Upload": {
+        "type": "object",
+        "required": [
+          "image",
+          "metadata",
+          "is_public"
+        ],
+        "properties": {
+          "image": {
+            "type": "string",
+            "format": "binary"
+          },
+          "is_public": {
+            "type": "boolean"
+          },
+          "metadata": {
+            "type": "string",
+            "format": "binary"
+          }
+        }
+      },
+      "UploadResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/UserDataResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "image"
+            ],
+            "properties": {
+              "image": {
+                "$ref": "#/components/schemas/Image"
+              }
+            }
+          }
+        ]
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "userName",
+          "userAddress",
+          "wearables"
+        ],
+        "properties": {
+          "isEmoting": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "isGuest": {
+            "type": "boolean"
+          },
+          "userAddress": {
+            "type": "string"
+          },
+          "userName": {
+            "type": "string"
+          },
+          "wearables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "screenRect": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScreenRect"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "UserDataResponse": {
+        "type": "object",
+        "required": [
+          "currentImages",
+          "maxImages"
+        ],
+        "properties": {
+          "currentImages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "maxImages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ScreenRect": {
+        "type": "object",
+        "description": "Where a visible person stands in the photo: normalized to the image, with the origin at its\ntop-left corner. Measured by the explorer when the shot is taken, which is the only moment the\navatar's bounds and the camera are both known. Every field is in `0..=1`, but `x + width` and\n`y + height` may exceed 1 by up to 1e-4 (see `is_valid`), so a consumer that needs a strict\nrectangle of the image should clamp.",
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "format": "float"
+          },
+          "y": {
+            "type": "number",
+            "format": "float"
+          },
+          "width": {
+            "type": "number",
+            "format": "float"
+          },
+          "height": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "images",
+      "description": "Images management endpoints."
+    }
+  ]
+}

@@ -6,9 +6,10 @@
 use std::sync::Arc;
 
 use alloy::signers::{Signer, local::PrivateKeySigner};
+use catalyst_content::failed_deployments_store::LiveFailedDeploymentsStore;
 use catalyst_content::sync::retry_failed::{RetryFailedConfig, RetryFailedDeployments};
 use catalyst_content::sync::{AuthChain, AuthLink, AuthLinkType, FailedDeployment, FailureReason};
-use catalyst_content::sync_deployer::{LiveFailedDeploymentsStore, LiveSyncDeployer};
+use catalyst_content::sync_deployer::LiveSyncDeployer;
 
 const TEST_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 

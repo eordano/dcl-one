@@ -142,7 +142,7 @@ the defs; a material extension's defs do not reach a separate material.
 ## A pipeline-compile test for a shader
 
 Every shader change gets a test that compiles every pipeline variant off-screen, `#[ignore]`d
-because CI has no GPU. `assets::test_support` holds the setup these tests share:
+because CI has no GPU. The `pipeline_test` crate holds the setup these tests share:
 
 1. `headless_app()`: a `DefaultPlugins` app with `WinitPlugin`, `LogPlugin` and
    `PipelinedRenderingPlugin` disabled, no primary window and the embedded assets.
@@ -153,8 +153,8 @@ because CI has no GPU. `assets::test_support` holds the setup these tests share:
    pending and panics on a pipeline in an error state. `fragment_pipelines(&app, path)` counts
    the compiled pipelines whose fragment stage is one shader.
 
-The crate needs `assets` with its `test-support` feature and `naga_oil` as dev-dependencies,
-the latter only to enable its `override_any` feature for the crate. Run with
+A crate with such a test takes `pipeline_test` and `naga_oil` as dev-dependencies, the latter
+only to enable its `override_any` feature for the crate. Run with
 `cargo test -p <crate> <test> -- --ignored --nocapture`. The native pass compiles the same
 variants as web, but the web-only rules on the [platforms](platforms.md#web) page still need
 the web build once.

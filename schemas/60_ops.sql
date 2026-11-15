@@ -502,15 +502,16 @@ CREATE TABLE credits.revocations (
 -- The job's due set: unfinished revocations, oldest first.
 CREATE INDEX revocations_due_idx ON credits.revocations (created_at) WHERE status IN ('pending', 'sent');
 
--- Short-lived slider captchas for the claim flow: GET /captcha invalidates
--- the wallet's open challenges and inserts one (120 s TTL, the PNG is
--- regenerated from answer_x), POST /captcha consumes the newest open one
--- and compares within tolerance, then the hCaptcha token when a provider is
--- configured (CREDITS_CAPTCHA_SECRET(_FILE), verified server-side).
+-- Slider captchas: GET reuses a live answer and refreshes its two-hour TTL
+-- and generated_at; POST consumes the challenge, requires a solve after one
+-- second and a strict error below three. Three failures block claiming for
+-- 24 hours after the last failure. A configured native hCaptcha provider
+-- adds a server-side token check outside the SQL transactions.
 CREATE TABLE credits.captcha_challenges (
     id bigint GENERATED ALWAYS AS IDENTITY,
     address text NOT NULL,
     answer_x numeric NOT NULL,
+    generated_at timestamp without time zone NOT NULL DEFAULT timezone('UTC', now()),
     expires_at timestamp without time zone NOT NULL,
     consumed_at timestamp without time zone,
     CONSTRAINT captcha_challenges_pkey PRIMARY KEY (id),
@@ -626,3 +627,91 @@ CREATE TABLE credits.usage_index_cursor (
 -- (ops agent: a persisted job report or sync-control row if a restart must
 -- keep them; both are process state today)
 -- ==== end section: ops ====
+
+-- Seasonal goal rewards are MANA wei, independent of the paid USD ledger.
+CREATE TABLE credits.seasons (
+    id integer PRIMARY KEY,
+    name text NOT NULL,
+    start_date timestamp without time zone NOT NULL,
+    end_date timestamp without time zone NOT NULL,
+    max_mana_wei numeric(78,0) NOT NULL CHECK (max_mana_wei >= 0),
+    grace_days integer NOT NULL DEFAULT 14 CHECK (grace_days BETWEEN 0 AND 365),
+    CHECK (end_date > start_date)
+);
+CREATE TABLE credits.season_goals (
+    season_id integer NOT NULL REFERENCES credits.seasons(id),
+    goal_id text NOT NULL CHECK (goal_id = 'take-photo'),
+    title text NOT NULL,
+    description text,
+    thumbnail text NOT NULL,
+    total_steps integer NOT NULL CHECK (total_steps > 0),
+    reward_wei numeric(78,0) NOT NULL CHECK (reward_wei >= 0),
+    start_week integer NOT NULL CHECK (start_week > 0),
+    end_week integer NOT NULL CHECK (end_week >= start_week),
+    position integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (season_id, goal_id)
+);
+CREATE TABLE credits.program_opt_outs (
+    address text PRIMARY KEY REFERENCES credits.wallets(address),
+    opted_out_at timestamp without time zone NOT NULL
+);
+CREATE TABLE credits.goal_progress (
+    address text NOT NULL REFERENCES credits.wallets(address),
+    season_id integer NOT NULL,
+    week_id integer NOT NULL CHECK (week_id > 0),
+    goal_id text NOT NULL,
+    title text NOT NULL,
+    description text,
+    thumbnail text NOT NULL,
+    total_steps integer NOT NULL CHECK (total_steps > 0),
+    reward_wei numeric(78,0) NOT NULL CHECK (reward_wei >= 0),
+    completed_steps integer NOT NULL DEFAULT 0 CHECK (completed_steps >= 0 AND completed_steps <= total_steps),
+    completed_at timestamp without time zone,
+    PRIMARY KEY (address, season_id, week_id, goal_id),
+    FOREIGN KEY (season_id, goal_id) REFERENCES credits.season_goals(season_id, goal_id),
+    CHECK ((completed_steps = total_steps) = (completed_at IS NOT NULL))
+);
+CREATE TABLE credits.photo_goal_receipts (
+    photo_id uuid PRIMARY KEY,
+    event_id bigint NOT NULL UNIQUE,
+    address text NOT NULL,
+    processed_at timestamp without time zone NOT NULL,
+    outcome text NOT NULL,
+    season_id integer,
+    week_id integer,
+    ordinal integer,
+    CHECK ((outcome = 'counted') = (ordinal IS NOT NULL))
+);
+-- Wallet progress reads counted photo identities in completion order.
+CREATE INDEX photo_goal_receipts_counted_wallet_idx
+    ON credits.photo_goal_receipts (address, season_id, week_id, ordinal)
+    WHERE outcome = 'counted';
+
+CREATE TABLE credits.goal_grants (
+    address text NOT NULL,
+    season_id integer NOT NULL,
+    week_id integer NOT NULL,
+    goal_id text NOT NULL,
+    salt text NOT NULL UNIQUE CHECK (salt ~ '^0x[0-9a-f]{64}$'),
+    chain_id bigint NOT NULL CHECK (chain_id > 0),
+    contract text NOT NULL CHECK (contract ~ '^0x[0-9a-f]{40}$'),
+    credit_hash text NOT NULL CHECK (credit_hash ~ '^0x[0-9a-f]{64}$'),
+    amount_wei numeric(78,0) NOT NULL CHECK (amount_wei >= 0),
+    signature text NOT NULL,
+    created_at timestamp without time zone NOT NULL,
+    expires_at timestamp without time zone NOT NULL,
+    claimed_at timestamp without time zone,
+    PRIMARY KEY (address, season_id, week_id, goal_id),
+    UNIQUE (chain_id, contract, credit_hash),
+    FOREIGN KEY (address, season_id, week_id, goal_id)
+        REFERENCES credits.goal_progress(address, season_id, week_id, goal_id),
+    CHECK (expires_at > created_at)
+);
+
+-- A wallet's failed slider attempts, expiring 24 hours after the last failure.
+-- Independent of multi-account flags: captcha failures block claims, not photos.
+CREATE TABLE credits.captcha_attempts (
+    address text PRIMARY KEY CHECK (address ~ '^0x[0-9a-f]{40}$'),
+    failed_attempts smallint NOT NULL CHECK (failed_attempts BETWEEN 1 AND 3),
+    last_failed_at timestamp without time zone NOT NULL
+);

@@ -59,7 +59,9 @@ module.exports.getHeaders = async function (body) {
     const { url, init } = snapshot(body);
     const result = await Deno.core.ops.op_signed_fetch_headers(url, init.method, init.body);
     requireBodyHash(result, init.body);
-    const headers = {};
-    for (const [name, value] of result) headers[name] = value;
-    return { headers };
+    const headers = new Map();
+    for (const [name, value] of [...init.headers, ...result]) {
+        headers.set(name.toLowerCase(), [name, value]);
+    }
+    return { headers: Object.fromEntries(headers.values()) };
 };

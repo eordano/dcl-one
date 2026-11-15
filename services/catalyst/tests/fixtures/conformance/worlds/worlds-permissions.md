@@ -55,11 +55,12 @@ Files read:
   - `worlds/src/core/auth.rs`
   - `worlds/src/core/http.rs`
   - `worlds/src/core/mod.rs` (routes, `Revocation`, `revoked`, `revoke_unless_admitted`)
-  - `worlds/src/core/store.rs` (`AccessSetting`, `WORLD_SELECT`, `world_is_valid`, `permission_records`, the
-    grant, parcel and allow-list writers)
+  - `worlds/src/core/store.rs` (`AccessSetting` and the persistence facade)
+  - `worlds/src/core/store_queries.rs` (`get_world`, `world_is_valid`, `raw_records_exclude`)
+  - `worlds/src/core/store_access.rs` (`permission_records`, grant, parcel and allow-list writers)
   - `worlds/src/core/notices.rs` (`permission_changed`)
   - `worlds/src/core/names.rs` (`BlockedNames`, `BannedNames::allows`, `banned_names`)
-  - `worlds/src/mirror.rs` (`upstream_access`, `parse_upstream_access`; the mirrored world's access setting)
+  - `worlds/src/mirror_upstream.rs` (`upstream_access`, `parse_upstream_access`; the mirrored world's access setting)
   - `worlds/src/policy.rs` (`member_communities`, the access rules table)
   - `worlds/src/writes.rs`
   - `worlds/src/lib.rs` (`app_router`)
@@ -164,22 +165,22 @@ Upstream: `permissions-handlers.ts:50-107`. It reads three things in parallel:
 - `permissions.getPermissionsSummary` (`permissions/component.ts:422-440`).
 
 dcl-one: `permissions.rs:75-127`. It reads `store::get_world`, `store::permission_records`
-(`store.rs:466-490`) and `Policy::current_owner`, which is the live holder.
+(`store_queries.rs` `get_world`, `store_access.rs` `permission_records`) and `Policy::current_owner`, which is the live holder.
 
 | trigger | status | body | upstream | dcl-one | verdict |
 |---|---|---|---|---|---|
 | World with grants | 200 | `{"permissions":{"deployment":{"type":"allow-list","wallets":[…]},"streaming":{"type":"allow-list","wallets":[…]},"access":{…}},"owner":"0x…","summary":{"0x…":[{"permission":"deployment","world_wide":true}]}}` | `:89-106` | `:112-126` | MATCH on the shape. `streaming.type` is always `allow-list` in both, even when streaming is unrestricted (no rows). A parcel-scoped deployer is listed in `deployment.wallets` in both (test "both world-wide and parcel-based deployers"). |
 | `summary` entry | | `parcel_count` only when not world-wide | `permissions/component.ts:432-436`, handler `:82-86` | `:101-109` (`skip_serializing_if`) | MATCH. Key order: upstream follows the row order of an unordered `GROUP BY`; dcl-one sorts by address (`BTreeMap`, `ORDER BY wp.address, wp.permission`). Upstream defines no order. |
-| Access `shared-secret` | 200 | `access: {"type":"shared-secret"}`, no `secret` | `removeSecrets` `:33-39` | `AccessSetting::to_public_json` `store.rs:65-77` | MATCH (tests "access settings without the secret") |
-| Access `nft-ownership` | 200 | `{"type":"nft-ownership","nft":"…"}` | stored JSONB | `store.rs:68` | MATCH |
+| Access `shared-secret` | 200 | `access: {"type":"shared-secret"}`, no `secret` | `removeSecrets` `:33-39` | `AccessSetting::to_public_json` `store.rs` `AccessSetting::to_public_json` | MATCH (tests "access settings without the secret") |
+| Access `nft-ownership` | 200 | `{"type":"nft-ownership","nft":"…"}` | stored JSONB | `store.rs` `AccessSetting::to_public_json` | MATCH |
 | Access `allow-list` | 200 | `{"type":"allow-list","wallets":[…],"communities":[…]}` | the JSONB as posted: case, order and duplicates kept (`access/component.ts:84-88`); PUT adds lowercased | wallets lowercased, deduplicated and ordered by `created_at, address`; communities as lowercase UUIDs | intended (worlds-compatibility.md "Allow-list documents", WP-05) |
 | World unknown, NAME has a holder | 200 | defaults, `owner` the holder | `getOwner` → `nameOwnership` | `current_owner` | MATCH (test `permissions_owner_falls_back_to_the_name_holder`, `tests.rs:5666`) |
 | World unknown, no holder | 200 | `owner` absent | `owner: undefined` is dropped by `JSON.stringify` | `PermissionsResponse::owner` `skip_serializing_if` | MATCH (WP-03; test `permissions_owner_falls_back_to_the_name_holder`) |
 | Owner lookup fails | upstream 200 with `owner` absent; dcl-one 503 | | `permissions-manager.ts:25-31` | `current_owner` `?` (`permissions.rs:87`; test `permissions_answer_503_while_the_owner_is_undetermined`, `tests.rs:5687`) | DIVERGENT: intended (worlds-compatibility.md "Owner admission") |
 | World with a stored owner whose NAME was sold | 200 | upstream: the **stored** owner; dcl-one: the live holder | `getOwner` reads `metadata.owner` first | `current_owner` | DIVERGENT: intended (same entry) |
 | Invalid world name | upstream 200 defaults; dcl-one 400 | | none | `parse_world` | intended (worlds-compatibility.md "Invalid world names") |
-| Deny-listed name | 200; access read as `unrestricted` when `getRawWorldRecords` filters the record out, summary still listed | | `access/component.ts:34-40`; `worlds-manager.ts:327,345-349`: `name != ALL(getBannedNames())`, the `BLOCKED_WORLD_NAMES` entries whole plus the list entries without their first `.eth`/`.dcl`, so a list entry leaves out only a bare name equal to it, a plain `<label>` entry nothing | `store::raw_records_exclude` (`store.rs:446-452`) over `BannedNames::banned_names` (`names.rs:67-77`) | MATCH (WP-11, WP-20; tests `deleting_an_address_grant_requires_a_valid_world`, `configured_world_names_are_invalid_on_the_permission_routes`) |
-| Mirrored world (`mirror_source` set) | 200; upstream reads the world's own rows. dcl-one: the access setting the source's `/permissions` reports, copied by every mirror pass and read-through fill unless the owner set the access here (`mirror.rs:1028-1074,1693,1941`; a shared secret stored as one no secret matches); `deployment.wallets`, `streaming.wallets` and `summary` list only grants made on this node, so they are empty | | `permissions-handlers.ts:50-107` | `get_permissions` over the stored rows | DIVERGENT (WP-21, intended; tests `tests/worlds_mirror.rs` `a_mirror_pass_copies_the_upstream_access_setting`, `an_access_setting_the_owner_made_here_is_kept_by_the_mirror`, `tests/worlds_read_through.rs` `a_fill_stores_the_upstream_access_setting`) |
+| Deny-listed name | 200; access read as `unrestricted` when `getRawWorldRecords` filters the record out, summary still listed | | `access/component.ts:34-40`; `worlds-manager.ts:327,345-349`: `name != ALL(getBannedNames())`, the `BLOCKED_WORLD_NAMES` entries whole plus the list entries without their first `.eth`/`.dcl`, so a list entry leaves out only a bare name equal to it, a plain `<label>` entry nothing | `store::raw_records_exclude` (`store_queries.rs` `raw_records_exclude`) over `BannedNames::banned_names` (`names.rs:67-77`) | MATCH (WP-11, WP-20; tests `deleting_an_address_grant_requires_a_valid_world`, `configured_world_names_are_invalid_on_the_permission_routes`) |
+| Mirrored world (`mirror_source` set) | 200; upstream reads the world's own rows. dcl-one: the access setting the source's `/permissions` reports, copied by every mirror pass and read-through fill unless the owner set the access here (`upstream_access` in `mirror_upstream.rs`, `mirror_world` in `mirror_reconcile.rs`; a shared secret stored as one no secret matches); `deployment.wallets`, `streaming.wallets` and `summary` list only grants made on this node, so they are empty | | `permissions-handlers.ts:50-107` | `get_permissions` over the stored rows | DIVERGENT (WP-21, intended; tests `tests/worlds_mirror.rs` `a_mirror_pass_copies_the_upstream_access_setting`, `an_access_setting_the_owner_made_here_is_kept_by_the_mirror`, `tests/worlds_read_through.rs` `a_fill_stores_the_upstream_access_setting`) |
 
 ## 2. POST /world/:world_name/permissions/:permission_name
 
@@ -231,7 +232,7 @@ The metadata is the signed `x-identity-metadata` header; there is no body.
 | `allow-list`, more than the cap | 400 | `Too many communities. Maximum allowed is 50, but N were provided.` / `Too many wallets in allow-list. Maximum allowed is 1000, but N were provided.` | `:61-71` (communities checked first) | `access_from_metadata` (communities first; caps from `ACCESS_MAX_COMMUNITIES` / `ACCESS_MAX_WALLETS`) | MATCH (WP-09; unit `allow_list_caps_come_from_settings_communities_first`, test `access_allow_list_caps_from_settings_bound_every_route`) |
 | `allow-list`, signer not a member | 400 | `You are not a member of the following communities: a, b.` | `access/errors.ts:15-19` | `require_community_member` `:378-404` | MATCH. Membership comes from upstream's social-service HTTP and from this node's `social.community_members` (`policy.rs:918-931`; social area). |
 | `allow-list`, a wallet that is not an address, or a community that is not a UUID | upstream 204 (stored); dcl-one 400 `Invalid address: <w>.` / `Invalid community id.` | | none | `access_from_metadata` | intended (worlds-compatibility.md "Community ids", "Permission payloads"; WP-10) |
-| World row missing | 204 and the row is created with the signer as owner | | `createBasicWorldIfNotExists` | `replace_world_wide_permission` / `store_access_for_owner` upsert (`store.rs:1182-1220,1493-1578`) | MATCH (upstream tests "should create the world") |
+| World row missing | 204 and the row is created with the signer as owner | | `createBasicWorldIfNotExists` | `replace_world_wide_permission` / `store_access_for_owner` upsert (`store_access.rs` `replace_world_wide_permission` / `store_access_for_owner`) | MATCH (upstream tests "should create the world") |
 | `access` on a mirrored world, or on a world the mirror later takes over | 204; the setting is stored and kept | | `storeAccess` (`access/component.ts:118`) | `store_access_for_owner` marks the row `access_set_here` by the signer; the mirror then keeps it while that owner holds the name as this node's `Policy::current_owner` says, never the source's `/permissions` owner, which trails a sale (`mirror_keeps_local`) | MATCH (WP-21; tests `an_access_setting_the_owner_made_here_is_kept_by_the_mirror`, `an_owner_edit_here_is_kept_while_that_owner_holds_the_name`). The allow-list edits of routes 7-10 mark it the same way (`modify_allow_list_access`). |
 | Name authority unavailable | upstream 500 `{"error":"Internal Server Error"}`; dcl-one 503 + `Retry-After: 1` | | `dcl-name-checker.ts:14` throws | `owner_decision` | intended (worlds-compatibility.md "Owner admission", WP-12) |
 
@@ -239,7 +240,7 @@ The metadata is the signed `x-identity-metadata` header; there is no body.
 
 | effect | upstream | dcl-one | verdict |
 |---|---|---|---|
-| Deployment/streaming replace | Two passes, not atomic: revoke the wallets no longer listed, grant the new ones. Rows already listed keep their parcel scoping. Unrestricted streaming deletes every streaming row (`permissions/component.ts:224-313`). | One statement (`store.rs:1182-1220`) with the same set semantics. | MATCH |
+| Deployment/streaming replace | Two passes, not atomic: revoke the wallets no longer listed, grant the new ones. Rows already listed keep their parcel scoping. Unrestricted streaming deletes every streaming row (`permissions/component.ts:224-313`). | One statement (`store_access.rs` `replace_world_wide_permission`) with the same set semantics. | MATCH |
 | Grant/revoke notifications | SNS `WORLDS_PERMISSION_GRANTED`/`REVOKED`, one per added or removed address. The description names the world; the URL is `${BUILDER_URL}/worlds?tab=dcl` (`permissions/component.ts:23-85`). | Inbox and email rows in the same transaction, at most 50 per direction. The description leaves the world out; the URL comes from the notices config (`permissions.rs:184-211`, `notices.rs:78-125`; test `permission_edits_notify_each_address_actually_changed`, `tests.rs:6593`). | DIVERGENT: intended (worlds-compatibility.md "Notifications") |
 | `WORLD_SETTINGS_CHANGED` event on `access` | SNS `{type:"world", subType:"world-settings-changed", key:"<world>-<ts>", metadata:{worldName, accessType}}` after every successful `setAccess` (`access/component.ts:121-132`) | none | intended (worlds-compatibility.md "No settings events", WP-13) |
 | Kicks after an access change | `handleAccessChange(prev, next)` (`access-change-handler/component.ts:118-187`). The first matching rule wins: (1) next is `unrestricted`: no kick. (2) The type changed, or the secret hash changed (a re-posted password always gets a new hash): kick every participant except the owner and the deployment-grant holders. (3) The allow-list wallets or communities changed: kick the non-privileged participants that `checkAccess` now refuses; one whose check fails is kept. (4) Otherwise no kick. Kicks run in batches of `ACCESS_KICK_BATCH_SIZE` (20), and failures are logged. | `Revocation::AccessSetting` re-decides every admission in the world's live rooms on a spawned task (`permissions.rs:285-289`, `core/mod.rs:361-367`, `comms/src/gatekeeper/revocation.rs:59-74`). The owner and every deployment **or streaming** grant holder stay. A switch to an allow-list keeps participants already on it. A shared-secret admission is void until the new secret is presented. | DIVERGENT: intended (worlds-compatibility.md "Kicks on access change"). Depends on the comms area (WP-14). |
@@ -254,18 +255,18 @@ Upstream: `permissions-handlers.ts:294-366`, unsigned. Stage order:
 4. the bounding box (all four or none; `parseInt`);
 5. `getParcelsForPermission`: `ORDER BY parcel`, inclusive box, corners in any order (`permissions-manager.ts:159-227`).
 
-dcl-one: `permissions.rs:737-788`, `pagination` (`core/http.rs:27-41`), `store.rs:1388-1444`.
+dcl-one: `permissions.rs:737-788`, `pagination` (`core/http.rs:27-41`), `store_access.rs` `parcels_for_permission`.
 
 | trigger | status | body | upstream | dcl-one | verdict |
 |---|---|---|---|---|---|
 | Parcel-scoped grant | 200 | `{"total":N,"parcels":["0,0",…]}` | `:353-359` | `:692` | MATCH (pagination and box: tests `parcel_listings_paginate_like_http_commons`, `tests.rs:5138`, and the unit `bounding_box_parses_like_parse_int`) |
-| World-wide grant | 200 | `{"total":0,"parcels":[]}` | | `store.rs:1436-1443` | MATCH |
+| World-wide grant | 200 | `{"total":0,"parcels":[]}` | | `store_access.rs` `parcels_for_permission` | MATCH |
 | Partial box | 400 | `Bounding box requires all four parameters: x1, y1, x2, y2.` | `:325-328` | `:647-651` | MATCH |
 | Box value not an integer | 400 | `Bounding box parameters must be valid integers.` | `:335-337` | `:652-656` | MATCH |
 | Invalid address | 400 | `Invalid address: <raw>.` | `:303-305` | `parse_path_address` (`^0x[a-fA-F0-9]{40}$`) | MATCH (WP-10: a padded or `0X` address is refused as upstream) |
 | Permission not `deployment`/`streaming` | 400 | `Permission '<p>' does not support allow-list. Only 'deployment' and 'streaming' do.` | `:307-311` | `:556-567` | MATCH |
 | No such grant | 404 | `Address <raw address> does not have <p> permission for world <world>.` | `PermissionNotFoundError` (`permissions/errors.ts:6-15`) | `get_allowed_parcels_for_permission` | MATCH (WP-06; test `a_missing_parcel_grant_names_the_address_as_sent`) |
-| A grant whose last parcel was removed | upstream 200 `{"total":0,"parcels":[]}`, and the grant is now world-wide; dcl-one 404 | | `removeParcelsFromPermission` keeps the row | the row is deleted (`store.rs:1322-1385`) | intended (worlds-compatibility.md "Removing a grant's last parcel") |
+| A grant whose last parcel was removed | upstream 200 `{"total":0,"parcels":[]}`, and the grant is now world-wide; dcl-one 404 | | `removeParcelsFromPermission` keeps the row | the row is deleted (`store_access.rs` `remove_parcels_from_permission`) | intended (worlds-compatibility.md "Removing a grant's last parcel") |
 
 ## 4. POST /world/:world_name/permissions/:permission_name/address/:address/parcels
 
@@ -309,12 +310,12 @@ dcl-one: `post_permission_parcels`. Stage order:
 Upstream: `permissions-handlers.ts:254-288`. It has the same middleware and stage order as route 4, then
 `removeParcelsFromPermission` (`permissions/component.ts:347-362`, `permissions-manager.ts:376-397`).
 
-dcl-one: `permissions.rs:702-735`, `store.rs:1322-1385`.
+dcl-one: `permissions.rs:702-735`, `store_access.rs` `remove_parcels_from_permission`.
 
 | trigger | status | body | upstream | dcl-one | verdict |
 |---|---|---|---|---|---|
 | Valid | 204 | | `:287` | `:639` | MATCH |
-| Every parcel removed | 204. Upstream keeps the row, which now reads as **world-wide** ("keep the permission record with zero parcels"). dcl-one deletes the grant and notifies `worlds_permission_revoked`. | | `permissions-manager.ts:376-397` | `store.rs:1356-1385`, `:632-638` | DIVERGENT: intended (worlds-compatibility.md "Removing a grant's last parcel", "Last parcel removed"). Keeping this is right: upstream's behaviour widens a scoped grant. |
+| Every parcel removed | 204. Upstream keeps the row, which now reads as **world-wide** ("keep the permission record with zero parcels"). dcl-one deletes the grant and notifies `worlds_permission_revoked`. | | `permissions-manager.ts:376-397` | `store_access.rs` `remove_parcels_from_permission`, `core/mod.rs` `revoked` | DIVERGENT: intended (worlds-compatibility.md "Removing a grant's last parcel", "Last parcel removed"). Keeping this is right: upstream's behaviour widens a scoped grant. |
 | No such grant | 400 | `Permission not found. Address <raw address> does not have <p> permission for world <world>.` | `permissions/component.ts:355-359` | `delete_permission_parcels` | MATCH (WP-06; test `a_missing_parcel_grant_names_the_address_as_sent`) |
 | Schema / content type / ordering | as route 4 | | | | as route 4 |
 | Invalid address / permission / not owner | as route 4 | | | | MATCH |
@@ -329,13 +330,13 @@ Upstream: `permissions-handlers.ts:372-396`, **unsigned**. Stage order:
 4. `getAddressesForParcelPermission` (`permissions-manager.ts:404-453`), which matches world-wide holders or a
    parcel in `ANY($parcels)`, ordered by address. The **raw** parcels are used, not canonicalized.
 
-dcl-one: `permissions.rs:791-820`, `store.rs:1447-1490`. It also stays open while writes are off
+dcl-one: `permissions.rs:791-820`, `store_access.rs` `addresses_for_parcel_permission`. It also stays open while writes are off
 (`writes.rs:45-52`).
 
 | trigger | status | body | upstream | dcl-one | verdict |
 |---|---|---|---|---|---|
 | Valid | 200 | `{"total":N,"addresses":[…]}` | `:389-395` | `:722` | MATCH (pagination: `tests.rs:5138`) |
-| Nothing matches | 200 | `{"total":0,"addresses":[]}` | | `store.rs:1476-1488` | MATCH |
+| Nothing matches | 200 | `{"total":0,"addresses":[]}` | | `store_access.rs` `addresses_for_parcel_permission` | MATCH |
 | Non-canonical query parcels (`00,00`) | upstream: no match against the stored `0,0`; dcl-one: a match | | raw `parcels` | `parcels.canonical()` | intended (worlds-compatibility.md "Parcel holder lookups", WP-08) |
 | Permission `access` or unknown | 400 | `Permission '<p>' does not support allow-list. Only 'deployment' and 'streaming' do.` | `:378-382` | `get_addresses_for_parcel_permission` | MATCH, `access/parcels` included (WP-15) |
 | Schema / content type | 400 / 415 | as route 4 | | | as route 4: MATCH (WP-02) |
@@ -360,7 +361,7 @@ dcl-one: `put_permissions_access_community`. Stage order:
 3. world;
 4. owner;
 5. membership;
-6. `modify_allow_list_access` (`store.rs:1581-1679`).
+6. `modify_allow_list_access` (`store_access.rs` `modify_allow_list_access`).
 
 axum's matcher puts the static `access` segment ahead of `{permission_name}`.
 
@@ -413,12 +414,12 @@ dcl-one: `put_permissions_address`. Stage order:
 3. permission;
 4. world;
 5. owner;
-6. `grant_addresses_world_wide_permission` (`store.rs:1223-1259`) or `ensure_world` + `AllowListEdit::AddWallet`.
+6. `grant_addresses_world_wide_permission` (`store_access.rs` `grant_addresses_world_wide_permission`) or `ensure_world` + `AllowListEdit::AddWallet`.
 
 | trigger | status | body | upstream | dcl-one | verdict |
 |---|---|---|---|---|---|
-| New or existing grantee | 204, empty | | `:214` | `:461` | MATCH (parcels cleared: `store.rs:1246-1249`) |
-| `access`, world is an allow-list | 204; the wallet stored lowercased | | `access/component.ts:145-169` | `store.rs:1596-1616` | MATCH |
+| New or existing grantee | 204, empty | | `:214` | `:461` | MATCH (parcels cleared: `store_access.rs` `grant_addresses_world_wide_permission`) |
+| `access`, world is an allow-list | 204; the wallet stored lowercased | | `access/component.ts:145-169` | `store_access.rs` `modify_allow_list_access` | MATCH |
 | `access`, world not an allow-list (the row is created first in both) | 400 `World "<w>" does not have allow-list access type. Cannot add or remove wallets.` | | | `:456-459,792-795` | MATCH |
 | `access`, at 1000 wallets | 400 `Cannot add wallet: allow-list would exceed the maximum of 1000 wallets.` | | `:160-165` | `:456-458` | MATCH |
 | Invalid address | 400 `Invalid address: anything.` | | `:190-192` | `parse_path_address` | MATCH (padded or `0X` addresses refused, WP-10) |
@@ -447,7 +448,7 @@ deny-list filter keeps it, and the world is not blocked past the two-day grace (
 `worlds-manager.ts:322-356`). It does **not** require a deployed scene, even though the comment above it says it
 does.
 
-dcl-one: `delete_permissions_address` (`permissions.rs:520-565`). `store::world_is_valid` (`store.rs:459-480`)
+dcl-one: `delete_permissions_address` (`permissions.rs:520-565`). `store::world_is_valid` (`store_queries.rs` `world_is_valid`)
 asks `NameDenyList::check_name_deny_list` first, then requires the row, that `getRawWorldRecords`'s deny-list
 filter keeps it (`store::raw_records_exclude`), and no operator disable or quota block past the grace.
 
@@ -530,7 +531,7 @@ filter keeps it (`store::raw_records_exclude`), and no operator disable or quota
      survives (`post-permissions-legacy-payload.spec.ts:108-113`).
    - dcl-one: the wallets are parsed to lowercase addresses and deduplicated, the communities stored as `uuid`
      (the schema CHECKs need both). GET returns lowercase wallets ordered by `created_at, address` and lowercase
-     UUIDs (`store::AccessSetting::to_public_json`, `store.rs:79`). worlds-compatibility.md "Allow-list
+     UUIDs (`store::AccessSetting::to_public_json`, `store.rs` `AccessSetting::to_public_json`). worlds-compatibility.md "Allow-list
      documents".
    - Severity: none (closed).
 
@@ -556,7 +557,7 @@ filter keeps it (`store::raw_records_exclude`), and no operator disable or quota
 8. **WP-08 · route 6 · non-canonical query parcels.** Status: intended (worlds-compatibility.md).
    - Upstream: the query parcels go to SQL raw, so `00,00` never matches the canonical stored `0,0`
      (`permissions-manager.ts:404-426`).
-   - dcl-one: canonicalized, so they match (`store::addresses_for_parcel_permission`, `store.rs:1490`).
+   - dcl-one: canonicalized, so they match (`store::addresses_for_parcel_permission`, `store_access.rs` `addresses_for_parcel_permission`).
      worlds-compatibility.md "Parcel holder lookups".
    - Severity: none (closed).
 
@@ -564,10 +565,10 @@ filter keeps it (`store::raw_records_exclude`), and no operator disable or quota
    - Upstream: `ACCESS_MAX_WALLETS` and `ACCESS_MAX_COMMUNITIES` come from config (defaults 1000 and 50).
      `setAccess` checks communities before wallets (`access/component.ts:24-25,61-71`).
    - dcl-one: the same names in `catalyst-config` (`services/catalyst/config/src/worlds.rs:134-150`, defaults 1000
-     and 50, ranges 1..=10,000 and 1..=1,000) reach `Settings::with_access_caps` (`src/serve.rs:1776`,
+     and 50, ranges 1..=10,000 and 1..=1,000) reach `Settings::with_access_caps` (`src/serve_states.rs` `worlds_states`,
      `worlds/src/core/mod.rs:169`). `access_from_metadata` checks communities first (`permissions.rs:399-412`);
      the single-item PUTs check `count >= cap` under the row lock (`store::modify_allow_list_access`,
-     `store.rs:1609`). Pinned by the unit `allow_list_caps_come_from_settings_communities_first`, the test
+     `store_access.rs` `modify_allow_list_access`). Pinned by the unit `allow_list_caps_come_from_settings_communities_first`, the test
      `access_allow_list_caps_from_settings_bound_every_route` (caps of 1 and 1 on POST and both PUTs) and the
      config test `access_allow_list_caps_keep_the_upstream_defaults_within_a_range`. The ranges are this node's
      (worlds-compatibility.md "Allow-list caps").
@@ -595,9 +596,9 @@ filter keeps it (`store::raw_records_exclude`), and no operator disable or quota
       (`name != ALL(getBannedNames())`), and the world is not blocked past the two-day grace. A scene is **not**
       required (`logic/worlds/component.ts:71-87`, `adapters/worlds-manager.ts:322-356`). So a list entry `foo`
       or `FOO` makes the owner's DELETE on `foo.dcl.eth` answer 404 (unit `worlds-component.spec.ts:169`).
-    - dcl-one: `store::world_is_valid` (`store.rs:459-480`; its only caller is route 10, after the owner check,
+    - dcl-one: `store::world_is_valid` (`store_queries.rs` `world_is_valid`; its only caller is route 10, after the owner check,
       `permissions.rs:536`) asks `NameDenyList::check_name_deny_list` first (`names.rs:123-125`), then requires
-      the row, applies the same filter (`store::raw_records_exclude`, `store.rs:446-452`) and the operator
+      the row, applies the same filter (`store::raw_records_exclude`, `store_queries.rs` `raw_records_exclude`) and the operator
       disable and quota grace. Route 1 reads a filtered-out world's access as the default; a world only
       `checkNameDenyList` refuses keeps its stored access there, as upstream. Pinned by the test
       `deleting_an_address_grant_requires_a_valid_world`: a world with no scene answers 204 on the `deployment`
@@ -663,7 +664,7 @@ filter keeps it (`store::raw_records_exclude`), and no operator disable or quota
 
 18. **WP-18 · route 5 · removing the last parcel.** Status: intended (worlds-compatibility.md).
     - Upstream: keeps the row, which becomes world-wide (`delete-parcels.spec.ts:86-126`).
-    - dcl-one: deletes the grant (`store::remove_parcels_from_permission`, `store.rs:1350`), so a scoped deployer is
+    - dcl-one: deletes the grant (`store::remove_parcels_from_permission`, `store_access.rs` `remove_parcels_from_permission`), so a scoped deployer is
       never widened to the whole world; route 3 then answers 404 where upstream answers
       `{"total":0,"parcels":[]}`. worlds-compatibility.md "Removing a grant's last parcel".
     - Severity: none (closed).
@@ -703,8 +704,8 @@ filter keeps it (`store::raw_records_exclude`), and no operator disable or quota
     - dcl-one, access: every mirror pass that reaches a world, changed scenes or not, and every read-through
       fill reads `{source}/world/{name}/permissions` and copies `permissions.access` onto the world while the
       row is the mirror's (`mirror_source` set, not disabled) and the setting is not one its owner made on
-      this node: `upstream_access`, `parse_upstream_access` (`mirror.rs`) and
-      `store::replace_mirrored_access` (`store.rs:1729`), inside the world's sync transaction or, for
+      this node: `upstream_access`, `parse_upstream_access` (`mirror_upstream.rs`) and
+      `store::replace_mirrored_access` (`store_access.rs` `replace_mirrored_access`), inside the world's sync transaction or, for
       unchanged scenes, its own. Only a difference is written; it bumps `settings_version`, queues the
       access recheck and sends no notice. An unreadable answer or an unknown type keeps the stored setting:
       it fails the sync of a world with changed scenes and skips only the access copy for unchanged scenes.
@@ -727,7 +728,7 @@ filter keeps it (`store::raw_records_exclude`), and no operator disable or quota
       source's access; a world's own grants, secrets and allow-list members come with a data migration,
       not through the mirror:
       - a shared-secret world: the source does not publish its hash, so the copy is stored with one no secret
-        matches (`NO_SECRET_MATCHES`, `mirror.rs:100`) and every secret is refused here, while the source
+        matches (`NO_SECRET_MATCHES`, `mirror.rs`) and every secret is refused here, while the source
         admits the matching one;
       - an allow-list's communities are matched against this node's `social.community_members`
         (`Policy::is_listed_community_member`, `policy.rs:914`), not the Decentraland social service, so a member there
@@ -751,5 +752,5 @@ No extra routes. Behaviour on the same routes that upstream lacks:
   (`services/catalyst/worlds/src/writes.rs:33-53`). A node meant as a drop-in replacement must turn it on.
 - **408 `request timed out`** after 30 s on every permission route (`core/mod.rs:710-718`).
 - **The persisted access recheck:** every access write queues `social.world_access_rechecks`
-  (`store.rs:1573,1655`), so a kick that a LiveKit outage blocked is retried. Upstream's kick is fire-and-forget.
+  (`store_access.rs` `queue_access_recheck`), so a kick that a LiveKit outage blocked is retried. Upstream's kick is fire-and-forget.
 - **The operator disable** (`/admin/worlds/{name}/disable`) makes route 10 answer 404 (`store::world_is_valid`).

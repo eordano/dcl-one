@@ -25,40 +25,44 @@ use crate::{
 #[derive(Resource, Default)]
 struct PhotoDeletes(Vec<(String, Task<Result<(), String>>)>);
 
-pub(crate) fn register(app: &mut App) {
-    app.init_resource::<PhotoDeletes>()
-        .add_console_command::<PhotoModeCommand, _>(photo_mode_command)
-        .add_console_command::<TakePhotoCommand, _>(take_photo_command)
-        .add_console_command::<DeletePhotoCommand, _>(delete_photo_command)
-        .add_systems(Update, finish_deletes)
-        .add_debug_section(DebugSection {
-            title: "Photo mode",
-            query: "/photo_mode",
-            fields: &[
-                ("Position (X / Y / Z)", "position"),
-                ("Yaw (degrees)", "yaw"),
-                ("Pitch (degrees)", "pitch"),
-                ("Roll (degrees)", "roll"),
-                ("Vertical FOV (degrees)", "fov"),
-                ("Cursor locked", "cursorLocked"),
-                ("Camera HUD hidden", "hudHidden"),
-                ("Opened by", "source"),
-                ("Photos kept (current / max)", "storage"),
-                ("Photo in flight", "phase"),
-                ("Captures this session", "captures"),
-                ("Uploads this session", "uploaded"),
-                ("Failures this session", "failed"),
-                ("Last photo id", "lastPhotoId"),
-                ("Last error", "lastError"),
-            ],
-            actions: &[("Take photo", "/take_photo")],
-            inputs: &[DebugInput {
-                label: "Photo mode",
-                field: "active",
-                command: "/photo_mode {value}",
-                kind: DebugInputKind::Toggle,
-            }],
-        });
+pub(crate) struct PhotoModeDiagnosticsPlugin;
+
+impl Plugin for PhotoModeDiagnosticsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PhotoDeletes>()
+            .add_console_command::<PhotoModeCommand, _>(photo_mode_command)
+            .add_console_command::<TakePhotoCommand, _>(take_photo_command)
+            .add_console_command::<DeletePhotoCommand, _>(delete_photo_command)
+            .add_systems(Update, finish_deletes)
+            .add_debug_section(DebugSection {
+                title: "Photo mode",
+                query: "/photo_mode",
+                fields: &[
+                    ("Position (X / Y / Z)", "position"),
+                    ("Yaw (degrees)", "yaw"),
+                    ("Pitch (degrees)", "pitch"),
+                    ("Roll (degrees)", "roll"),
+                    ("Vertical FOV (degrees)", "fov"),
+                    ("Cursor locked", "cursorLocked"),
+                    ("Camera HUD hidden", "hudHidden"),
+                    ("Opened by", "source"),
+                    ("Photos kept (current / max)", "storage"),
+                    ("Photo in flight", "phase"),
+                    ("Captures this session", "captures"),
+                    ("Uploads this session", "uploaded"),
+                    ("Failures this session", "failed"),
+                    ("Last photo id", "lastPhotoId"),
+                    ("Last error", "lastError"),
+                ],
+                actions: &[("Take photo", "/take_photo")],
+                inputs: &[DebugInput {
+                    label: "Photo mode",
+                    field: "active",
+                    command: "/photo_mode {value}",
+                    kind: DebugInputKind::Toggle,
+                }],
+            });
+    }
 }
 
 /// Read photo mode, or open (`on`/`true`) or close (`off`/`false`) it. `source` names what

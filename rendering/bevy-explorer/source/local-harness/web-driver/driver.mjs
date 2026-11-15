@@ -291,7 +291,8 @@ class Driver {
   #page = null;
   #app = null;
   #held = new Set();
-  #shown = new WeakSet();
+  // each document's first drawn frame, as #presented waits for it
+  #shown = new WeakMap();
   #console = [];
   // the credentials the lines run so far carried (`secretsOf`): a page may quote one
   #secrets = new Set();
@@ -518,7 +519,8 @@ class Driver {
   }
 
   /** Resolves once a context of the page's origin has both `window.engine_console_command` and
-   *  `window.__dclTrustedInput`. */
+   *  `window.__dclTrustedInput`, and the page has drawn that document (`#presented`): input
+   *  can then be aimed at it. */
   async ready({ timeout = DEFAULT_TIMEOUT_MS } = {}) {
     const deadline = Date.now() + timeout;
     const exited = this.#exit.then((info) => {
@@ -527,7 +529,15 @@ class Driver {
     exited.catch(() => {});
     for (;;) {
       const app = await Promise.race([this.#findApp(), exited]);
-      if (app) return;
+      if (app) {
+        const left = Math.max(1, deadline - Date.now());
+        await within(
+          Promise.race([this.#presented(app), exited]),
+          left,
+          () => `${this.url} did not draw its ${this.#origin} frame in the ${left} ms that remained of ${timeout} ms`
+        );
+        return;
+      }
       if (Date.now() >= deadline) {
         const seen = [...this.#contexts.values()]
           .filter((context) => context.isDefault)
@@ -625,21 +635,32 @@ class Driver {
   // A frame that has only just appeared is not hit-testable until its first frame is composited:
   // a click sent before then goes to the frame under it and is lost (about one first click in five
   // with several browsers starting at once). A screenshot of the page waits for that frame, so one
-  // is taken before the first click on each document; the engine's own start-up takes longer than
-  // that, but a fixture's does not.
-  async #presented(context) {
-    if (this.#shown.has(context)) return;
-    this.#shown.add(context);
-    const shot = this.#send('Page.captureScreenshot', { format: 'jpeg', quality: 1, optimizeForSpeed: true }, this.#page);
-    // best effort: a window that cannot be drawn must not hold up the input
-    await within(shot, PRESENT_TIMEOUT_MS, () => 'no first frame').catch((error) => debug(error.message));
+  // is taken of each document, once. `ready()` waits for it for as long as its caller gives the
+  // page to start: a browser's first start on a machine draws its first frame seconds after the
+  // page's scripts have run, and the page waits less than that for a click's answer.
+  #presented(context) {
+    let shown = this.#shown.get(context);
+    if (shown === undefined) {
+      shown = this.#send('Page.captureScreenshot', { format: 'jpeg', quality: 1, optimizeForSpeed: true }, this.#page).then(
+        () => {},
+        // best effort: a page the browser cannot capture must not hold up the input
+        (error) => debug('no first frame:', error.message)
+      );
+      this.#shown.set(context, shown);
+    }
+    return shown;
   }
 
   async #click(context, { x, y, button }) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('a trusted click needs numeric "x" and "y"');
     const bit = MOUSE_BUTTONS[button];
     if (bit == null) throw new Error(`unknown button \`${button}\`: use left, right or middle`);
-    await this.#presented(context);
+    // settled already for a document `ready()` has seen; a call from another waits here, for less
+    // than the page waits for its answer, and only once for each document
+    await within(this.#presented(context), PRESENT_TIMEOUT_MS, () => 'no first frame').catch((error) => {
+      debug(error.message);
+      this.#shown.set(context, Promise.resolve());
+    });
     const offset = await this.#frameOffset(context);
     const at = { x: offset.x + x, y: offset.y + y, modifiers: this.#modifiers };
     const mouse = (type, extra) => this.#send('Input.dispatchMouseEvent', { type, ...at, ...extra }, this.#page);

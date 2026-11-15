@@ -47,6 +47,10 @@ struct Constants {
     sample_count: u32,
     // source mip sampled by the irradiance pass
     source_lod: f32,
+    authored_lower: u32,
+    _padding_0: u32,
+    _padding_1: u32,
+    _padding_2: u32,
 }
 
 @group(0) @binding(0) var source_cube: texture_cube<f32>;
@@ -81,15 +85,19 @@ fn output_texel_dir(uv: vec2<f32>, face: u32) -> vec3<f32> {
 // row below the horizon for bilinear filtering, and none of the -y face. dispatched with 5
 // layers, skipping -y.
 fn output_face(layer: u32) -> u32 {
+    if constants.authored_lower != 0u { return layer; }
     return select(layer, layer + 1u, layer >= 3u);
 }
 
 fn below_generated_half(row: u32, size: u32, face: u32) -> bool {
-    return face != 2u && row > size / 2u;
+    return constants.authored_lower == 0u && face != 2u && row > size / 2u;
 }
 
 fn sample_sky(dir: vec3<f32>, lod: f32) -> vec3<f32> {
 #ifdef RAW_SKY
+    if constants.authored_lower != 0u {
+        return textureSampleLevel(source_cube, source_sampler, dir, 0.0).rgb;
+    }
     // the sky itself rather than the mirrored, tinted downsample: mirror and tint here
     let tint = select(vec3<f32>(1.0), sky_envmap_ground_tint(dir), dir.y < 0.0);
     return textureSampleLevel(source_cube, source_sampler, vec3<f32>(dir.x, abs(dir.y), dir.z), 0.0).rgb * tint;
@@ -121,8 +129,9 @@ fn downsample_sky(@builtin(global_invocation_id) id: vec3<u32>) {
         for (var x = 0u; x < taps; x++) {
             let uv = origin + vec2<f32>(f32(x), f32(y)) * 2.0 * texel;
             let dir = cube_texel_dir(uv, id.z);
-            let mirrored = vec3<f32>(dir.x, abs(dir.y), dir.z);
-            let tint = select(vec3<f32>(1.0), sky_envmap_ground_tint(dir), dir.y < 0.0);
+            let authored = constants.authored_lower != 0u;
+            let mirrored = select(vec3<f32>(dir.x, abs(dir.y), dir.z), dir, authored);
+            let tint = select(vec3<f32>(1.0), sky_envmap_ground_tint(dir), dir.y < 0.0 && !authored);
             sum += textureSampleLevel(source_cube, source_sampler, mirrored, 0.0).rgb * tint;
         }
     }

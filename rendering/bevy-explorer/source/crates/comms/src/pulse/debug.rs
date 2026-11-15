@@ -4,49 +4,53 @@ use common::util::AsH160;
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 use serde_json::json;
 
-pub(super) fn register(app: &mut App) {
-    let client = !app
-        .world()
-        .contains_resource::<common::structs::NoRenderApp>()
-        && !common::structs::server_mode();
-    let mut inputs = Vec::new();
-    if client {
-        app.add_console_command::<PulseConnection, _>(pulse_connection);
+pub(super) struct PulseDebugPlugin;
+
+impl Plugin for PulseDebugPlugin {
+    fn build(&self, app: &mut App) {
+        let client = !app
+            .world()
+            .contains_resource::<common::structs::NoRenderApp>()
+            && !common::structs::server_mode();
+        let mut inputs = Vec::new();
+        if client {
+            app.add_console_command::<PulseConnection, _>(pulse_connection);
+            inputs.push(DebugInput {
+                label: "Connection",
+                field: "connectionEnabled",
+                command: "/pulse_connection {value}",
+                kind: DebugInputKind::ActionButton {
+                    enable: ("Connect", "connect"),
+                    disable: ("Disconnect", "disconnect"),
+                },
+            });
+        }
         inputs.push(DebugInput {
-            label: "Connection",
-            field: "connectionEnabled",
-            command: "/pulse_connection {value}",
-            kind: DebugInputKind::ActionButton {
-                enable: ("Connect", "connect"),
-                disable: ("Disconnect", "disconnect"),
-            },
+            label: "Look up peer by wallet",
+            field: "wallet",
+            command: "/pulse_lookup {value}",
+            kind: DebugInputKind::Text,
         });
+        app.init_resource::<PeerLookup>()
+            .add_console_command::<PulseState, _>(pulse_state)
+            .add_console_command::<PulseLookup, _>(pulse_lookup)
+            .add_debug_section(DebugSection {
+                title: "Pulse",
+                query: "/pulse_state",
+                fields: &[
+                    ("Transport state", "state"),
+                    ("Authenticated", "authenticated"),
+                    ("Outbound payload (B/s)", "sentBytes"),
+                    ("Inbound payload (B/s)", "receivedBytes"),
+                    ("Outbound packets/s", "sentPackets"),
+                    ("Inbound packets/s", "receivedPackets"),
+                    ("Resync requests (last 60s)", "resyncs"),
+                    ("Emote for selected peer", "emote"),
+                ],
+                actions: &[],
+                inputs: &inputs,
+            });
     }
-    inputs.push(DebugInput {
-        label: "Look up peer by wallet",
-        field: "wallet",
-        command: "/pulse_lookup {value}",
-        kind: DebugInputKind::Text,
-    });
-    app.init_resource::<PeerLookup>()
-        .add_console_command::<PulseState, _>(pulse_state)
-        .add_console_command::<PulseLookup, _>(pulse_lookup)
-        .add_debug_section(DebugSection {
-            title: "Pulse",
-            query: "/pulse_state",
-            fields: &[
-                ("Transport state", "state"),
-                ("Authenticated", "authenticated"),
-                ("Outbound payload (B/s)", "sentBytes"),
-                ("Inbound payload (B/s)", "receivedBytes"),
-                ("Outbound packets/s", "sentPackets"),
-                ("Inbound packets/s", "receivedPackets"),
-                ("Resync requests (last 60s)", "resyncs"),
-                ("Emote for selected peer", "emote"),
-            ],
-            actions: &[],
-            inputs: &inputs,
-        });
 }
 
 #[derive(Resource, Default)]

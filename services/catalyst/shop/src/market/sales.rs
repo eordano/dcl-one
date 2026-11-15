@@ -463,17 +463,18 @@ pub fn summarize(
 
 const SUMMARY_FIELDS: &str = "id type price timestamp searchContractAddress searchItemId";
 
-async fn all_networks_page(
+pub(crate) async fn bounded_sales_rows(
     state: &MarketplaceState,
     where_: Value,
+    fields: &'static str,
     route: &'static str,
-) -> Result<Vec<Value>, Response> {
+) -> Result<Vec<(super::graph::Network, Value)>, Response> {
     let mut out = Vec::new();
     for (network, url) in readers::require_both_collections(state)? {
         let page = GraphPage {
             entity: "sales",
             filter_type: "Sale_filter",
-            fields: SUMMARY_FIELDS,
+            fields,
             where_: where_.clone(),
             order_by: "timestamp",
             direction: "desc",
@@ -492,9 +493,21 @@ async fn all_networks_page(
                 ),
             ));
         }
-        out.extend(rows);
+        out.extend(rows.into_iter().map(|row| (network, row)));
     }
     Ok(out)
+}
+
+async fn all_networks_page(
+    state: &MarketplaceState,
+    where_: Value,
+    route: &'static str,
+) -> Result<Vec<Value>, Response> {
+    Ok(bounded_sales_rows(state, where_, SUMMARY_FIELDS, route)
+        .await?
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect())
 }
 
 /// The seller's sales rows the summary is built from (the bounded reader:
@@ -540,6 +553,40 @@ pub async fn get_sales_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bounded_rows_keep_network_tags_order_and_requested_fields() {
+        use super::super::tests::support::state_without_db_settings;
+        use axum::{Router, routing::post};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/",
+            post(|Json(body): Json<Value>| async move {
+                assert!(body["query"].as_str().unwrap().contains("feesCollectorCut"));
+                Json(json!({"data": {"sales": [{"id": "sale", "feesCollectorCut": "12"}]}}))
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let url = format!("http://{addr}/");
+        let state = state_without_db_settings(super::super::Settings {
+            eth_collections_subgraph_url: Some(url.clone()),
+            matic_collections_subgraph_url: Some(url),
+            ..super::super::Settings::for_tests()
+        });
+        state
+            .test_allow_loopback
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let rows = bounded_sales_rows(&state, json!({}), "id feesCollectorCut", "/test")
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0.db_name(), "ethereum");
+        assert_eq!(rows[1].0.db_name(), "matic");
+        assert_eq!(rows[0].1, json!({"id": "sale", "feesCollectorCut": "12"}));
+        assert_eq!(rows[0].1, rows[1].1);
+        server.abort();
+    }
 
     fn pairs(raw: &[(&str, &str)]) -> Vec<(String, String)> {
         raw.iter()

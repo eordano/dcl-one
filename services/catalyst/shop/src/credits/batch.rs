@@ -795,19 +795,18 @@ pub async fn authorize_group(
     // A purchase that names itself is recovered from what it reserved, before the
     // index, the gate, the feed, the catalogue or the price is read: those decide
     // whether to issue a new credit, never whether to hand back the one it has.
-    if let Some(digest) = request_digest {
-        if let Some(prior) = state
+    if let Some(digest) = request_digest
+        && let Some(prior) = state
             .credits
             .authorization_for_key(idempotency_key, signer)
             .await?
-        {
-            if prior.request_digest.as_deref() != Some(digest) {
-                return Err(AuthorizeError::OperationReused);
-            }
-            let (issued, lines) =
-                replayed(state, &prior.id, buyer, manager, chain_id, None, "").await?;
-            return credit_out(&wallet, issued, lines, single, signer, true);
+    {
+        if prior.request_digest.as_deref() != Some(digest) {
+            return Err(AuthorizeError::OperationReused);
         }
+        let (issued, lines) =
+            replayed(state, &prior.id, buyer, manager, chain_id, None, "").await?;
+        return credit_out(&wallet, issued, lines, single, signer, true);
     }
 
     // A trial issues new credits only to the buyers it names. This is the one place a new

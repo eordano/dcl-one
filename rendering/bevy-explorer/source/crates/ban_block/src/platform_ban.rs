@@ -4,7 +4,7 @@
 
 use alloy_core::primitives::Address;
 use bevy::{
-    app::{App, PostUpdate, Update},
+    app::{App, Plugin, PostUpdate, Update},
     ecs::{
         change_detection::DetectChanges,
         event::{Event, EventReader, EventWriter},
@@ -275,18 +275,22 @@ fn ban_block_refresh(
     }
 }
 
-pub(crate) fn register(app: &mut App) {
-    app.insert_resource(PlatformBanStatus::new())
-        .add_event::<PlatformBanRefreshRequested>()
-        .add_console_command::<BanBlockRefreshCommand, _>(ban_block_refresh)
-        .add_systems(
-            Update,
-            check_platform_ban.run_if(|| !common::structs::server_mode()),
-        )
-        .add_systems(
-            PostUpdate,
-            cross_feed_admission_refusal.run_if(resource_changed::<SceneAdmission>),
-        );
+pub(crate) struct PlatformBanPlugin;
+
+impl Plugin for PlatformBanPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(PlatformBanStatus::new())
+            .add_event::<PlatformBanRefreshRequested>()
+            .add_console_command::<BanBlockRefreshCommand, _>(ban_block_refresh)
+            .add_systems(
+                Update,
+                check_platform_ban.run_if(|| !common::structs::server_mode()),
+            )
+            .add_systems(
+                PostUpdate,
+                cross_feed_admission_refusal.run_if(resource_changed::<SceneAdmission>),
+            );
+    }
 }
 
 /// Why a check gave no answer, with the delay the server asked for before the next one.

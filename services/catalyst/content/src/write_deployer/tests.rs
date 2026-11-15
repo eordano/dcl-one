@@ -168,7 +168,11 @@ async fn temp_storage(tag: &str) -> (Arc<Storage>, std::path::PathBuf) {
 async fn deployer_over_temp_storage(tag: &str) -> (WriteDeployer, std::path::PathBuf) {
     let (storage, tmp) = temp_storage(tag).await;
     (
-        WriteDeployer::new(lazy_pool(), storage, Arc::new(NoEip1654)),
+        WriteDeployer::with_partial_validation_for_tests(
+            lazy_pool(),
+            storage,
+            Some(Arc::new(NoEip1654)),
+        ),
         tmp,
     )
 }
@@ -359,7 +363,7 @@ async fn a_deploy_with_a_bad_or_missing_signature_does_not_hold_its_pointers() {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, DeployFailure::Rejected(errors) if errors[0].starts_with("The signature is invalid. ")),
+            matches!(&err, DeployFailure::Rejected(_, errors) if errors[0].starts_with("The signature is invalid. ")),
             "{err:?}"
         );
         assert!(!deployer.is_rate_limited("scene", "3,3"));
@@ -410,7 +414,8 @@ async fn two_concurrent_deploys_of_one_entity_both_answer_its_stored_timestamp()
         return;
     };
     let (storage, tmp) = temp_storage("same-entity").await;
-    let deployer = WriteDeployer::new(pool, storage, Arc::new(NoEip1654));
+    let deployer =
+        WriteDeployer::with_partial_validation_for_tests(pool, storage, Some(Arc::new(NoEip1654)));
     let pointers = Scope::new().pointers(&["8,8"]);
     let (bytes, id, chain) = signed_scene(&pointers, chrono::Utc::now().timestamp_millis()).await;
     let deploy = || deployer.deploy_entity(vec![bytes.clone()], &id, chain.clone(), "LOCAL");
@@ -458,7 +463,11 @@ async fn of_two_concurrent_deploys_to_one_pointer_the_second_is_refused_as_in_fl
         .connect_lazy(&format!("postgres://nobody@{addr}/nowhere"))
         .unwrap();
     let (storage, tmp) = temp_storage("concurrent").await;
-    let deployer = Arc::new(WriteDeployer::new(pool, storage, Arc::new(NoEip1654)));
+    let deployer = Arc::new(WriteDeployer::with_partial_validation_for_tests(
+        pool,
+        storage,
+        Some(Arc::new(NoEip1654)),
+    ));
     assert!(claimed.set(Arc::clone(&deployer)).is_ok());
     let pointers = vec!["5,5".to_string()];
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -482,6 +491,10 @@ async fn of_two_concurrent_deploys_to_one_pointer_the_second_is_refused_as_in_fl
     .await
     .expect("the second deploy is refused, not queued behind the first")
     .unwrap_err();
+    assert!(matches!(
+        &second,
+        DeployFailure::Rejected(RejectionKind::PointerContention, _)
+    ));
     assert_eq!(
         second.errors(),
         [
@@ -539,7 +552,11 @@ async fn a_content_deploy_waits_for_an_unlink_batch() {
         return;
     };
     let (storage, tmp) = temp_storage("store-lock").await;
-    let deployer = WriteDeployer::new(pool.clone(), storage, Arc::new(NoEip1654));
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
+        pool.clone(),
+        storage,
+        Some(Arc::new(NoEip1654)),
+    );
     let pointers = Scope::new().pointers(&["9,9"]);
     let (bytes, id, chain) = signed_scene(&pointers, chrono::Utc::now().timestamp_millis()).await;
 
@@ -564,7 +581,11 @@ async fn a_content_deploy_behind_a_long_unlink_batch_is_undecided() {
         return;
     };
     let (storage, tmp) = temp_storage("store-lock-wait").await;
-    let deployer = WriteDeployer::new(pool.clone(), storage, Arc::new(NoEip1654));
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
+        pool.clone(),
+        storage,
+        Some(Arc::new(NoEip1654)),
+    );
     let pointers = Scope::new().pointers(&["9,10"]);
     let (bytes, id, chain) = signed_scene(&pointers, chrono::Utc::now().timestamp_millis()).await;
 
@@ -601,7 +622,11 @@ async fn a_reused_file_collected_during_the_deploy_is_undecided() {
     let reused = Bytes::from_static(b"reused bytes");
     let reused_hash = hash_bytes_v1(&reused);
     storage.store(&reused_hash, reused).await.unwrap();
-    let deployer = WriteDeployer::new(pool.clone(), storage.clone(), Arc::new(NoEip1654));
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
+        pool.clone(),
+        storage.clone(),
+        Some(Arc::new(NoEip1654)),
+    );
     let pointers = Scope::new().pointers(&["9,11"]);
     let (bytes, id, chain) = signed_entity_of(serde_json::json!({
         "version": "v3",
@@ -1084,7 +1109,13 @@ async fn deploy_entity_persists_a_signed_local_scene_end_to_end() {
         return;
     };
     let (storage, tmp) = temp_storage("e2e").await;
-    let fresh = || WriteDeployer::new(pool.clone(), storage.clone(), Arc::new(NoEip1654));
+    let fresh = || {
+        WriteDeployer::with_partial_validation_for_tests(
+            pool.clone(),
+            storage.clone(),
+            Some(Arc::new(NoEip1654)),
+        )
+    };
     let scope = Scope::new();
     let pointers = scope.pointers(&["7,7"]);
     let model = Bytes::from_static(b"glb bytes");
@@ -1127,7 +1158,7 @@ async fn deploy_entity_persists_a_signed_local_scene_end_to_end() {
         .await
         .expect_err("a declared file that is neither uploaded nor stored is rejected");
     assert!(
-        matches!(&missing, DeployFailure::Rejected(errors) if errors[0].contains(&model_hash)),
+        matches!(&missing, DeployFailure::Rejected(_, errors) if errors[0].contains(&model_hash)),
         "{missing:?}"
     );
 
@@ -1144,7 +1175,7 @@ async fn deploy_entity_persists_a_signed_local_scene_end_to_end() {
         .await
         .expect_err("a chain whose signature does not recover to its signer is rejected");
     assert!(
-        matches!(&forged, DeployFailure::Rejected(errors) if errors[0].starts_with("The signature is invalid. ")),
+        matches!(&forged, DeployFailure::Rejected(_, errors) if errors[0].starts_with("The signature is invalid. ")),
         "{forged:?}"
     );
 
@@ -1248,8 +1279,12 @@ async fn a_local_scene_deploy_without_a_land_rights_source_is_undecidable_never_
         crate::land_authz::Settings::for_tests(),
         None,
     ));
-    let deployer =
-        WriteDeployer::new(lazy_pool(), storage, Arc::new(NoEip1654)).with_land_authz(Some(land));
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
+        lazy_pool(),
+        storage,
+        Some(Arc::new(NoEip1654)),
+    )
+    .with_land_authz(Some(land));
     let signer = "0x8d6f63e382d73cf53858864f673f39e9ff915a1e";
 
     let scene: Entity = serde_json::from_value(serde_json::json!({
@@ -1274,7 +1309,7 @@ async fn a_local_scene_deploy_without_a_land_rights_source_is_undecidable_never_
         .validate_land_rights(&malformed, signer)
         .await
         .unwrap_err();
-    assert!(matches!(err, DeployFailure::Rejected(_)), "{err:?}");
+    assert!(matches!(err, DeployFailure::Rejected(_, _)), "{err:?}");
     assert!(
         err.errors()[0].contains("Invalid pointer: (urn:not-a-parcel)"),
         "{err:?}"
@@ -1289,8 +1324,11 @@ async fn a_local_scene_deploy_without_a_land_rights_source_is_undecidable_never_
         .await
         .unwrap();
 
-    let without_source =
-        WriteDeployer::new(lazy_pool(), deployer.storage.clone(), Arc::new(NoEip1654));
+    let without_source = WriteDeployer::with_partial_validation_for_tests(
+        lazy_pool(),
+        deployer.storage.clone(),
+        Some(Arc::new(NoEip1654)),
+    );
     without_source
         .validate_land_rights(&scene, signer)
         .await
@@ -1332,4 +1370,38 @@ fn the_default_rate_limit_leaves_every_types_own_window() {
         assert_eq!(of(etype), (ttl, max), "{etype}");
     }
     assert_eq!(limits.rate_limits.len(), REFERENCE_RATE_LIMITS.len());
+}
+
+#[tokio::test]
+async fn binding_sql_supersession_has_a_typed_rejection() {
+    let Some(pool) = test_pool(2).await else {
+        return;
+    };
+    let (storage, tmp) = temp_storage("typed-superseded").await;
+    let deployer =
+        WriteDeployer::with_partial_validation_for_tests(pool, storage, Some(Arc::new(NoEip1654)));
+    let pointers = Scope::new().pointers(&["9,9"]);
+    let now = chrono::Utc::now().timestamp_millis();
+    let (newer, newer_id, newer_chain) = signed_scene(&pointers, now).await;
+    deployer
+        .deploy_entity(vec![newer], &newer_id, newer_chain, "LOCAL")
+        .await
+        .unwrap();
+    let (bytes, id, chain) = signed_scene(&pointers, now - 1).await;
+    let mut entity: Entity = serde_json::from_slice(&bytes).unwrap();
+    entity.id = id;
+    let chain = serde_json::from_value(chain).unwrap();
+    let uploads = hash_uploads(vec![bytes.clone()]).await.unwrap();
+    // Call publication directly to exercise the binding SQL decision after preflight.
+    let failure = deployer
+        .persist(&entity, &bytes, &uploads, &chain, "LOCAL")
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(
+        &failure,
+        DeployFailure::Rejected(RejectionKind::Superseded, _)
+    ));
+    assert_eq!(failure.errors(), &[newer_entity_message(&entity)]);
+    let _ = std::fs::remove_dir_all(tmp);
 }

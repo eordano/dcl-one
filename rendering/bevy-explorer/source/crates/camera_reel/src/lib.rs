@@ -24,15 +24,15 @@ pub struct CameraReelPlugin;
 
 impl Plugin for CameraReelPlugin {
     fn build(&self, app: &mut App) {
-        mode::register(app);
-        capture::register(app);
-        relay::register(app);
+        app.add_plugins(mode::PhotoModePlugin);
+        app.add_plugins(capture::PhotoCapturePlugin);
+        app.add_plugins(relay::PhotoModeRelayPlugin);
         app.add_systems(
             Update,
             storage::fetch_storage_status
                 .in_set(common::sets::SceneSets::Input)
                 .after(mode::apply_photo_mode_requests),
         );
-        diagnostics::register(app);
+        app.add_plugins(diagnostics::PhotoModeDiagnosticsPlugin);
     }
 }

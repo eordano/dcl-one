@@ -501,6 +501,19 @@ stored client-supplied sale category never establishes eligibility.
   required offset APIs. Define tie-breaking, replay windows and deletion
   handling; a cursor alone does not give snapshot consistency.
 
+The anonymous Registry `GET /denylist` feed reads `content.denylist` through the
+existing content pool: `id`, `added_by` and `added_at`, ordered newest first.
+Expected lists contain hundreds of rows; the read checks overflow at 100,001 rows
+and refuses lists above 100,000. The shared Explore API state retains local
+rows for five seconds and coalesces concurrent refreshes. Database failures are
+retained for the same interval and return 500; a failed refresh never serves an
+expired successful list. Operator edits become visible on the next read after
+expiry, and process restart rebuilds on demand. Source moderation responses are
+validated on every request and never cached here. Merge and serialization remain
+per-request work; the cache bounds table-read frequency, not total endpoint CPU
+or response bytes. No table, index or pool is added. The public feed intentionally
+publishes every local id kind and `added_by` as the operator's `created_by` wallet.
+
 The public What's On calendar caches completed, parsed catalogue responses
 for 30 seconds in each Sites process. Its key is the catalogue base, search,
 recurrence selector and exact date window; catalogue page offsets and accounts
@@ -816,6 +829,38 @@ Both have a leading community-id index. The raw notification key and the ranking
 receipt's `(kind,event_key,community_id)` key serve different access patterns.
 Synthetic warm measurements and insertion costs are recorded in `METRICS.md`;
 they are not production capacity measurements.
+
+Camera uploads retain their multipart basename in `camera_reel.images.original_filename`.
+Gallery URLs concatenate the configured API base, row UUID and basename literally;
+thumbnail names add `thumbnail-`. Reserved filename characters remain raw in JSON
+and redirect Location values, as in the pinned source. To request a complete
+filename containing `?`, `#` or `%`, clients must percent-encode its path segment.
+Alias downloads extract the UUID and use the existing primary key to resolve the
+shared image or thumbnail hash. The nullable column adds no index or backfill:
+existing rows retain their hash URLs. Migration `0045_camera_reel_original_filename`
+adds the column without replacing rows or blob bytes. Local `/api/files` downloads
+apply the camera row's review state and the shared blob denylist. Image redirects
+preserve the requested filename without querying the database. After storing both
+blobs, a new upload releases previous deletion withholding for those hashes only
+when a live non-rejected photo references them and no rejected photo does. It
+retains moderation rejections and operator or remote denials. Configure
+`CAMERA_REEL_BUCKET_URL` as the public API base plus `/api/files` to use this virtual
+origin, or route the existing image origin to that handler. A hash-only origin
+needs an ingress/configuration adjustment before cutover; it cannot serve the
+filename aliases directly. An external public origin is responsible for restricting
+its own copies. The local byte route serves complete GET responses, without Range
+or ETag support; HEAD returns 404. It does not implement the S3 object API.
+
+Camera upload MIME is retained per photo in nullable
+`camera_reel.images.image_content_type`, constrained to the source's accepted
+`image/png` and `image/jpeg` values. Both object aliases return that claimed MIME,
+including when their detected encoding differs. An upload adds this short string
+to its existing row insert; alias downloads select it with the existing UUID
+primary-key lookup. The column adds no index, table, pool or extra read query.
+Migration `0044_camera_reel_image_content_type` preserves existing rows without
+inventing an object MIME backfill. Legacy NULL values and raw hash URLs retain byte-format sniffing. An import
+can populate the per-photo value from object metadata; a raw hash alone does not
+identify which photo's claimed MIME to use.
 
 New camera uploads start with `ranking_published=false`. After both blobs are
 written, one transaction marks the row and applies local photo contributions.
@@ -1326,12 +1371,13 @@ row per finalised upload, written in the transaction that sets
 statement that changes it. `payload` is the upstream body `{type: "camera",
 subType, key, timestamp, metadata}`. Writes follow the upload rate.
 
-Readers are in-process consumers (`camera_reel::events::read_after`): each
-pages `id > $cursor ORDER BY id LIMIT n` on the primary key and keeps its
-cursor in its own schema, committed with its own effects; the outbox holds no
-consumer state. No consumer reads it yet; the credits program reads it for
-its photo goals once it has one. The community photo counts are applied
-directly in the upload's finalising transaction and do not read the outbox.
+The Credits photo-goal worker reads committed `photo-taken` rows lacking a
+receipt in `credits.photo_goal_receipts`. Receipt and effects commit together;
+the outbox holds no consumer state. This anti-join also sees transactions
+that commit after a higher event ID has already been processed. A sequence
+ID alone is not a safe consumer watermark. The community photo counts are
+applied directly in the upload's finalising transaction and do not read the
+outbox.
 
 Invariants: rows are never updated; the leased
 `camera-photo-events-retention` job deletes rows older than 30 days, 1000 per
@@ -1340,6 +1386,55 @@ so the table holds about 30 days of events and a consumer further behind
 misses events. `user_address` is the photo's owner, lowercase. The bootstrap
 defines the table; an existing database gains it from the object pass, so no
 step exists.
+
+## Seasonal photo rewards workload
+
+`shop::credits::goals` reads Camera photo facts and Social subscription facts
+using the existing database pool. `credits.seasons` and `credits.season_goals`
+hold season windows, MANA limits and the `take-photo` assignment. These tables
+have no active monetary seed. `credits.program_opt_outs` records enrollment
+withdrawal separately from the paid wallet's identity.
+
+The worker writes one durable `credits.photo_goal_receipts` row per processed
+photo, including terminal ineligibility decisions. Eligible photos update
+`credits.goal_progress`, keyed by wallet, season, week and goal. Completion
+creates one `credits.goal_grants` row with immutable signature terms and one
+keyed Social notification with its delivery records. All four effects share
+one transaction. A failed signature or notification rolls back progress and
+the receipt so the event can be retried. No network call runs inside this
+transaction. Per-wallet advisory locks serialize progress and enrollment;
+claim serialization enforces the weekly and season limits.
+
+MANA amounts use integer wei in `numeric(78,0)` and exact integer arithmetic.
+The signed grant binds wallet, chain, manager, amount, expiry and salt.
+`credits.usages` supplies consumption by the same chain, manager and credit
+hash. Goal grants never credit or settle the paid USD ledger. Wallet-scoped
+reads use the progress and grant primary-key prefixes. The partial receipt
+index on `(address, season_id, week_id, ordinal)` for counted photos serves
+the ordered `photosTaken` lookup; the pending-photo query uses the unique
+receipt identity. `METRICS.md` records the synthetic access-path measurement.
+Production volume and latency remain unmeasured.
+
+The worker runs through the existing leased job registry under the Ops write
+gate. Receipts survive photo deletion and event retention; changing visibility
+does not undo a reward. The Camera event retention window still bounds crash
+recovery: a worker more than 30 days behind cannot recover deleted facts.
+These new relations are created by the schema object pass on existing
+databases, without resetting wallet, photo or notification data.
+
+Credits keeps its own in-memory feature-flag snapshots, fetched with the
+configured Credits audience outside SQL transactions. Social's persisted
+`dapps` answer and Explorer's site answer cannot authorize these rewards.
+Local flag overrides remain in `explore_api.feature_flags_local`; missing
+remote policy is retryable rather than a completed photo decision.
+
+`credits.captcha_attempts` holds a wallet's failure count and most recent
+failure time. Three failures block claims for 24 hours from the last failure;
+a successful solve clears the row. The existing `credits.captcha_challenges`
+table records `generated_at` for the minimum solve-time check and keeps a
+two-hour challenge lifetime. Both challenge and failure updates take the
+same wallet lock. The additive `0043_credits_captcha_generated_at` step
+preserves existing challenges and establishes their solve-time baseline.
 
 ## Badges catalog and progress workload
 

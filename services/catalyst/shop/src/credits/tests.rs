@@ -3704,12 +3704,19 @@ async fn signer_mismatch_is_a_403_and_a_signed_wallet_reads_its_credits() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{v}");
-    // Whole credits held, floored like upstream's Math.floor(cents / 10).
-    assert_eq!(v["credits"]["available"], 7);
-    assert_eq!(v["credits"]["earned"], 2);
-    assert_eq!(v["credits"]["paid"], 5);
+    // Progress reports seasonal MANA; paid USD remains in /users/:address/credits.usd.
+    assert_eq!(v["credits"]["available"], 0.0);
+    assert!(v["credits"].get("earned").is_none());
+    assert!(v["credits"].get("paid").is_none());
     assert_eq!(v["user"]["hasStartedProgram"], false);
 
+    let (status, _) = call(&app, &wallet, "post", "/credits/users", &[], None).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "enrollment requires a confirmed notification email"
+    );
+    sqlx::query("INSERT INTO social.subscriptions(address,email) VALUES($1,'test@example.org') ON CONFLICT(address) DO UPDATE SET email=excluded.email").bind(&wallet.address).execute(&pool).await.unwrap();
     let (status, v) = call(&app, &wallet, "post", "/credits/users", &[], None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let (_, v) = call(
@@ -6638,8 +6645,12 @@ async fn captcha_generate_waits_for_the_credits_switch_and_the_restore_stamps() 
         lab::{HOUR, StampLab},
         scoped,
     };
-    let Some(pool) = pool().await else { return };
+    let Some(db) = OwnDatabase::create("captcha_write_guards").await else {
+        return;
+    };
+    let pool = db.pool.clone();
     let wallet = scratch_wallet();
+    super::goals::tests::seed_http_claim(&pool, &wallet.address).await;
     let (w, p) = (&wallet, &pool);
     let challenges = move || async move {
         sqlx::query_scalar::<_, i64>(
@@ -6686,17 +6697,22 @@ async fn captcha_generate_waits_for_the_credits_switch_and_the_restore_stamps() 
     let (status, _) = get(on).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(challenges().await, 1);
+    db.drop().await;
 }
 
 #[tokio::test]
-async fn captcha_generate_consumes_the_prior_challenge_and_claim_reads_the_block_flag() {
-    let Some(pool) = pool().await else { return };
+async fn captcha_generate_reuses_the_prior_challenge_and_claim_reads_the_block_flag() {
+    let Some(db) = OwnDatabase::create("captcha_goals").await else {
+        return;
+    };
+    let pool = db.pool.clone();
     let wallet = scratch_wallet();
     let addr = wallet.address.clone();
+    super::goals::tests::seed_http_claim(&pool, &addr).await;
     let state = test_state(pool.clone(), StateCfg::default());
     let app = app(state.clone());
 
-    let seed_id: i64 = sqlx::query_scalar("INSERT INTO credits.captcha_challenges (address, answer_x, expires_at) VALUES ($1, 10, $2) RETURNING id")
+    let seed_id: i64 = sqlx::query_scalar("INSERT INTO credits.captcha_challenges (address, answer_x, generated_at, expires_at) VALUES ($1, 10, timezone('UTC',now())-interval '2 seconds', $2) RETURNING id")
         .bind(&addr)
         .bind(future())
         .fetch_one(&pool)
@@ -6728,12 +6744,15 @@ async fn captcha_generate_consumes_the_prior_challenge_and_claim_reads_the_block
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(seeded_consumed, "the prior open challenge must be consumed");
+    assert!(
+        !seeded_consumed,
+        "the source refreshes the prior open challenge"
+    );
     let open_count: i64 = sqlx::query_scalar("SELECT count(*) FROM credits.captcha_challenges WHERE address = $1 AND consumed_at IS NULL").bind(&addr).fetch_one(&pool).await.unwrap();
     assert_eq!(open_count, 1);
 
     let seed_challenge = |pool: PgPool, addr: String| async move {
-        sqlx::query("INSERT INTO credits.captcha_challenges (address, answer_x, expires_at) VALUES ($1, 10, $2)").bind(&addr).bind(future()).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO credits.captcha_challenges (address, answer_x, generated_at, expires_at) VALUES ($1, 10, timezone('UTC',now())-interval '2 seconds', $2)").bind(&addr).bind(future()).execute(&pool).await.unwrap();
     };
     sqlx::query("UPDATE credits.captcha_challenges SET consumed_at = $2 WHERE address = $1")
         .bind(&addr)
@@ -6742,20 +6761,6 @@ async fn captcha_generate_consumes_the_prior_challenge_and_claim_reads_the_block
         .await
         .unwrap();
     seed_challenge(pool.clone(), addr.clone()).await;
-    let (status, v) = call(
-        &app,
-        &wallet,
-        "post",
-        "/credits/captcha",
-        &[],
-        Some(json!({ "x": 10.0 })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(
-        v,
-        json!({ "ok": true, "credits_granted": 0.0, "isBlockedForClaiming": false })
-    );
 
     state
         .credits
@@ -6774,6 +6779,11 @@ async fn captcha_generate_consumes_the_prior_challenge_and_claim_reads_the_block
     .await;
     assert_eq!(v["ok"], false);
     assert_eq!(v["isBlockedForClaiming"], true);
+    state
+        .credits
+        .admin_set_blocked(&addr, false, Some("qc"), Some("token:qc"), &json!({}))
+        .await
+        .unwrap();
 
     seed_challenge(pool.clone(), addr.clone()).await;
     let (_, v) = call(
@@ -6787,6 +6797,7 @@ async fn captcha_generate_consumes_the_prior_challenge_and_claim_reads_the_block
     .await;
     assert_eq!(v["ok"], false, "a wrong slider answer is rejected");
 
+    seed_challenge(pool.clone(), addr.clone()).await;
     let (status, v) = call(
         &app,
         &wallet,
@@ -6796,13 +6807,24 @@ async fn captcha_generate_consumes_the_prior_challenge_and_claim_reads_the_block
         Some(json!({ "x": 10.0 })),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["credits_granted"], 1.0);
+    let (status, _) = call(
+        &app,
+        &wallet,
+        "post",
+        "/credits/captcha",
+        &[],
+        Some(json!({"x":10.0})),
+    )
+    .await;
     assert_eq!(
         status,
         StatusCode::BAD_REQUEST,
-        "no open challenge left: {v}"
+        "claimed rewards cannot be claimed again"
     );
 
-    cleanup(&pool, &addr).await;
+    db.drop().await;
 }
 
 #[tokio::test]
@@ -7393,7 +7415,7 @@ async fn pricing_memoizes_the_spot_but_never_the_marketplace_feed() {
 
 async fn open_challenge(pool: &PgPool, addr: &str) {
     sqlx::query(
-        "INSERT INTO credits.captcha_challenges (address, answer_x, expires_at) VALUES ($1, 10, $2)",
+        "INSERT INTO credits.captcha_challenges (address, answer_x, generated_at, expires_at) VALUES ($1, 10, timezone('UTC',now())-interval '2 seconds', $2)",
     )
     .bind(addr)
     .bind(future())
@@ -7412,10 +7434,14 @@ async fn flag_count(pool: &PgPool, addr: &str) -> i64 {
 
 #[tokio::test]
 async fn a_multi_accounting_flag_blocks_the_claim_but_not_the_spend_or_the_reservation() {
-    let Some(pool) = pool().await else { return };
+    let Some(db) = OwnDatabase::create("flag_goals").await else {
+        return;
+    };
+    let pool = db.pool.clone();
     let wallet = scratch_wallet();
     let addr = wallet.address.clone();
     seed_wallet(&pool, &addr, "20", "15").await;
+    super::goals::tests::seed_http_claim(&pool, &addr).await;
     sqlx::query(
         "INSERT INTO credits.wallet_flags (address, source, ip) \
          VALUES ($1, 'explorer_anon_multi_accounting', '1.2.3.4')",
@@ -7461,13 +7487,18 @@ async fn a_multi_accounting_flag_blocks_the_claim_but_not_the_spend_or_the_reser
     .await;
     assert_eq!(v["ok"], false, "{v}");
     assert_eq!(v["isBlockedForClaiming"], true);
+    db.drop().await;
 }
 
 #[tokio::test]
 async fn the_admin_flag_blocks_the_claim_until_the_unblock_or_the_unflag() {
-    let Some(pool) = pool().await else { return };
+    let Some(db) = OwnDatabase::create("admin_flag_goals").await else {
+        return;
+    };
+    let pool = db.pool.clone();
     let wallet = scratch_wallet();
     let addr = wallet.address.clone();
+    super::goals::tests::seed_http_claim(&pool, &addr).await;
     let state = test_state(
         pool.clone(),
         StateCfg {
@@ -7609,6 +7640,7 @@ async fn the_admin_flag_blocks_the_claim_until_the_unblock_or_the_unflag() {
         v["deleted"], false,
         "an unflag of an unflagged wallet is idempotent"
     );
+    db.drop().await;
 }
 
 async fn wait_until<F, Fut>(what: &str, mut probe: F)
@@ -8117,7 +8149,7 @@ async fn a_reservation_under_one_operation_key_takes_one_set_of_lines() {
     );
     assert_eq!(rows_of(&pool, &addr).await, 1);
     // Whichever won, its own lines replay it and the other lines are refused.
-    let won_a = matches!(outcomes[0], Ok(_));
+    let won_a = outcomes[0].is_ok();
     let (won, won_digest, lost, lost_digest) = if won_a {
         (&ga, &digest_a, &gb, &digest_b)
     } else {

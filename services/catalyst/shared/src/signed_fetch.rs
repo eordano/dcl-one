@@ -29,6 +29,14 @@
 //! EIP-1654 (contract wallet) links verify through the [`Eip1654Validator`]
 //! the caller passes; with `None` they fail closed and the optional path reads
 //! them as anonymous.
+//!
+//! All of the above is the posture of [`PayloadPolicy`] callers, the profile
+//! [`VerificationProfile::node`]. A surface whose upstream verified with
+//! another middleware states its rules as a [`VerificationProfile`] instead
+//! ([`VerificationProfile::camera_reel_read`],
+//! [`VerificationProfile::camera_reel_write`]) and calls [`require_signer_with`];
+//! the chain shape, the path rule, the payload builders and the signature
+//! steps stay this module's.
 
 use axum::http::HeaderMap;
 use thiserror::Error;
@@ -43,8 +51,12 @@ use crate::auth::{AuthChain, AuthError, MAX_AUTH_CHAIN_LINKS};
 pub use crate::auth::signed_fetch::{
     AUTH_CHAIN_HEADER_PREFIX, AUTH_METADATA_HEADER, AUTH_TIMESTAMP_HEADER, FIVE_MINUTES,
     ORIGINAL_PATH_HEADER, SCENE_SIGNER, SignedPath, build_legacy_payload, build_payload_v6,
-    candidate_paths, field_is_canonical, header_str, is_refused_signer,
+    candidate_paths, field_is_canonical, header_str, is_refused_signer, names_scene_signer,
 };
+
+/// dcl-crypto-middleware-rs's default expiration: a signature older than
+/// this is stale.
+pub const SIXTY_SECONDS_MS: u64 = 60 * 1000;
 
 const DETAIL_MAX_CHARS: usize = 64;
 
@@ -213,6 +225,114 @@ pub enum PayloadPolicy {
     V6ThenLegacy,
 }
 
+/// How fresh the `x-identity-timestamp` must be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimestampWindow {
+    /// At most this many seconds old and at most `min(secs,
+    /// MAX_FUTURE_SKEW_SECS)` ahead; an absent or empty header reads as 0 and
+    /// expires ([`check_timestamp_window`]).
+    AroundNow { secs: i64 },
+    /// Required, an unsigned integer, and no more than this many milliseconds
+    /// old; any future timestamp is fresh ([`crate::auth::signed_fetch::check_past_window`]).
+    PastOnly { max_age_ms: u64 },
+}
+
+/// What the `x-identity-metadata` header must be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataHeader {
+    /// Absent reads as `{}`; present, it must be a JSON object (or `null`).
+    OptionalJsonObject,
+    /// Present, any string: the bytes are signed, never required to parse.
+    RequiredRaw,
+}
+
+/// What a request a scene runtime signed (`{"signer":
+/// "decentraland-kernel-scene"}`) gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SceneSignerRule {
+    /// Upstream gatsby's gate ([`is_refused_signer`]): the scene signer and
+    /// any non-canonical spelling of the `signer` key or value are refused,
+    /// and so is metadata that is not an object.
+    Gated,
+    /// The scene signer under any spelling is refused: metadata whose
+    /// object names it ([`names_scene_signer`]), and any metadata whose
+    /// lowercased bytes contain it. The second test is the one that holds
+    /// against a replay: the legacy payload folds case, so a scene-signed
+    /// header replayed with a literal uppercased (`false` -> `FALSE`) no
+    /// longer parses yet still verifies, and serde keeps the last of
+    /// duplicate `signer` keys; neither hides the signer from the bytes.
+    Refused,
+    /// Served as the chain's signer.
+    Allowed,
+}
+
+/// Whether the pre-6.0.0 folded payload is tried once the 6.x ones failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyFallback {
+    Refused,
+    /// Only when the metadata is an object spelling its `signer` key and
+    /// value canonically ([`field_is_canonical`]).
+    GuardedSigner,
+    /// With no guard: for a surface that authorizes nothing on the metadata
+    /// (dcl-crypto-middleware-rs `accept_legacy_payload(&[])`).
+    Unguarded,
+}
+
+/// A surface's signed-fetch rules: the stages [`require_signer_with`] runs
+/// over the shared chain shape, path rule and signature steps. Only the
+/// constructors below build one, so only their combinations exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerificationProfile {
+    window: TimestampWindow,
+    metadata: MetadataHeader,
+    scene_signer: SceneSignerRule,
+    legacy: LegacyFallback,
+}
+
+impl VerificationProfile {
+    /// @dcl/platform-crypto-middleware as the Node services use it: +/- 5
+    /// minutes, optional object metadata, the scene signer gated, and the
+    /// legacy payload as `policy` declares it behind the canonical-`signer`
+    /// guard. What [`require_signer_at`] runs.
+    pub const fn node(policy: PayloadPolicy) -> Self {
+        Self {
+            window: TimestampWindow::AroundNow { secs: FIVE_MINUTES },
+            metadata: MetadataHeader::OptionalJsonObject,
+            scene_signer: SceneSignerRule::Gated,
+            legacy: match policy {
+                PayloadPolicy::V6Only => LegacyFallback::Refused,
+                PayloadPolicy::V6ThenLegacy => LegacyFallback::GuardedSigner,
+            },
+        }
+    }
+
+    /// camera-reel-service's dcl-crypto-middleware-rs 0.3.0
+    /// (`VerificationOptions::default().accept_legacy_payload(&[])`) for its
+    /// reads: a signature at most 60 s old and never too new, the metadata
+    /// header required but unread, the legacy payload unguarded, and a
+    /// scene's request served as its signer, as upstream serves it.
+    pub const fn camera_reel_read() -> Self {
+        Self::camera_reel(SceneSignerRule::Allowed)
+    }
+
+    /// [`Self::camera_reel_read`] for the writes, with the scene signer
+    /// refused (upstream never checks it).
+    pub const fn camera_reel_write() -> Self {
+        Self::camera_reel(SceneSignerRule::Refused)
+    }
+
+    const fn camera_reel(scene_signer: SceneSignerRule) -> Self {
+        Self {
+            window: TimestampWindow::PastOnly {
+                max_age_ms: SIXTY_SECONDS_MS,
+            },
+            metadata: MetadataHeader::RequiredRaw,
+            scene_signer,
+            legacy: LegacyFallback::Unguarded,
+        }
+    }
+}
+
 /// [`require_signer_at`] for a route mounted at the root (`path` is both
 /// the request's and the route's).
 pub async fn require_signer(
@@ -225,10 +345,7 @@ pub async fn require_signer(
     require_signer_at(headers, method, &SignedPath::local(path), policy, validator).await
 }
 
-/// Stage order matches upstream `verify()`: chain extraction, timestamp,
-/// expiration, metadata parse, scene gate, signature (6.x first, then legacy
-/// behind the canonical-`signer` guard when `policy` allows it) over the
-/// [`candidate_paths`] of `path`.
+/// [`require_signer_with`] under [`VerificationProfile::node`]`(policy)`.
 pub async fn require_signer_at(
     headers: &HeaderMap,
     method: &str,
@@ -236,14 +353,66 @@ pub async fn require_signer_at(
     policy: PayloadPolicy,
     validator: Option<&dyn Eip1654Validator>,
 ) -> Result<Signer, SignedFetchError> {
-    let chain = extract_auth_chain(headers)?;
-    let ts = core::timestamp_or_zero(header_str(headers, AUTH_TIMESTAMP_HEADER));
-    let now = chrono::Utc::now().timestamp();
-    check_timestamp_window(ts, now, FIVE_MINUTES)?;
+    require_signer_with(
+        headers,
+        method,
+        path,
+        &VerificationProfile::node(policy),
+        validator,
+    )
+    .await
+}
 
-    let metadata_raw = header_str(headers, AUTH_METADATA_HEADER).unwrap_or("{}");
-    let metadata = parse_metadata(metadata_raw)?;
-    if is_refused_signer(&metadata) {
+/// Stage order matches upstream `verify()`: chain extraction, timestamp,
+/// expiration, metadata, scene gate, signature (6.x first, then the legacy
+/// one as `profile` allows) over the [`candidate_paths`] of `path`.
+pub async fn require_signer_with(
+    headers: &HeaderMap,
+    method: &str,
+    path: &SignedPath,
+    profile: &VerificationProfile,
+    validator: Option<&dyn Eip1654Validator>,
+) -> Result<Signer, SignedFetchError> {
+    let chain = extract_auth_chain(headers)?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now = now_ms.div_euclid(1000);
+    let ts = match profile.window {
+        TimestampWindow::AroundNow { secs } => {
+            let ts = core::timestamp_or_zero(header_str(headers, AUTH_TIMESTAMP_HEADER));
+            check_timestamp_window(ts, now, secs)?;
+            ts
+        }
+        TimestampWindow::PastOnly { max_age_ms } => {
+            let ts = header_str(headers, AUTH_TIMESTAMP_HEADER)
+                .ok_or_else(|| SignedFetchError::InvalidTimestamp(String::new()))?;
+            core::check_past_window(ts, now_ms.max(0) as u128, u128::from(max_age_ms))?;
+            ts
+        }
+    };
+
+    let (metadata_raw, metadata) = match profile.metadata {
+        MetadataHeader::OptionalJsonObject => {
+            let raw = header_str(headers, AUTH_METADATA_HEADER).unwrap_or("{}");
+            (raw, Some(parse_metadata(raw)?))
+        }
+        MetadataHeader::RequiredRaw => {
+            let raw = header_str(headers, AUTH_METADATA_HEADER).ok_or_else(|| {
+                SignedFetchError::MalformedChain {
+                    detail: format!("missing {AUTH_METADATA_HEADER}"),
+                }
+            })?;
+            (raw, core::parse_metadata(raw))
+        }
+    };
+    let scene = match profile.scene_signer {
+        SceneSignerRule::Gated => metadata.as_ref().is_none_or(is_refused_signer),
+        SceneSignerRule::Refused => {
+            metadata.as_ref().is_some_and(names_scene_signer)
+                || metadata_raw.to_lowercase().contains(SCENE_SIGNER)
+        }
+        SceneSignerRule::Allowed => false,
+    };
+    if scene {
         return Err(SignedFetchError::MalformedChain {
             detail: format!(
                 "invalid metadata content: \"{}\"",
@@ -252,11 +421,14 @@ pub async fn require_signer_at(
         });
     }
 
-    let legacy = match policy {
-        PayloadPolicy::V6Only => LegacyPayload::Refused,
-        PayloadPolicy::V6ThenLegacy => LegacyPayload::Guarded {
-            keys_canonical: field_is_canonical(&metadata, "signer"),
+    let legacy = match profile.legacy {
+        LegacyFallback::Refused => LegacyPayload::Refused,
+        LegacyFallback::GuardedSigner => LegacyPayload::Guarded {
+            keys_canonical: metadata
+                .as_ref()
+                .is_some_and(|m| field_is_canonical(m, "signer")),
         },
+        LegacyFallback::Unguarded => LegacyPayload::Accepted,
     };
     let request = SignedRequest {
         method,
@@ -680,6 +852,188 @@ mod tests {
             extract_auth_chain(&headers).unwrap_err(),
             SignedFetchError::MalformedChain { .. }
         ));
+    }
+
+    fn ms_from_now(offset_ms: i64) -> String {
+        (chrono::Utc::now().timestamp_millis() + offset_ms).to_string()
+    }
+
+    async fn camera_reel(
+        headers: &HeaderMap,
+        method: &str,
+        scene: SceneSignerRule,
+    ) -> Result<Signer, SignedFetchError> {
+        require_signer_with(
+            headers,
+            method,
+            &SignedPath::local(PATH),
+            &VerificationProfile::camera_reel(scene),
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn the_camera_reel_window_bounds_only_the_age() {
+        let at = |offset_ms| async move {
+            let headers = signed_headers_at("get", PATH, "{}", true, &ms_from_now(offset_ms)).await;
+            (
+                camera_reel(&headers, "get", SceneSignerRule::Refused).await,
+                require_signer(&headers, "get", PATH, PayloadPolicy::V6ThenLegacy, None).await,
+            )
+        };
+        let (reel, _) = at(-55_000).await;
+        assert!(reel.is_ok(), "{reel:?}");
+        let (reel, node) = at(-65_000).await;
+        assert!(
+            matches!(reel, Err(SignedFetchError::Expired { .. })),
+            "{reel:?}"
+        );
+        assert!(node.is_ok(), "the node window is still five minutes");
+        let (reel, node) = at(3_600_000).await;
+        assert!(reel.is_ok(), "a future signature is fresh: {reel:?}");
+        assert!(
+            matches!(node, Err(SignedFetchError::Expired { .. })),
+            "the node window still bounds the future: {node:?}"
+        );
+
+        for timestamp in [None, Some(""), Some("-1"), Some("yesterday")] {
+            let mut headers = signed_headers("get", PATH, "{}", true).await;
+            match timestamp {
+                None => headers.remove(AUTH_TIMESTAMP_HEADER),
+                Some(raw) => headers.insert(AUTH_TIMESTAMP_HEADER, HeaderValue::from_static(raw)),
+            };
+            assert!(
+                matches!(
+                    camera_reel(&headers, "get", SceneSignerRule::Allowed).await,
+                    Err(SignedFetchError::InvalidTimestamp(_))
+                ),
+                "{timestamp:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_camera_reel_metadata_is_required_but_never_parsed() {
+        let mut headers = signed_headers("get", PATH, "{}", true).await;
+        headers.remove(AUTH_METADATA_HEADER);
+        assert!(
+            camera_reel(&headers, "get", SceneSignerRule::Allowed)
+                .await
+                .is_err()
+        );
+        assert!(
+            require_signer(&headers, "get", PATH, PayloadPolicy::V6ThenLegacy, None)
+                .await
+                .is_ok(),
+            "the node profile reads an absent header as {{}}"
+        );
+
+        for metadata in ["not json", "[1,2]", "", r#"{"Signer":"Dcl:Explorer"}"#] {
+            let headers = signed_headers("get", PATH, metadata, true).await;
+            for scene in [SceneSignerRule::Allowed, SceneSignerRule::Refused] {
+                let signer = camera_reel(&headers, "get", scene)
+                    .await
+                    .unwrap_or_else(|e| panic!("{metadata:?} {scene:?}: {e}"));
+                assert_eq!(signer.as_str(), address().to_lowercase());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_camera_reel_legacy_payload_has_no_canonical_key_guard() {
+        let metadata = r#"{"Signer":"Dcl:Explorer","Intent":"Upload"}"#;
+        let headers = signed_headers("post", PATH, metadata, false).await;
+        assert!(
+            camera_reel(&headers, "post", SceneSignerRule::Refused)
+                .await
+                .is_ok()
+        );
+        assert!(matches!(
+            require_signer(&headers, "post", PATH, PayloadPolicy::V6ThenLegacy, None)
+                .await
+                .unwrap_err(),
+            SignedFetchError::MalformedChain { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_camera_reel_scene_signer_is_served_on_reads_and_refused_on_writes() {
+        for metadata in [
+            r#"{"signer":"decentraland-kernel-scene"}"#,
+            r#"{"Signer":"Decentraland-Kernel-Scene"}"#,
+        ] {
+            for v6 in [true, false] {
+                let headers = signed_headers("post", PATH, metadata, v6).await;
+                let signer = camera_reel(&headers, "post", SceneSignerRule::Allowed)
+                    .await
+                    .unwrap_or_else(|e| panic!("{metadata} v6={v6}: {e}"));
+                assert_eq!(signer.as_str(), address().to_lowercase());
+                assert!(
+                    camera_reel(&headers, "post", SceneSignerRule::Refused)
+                        .await
+                        .is_err(),
+                    "{metadata} v6={v6}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_replayed_scene_signature_stays_refused_on_writes_whatever_the_metadata_parses_to() {
+        // A legacy-signed scene request whose replay uppercases a literal: the
+        // metadata no longer parses, the folded payload still verifies.
+        let signed = r#"{"signer":"decentraland-kernel-scene","isGuest":false}"#;
+        let mut headers = signed_headers("patch", PATH, signed, false).await;
+        headers.insert(
+            AUTH_METADATA_HEADER,
+            HeaderValue::from_static(r#"{"signer":"decentraland-kernel-scene","isGuest":FALSE}"#),
+        );
+        assert!(
+            camera_reel(&headers, "patch", SceneSignerRule::Allowed)
+                .await
+                .is_ok(),
+            "the replay verifies"
+        );
+        assert!(matches!(
+            camera_reel(&headers, "patch", SceneSignerRule::Refused).await,
+            Err(SignedFetchError::MalformedChain { .. })
+        ));
+
+        // serde keeps the last of duplicate keys.
+        for v6 in [true, false] {
+            let headers = signed_headers(
+                "patch",
+                PATH,
+                r#"{"signer":"decentraland-kernel-scene","signer":"dcl:explorer"}"#,
+                v6,
+            )
+            .await;
+            assert!(
+                camera_reel(&headers, "patch", SceneSignerRule::Refused)
+                    .await
+                    .is_err(),
+                "duplicate signer keys, v6={v6}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_node_profile_is_the_payload_policy_posture() {
+        for (policy, legacy) in [
+            (PayloadPolicy::V6Only, LegacyFallback::Refused),
+            (PayloadPolicy::V6ThenLegacy, LegacyFallback::GuardedSigner),
+        ] {
+            assert_eq!(
+                VerificationProfile::node(policy),
+                VerificationProfile {
+                    window: TimestampWindow::AroundNow { secs: FIVE_MINUTES },
+                    metadata: MetadataHeader::OptionalJsonObject,
+                    scene_signer: SceneSignerRule::Gated,
+                    legacy,
+                }
+            );
+        }
     }
 
     #[test]

@@ -12,15 +12,10 @@
 //! timestamp, the pointers and this process's in-flight claim on them, the
 //! newer-entity check, the per-pointer rate limits, the request TTLs
 //! ([`DeployLimits`]), and the validation.
-//! With the content validator attached ([`WriteDeployer::with_validator`],
-//! as `serve` builds it) that is the old `ContentValidator` in full: the
-//! auth chain (the shared EIP-1654 validator for contract wallets), the
+//! Production construction requires the full content validator: auth chains,
 //! per-type rules and size caps, content existence, and the access step per
-//! type, whose LAND leg is the Checker contract's `checkLAND` at the
-//! deploy's block (undecidable when the chain cannot answer). Without it (a
-//! deployer built for a test) the partial checks below run: the chain, the
-//! LAND leg of a local scene over `land_authz::can_deploy_batch` and content
-//! existence. Peer sync does not use this deployer: it
+//! type. Test-support fixtures can explicitly select partial checks. Peer
+//! sync does not use this deployer: it
 //! batches through [`super::sync_deployer::LiveSyncDeployer`], which shares
 //! [`lock_deployment_pointers`].
 
@@ -44,9 +39,18 @@ use crate::auth::{AuthChain, AuthError, Eip1654Validator, hash_bytes, hash_bytes
 use crate::land_authz::LandAuthzState;
 use crate::storage::Storage;
 
+/// The local write decision, separate from its unchanged wire message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectionKind {
+    Validation,
+    PointerContention,
+    RateLimited,
+    Superseded,
+}
+
 #[derive(Debug, Clone)]
 pub enum DeployFailure {
-    Rejected(Vec<String>),
+    Rejected(RejectionKind, Vec<String>),
     /// This node could not decide, so the deposit is neither accepted nor at fault; answer 503 so
     /// the caller retries instead of being told their content does not exist.
     Unavailable(Vec<String>),
@@ -58,7 +62,7 @@ pub enum DeployFailure {
 impl DeployFailure {
     pub fn errors(&self) -> &[String] {
         match self {
-            DeployFailure::Rejected(errors)
+            DeployFailure::Rejected(_, errors)
             | DeployFailure::Unavailable(errors)
             | DeployFailure::Unverifiable(errors) => errors,
         }
@@ -85,7 +89,7 @@ fn deploy_error(entity_id: &str, cause: &str) -> DeployFailure {
 
 impl From<Vec<String>> for DeployFailure {
     fn from(errors: Vec<String>) -> Self {
-        DeployFailure::Rejected(errors)
+        DeployFailure::Rejected(RejectionKind::Validation, errors)
     }
 }
 
@@ -502,6 +506,12 @@ impl EntityLocks {
     }
 }
 
+enum LocalValidation {
+    Content(Arc<super::validator::Sources>),
+    #[cfg(any(test, feature = "test-support"))]
+    PartialChecks,
+}
+
 pub struct WriteDeployer {
     pool: PgPool,
     storage: Arc<Storage>,
@@ -512,9 +522,7 @@ pub struct WriteDeployer {
     /// checks' LAND leg (`None` runs none) and the unpublish route's parcel
     /// check.
     land_authz: Option<Arc<LandAuthzState>>,
-    /// The full content validator (`super::validator`); when attached it
-    /// replaces the partial checks in `validate`.
-    validator: Option<Arc<super::validator::Sources>>,
+    validator: LocalValidation,
     /// The shared denylist (`ContentState::denylist`): a deploy naming a
     /// listed id is refused.
     denylist: Option<Arc<Denylist>>,
@@ -534,23 +542,38 @@ pub struct WriteDeployer {
 }
 
 impl WriteDeployer {
-    pub fn new(pool: PgPool, storage: Arc<Storage>, eip1654: Arc<dyn Eip1654Validator>) -> Self {
-        Self::with_optional_eip1654(pool, storage, Some(eip1654))
-    }
-
-    /// `serve`'s constructor: `None` without `ETH_RPC_URL` (a contract-wallet
-    /// link is then undecidable, 503).
-    pub fn with_optional_eip1654(
+    /// Full local validation; a missing EIP-1654 source remains undecidable.
+    pub fn new(
         pool: PgPool,
         storage: Arc<Storage>,
         eip1654: Option<Arc<dyn Eip1654Validator>>,
+        sources: Arc<super::validator::Sources>,
+    ) -> Self {
+        Self::with_validation(pool, storage, eip1654, LocalValidation::Content(sources))
+    }
+
+    /// Partial chain, LAND and content checks for fixtures without validator sources.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_partial_validation_for_tests(
+        pool: PgPool,
+        storage: Arc<Storage>,
+        eip1654: Option<Arc<dyn Eip1654Validator>>,
+    ) -> Self {
+        Self::with_validation(pool, storage, eip1654, LocalValidation::PartialChecks)
+    }
+
+    fn with_validation(
+        pool: PgPool,
+        storage: Arc<Storage>,
+        eip1654: Option<Arc<dyn Eip1654Validator>>,
+        validator: LocalValidation,
     ) -> Self {
         Self {
             pool,
             storage,
             eip1654,
             land_authz: None,
-            validator: None,
+            validator,
             denylist: None,
             rate_limiter: DeployRateLimiter::with_reference_defaults(),
             request_ttl_backwards_ms: AtomicI64::new(REQUEST_TTL_BACKWARDS_MS),
@@ -591,6 +614,16 @@ impl WriteDeployer {
             .map_or_else(Vec::new, |held| held_of(held, pointers))
     }
 
+    #[cfg(test)]
+    pub(crate) fn hold_pointers_for_tests(
+        &self,
+        etype: &str,
+        pointers: &[String],
+    ) -> impl Drop + '_ {
+        self.claim_pointers(etype, pointers)
+            .expect("fixture pointers are free")
+    }
+
     /// Claims `pointers` of `etype` for one deploy; `Err` names the ones
     /// another deploy of this process holds, in the entity's order.
     fn claim_pointers<'a>(
@@ -623,11 +656,6 @@ impl WriteDeployer {
 
     pub fn with_land_authz(mut self, land: Option<Arc<LandAuthzState>>) -> Self {
         self.land_authz = land;
-        self
-    }
-
-    pub fn with_validator(mut self, sources: Arc<super::validator::Sources>) -> Self {
-        self.validator = Some(sources);
         self
     }
 
@@ -707,15 +735,16 @@ impl WriteDeployer {
                     "The signature is invalid. {e}"
                 )]))
             }
-            Err(e) => Err(DeployFailure::Rejected(vec![format!(
-                "The signature is invalid. {e}"
-            )])),
+            Err(e) => Err(DeployFailure::Rejected(
+                RejectionKind::Validation,
+                vec![format!("The signature is invalid. {e}")],
+            )),
         }
     }
 
     /// The validation of one partial-upload batch: the content validator's
-    /// staging subset when attached, else the LAND leg (the signature is
-    /// checked before). The access step is skipped when `include_access` is off.
+    /// staging subset (the signature is checked before). The access step is
+    /// skipped when `include_access` is off.
     pub(crate) async fn validate_staging(
         &self,
         entity: &Entity,
@@ -723,21 +752,26 @@ impl WriteDeployer {
         auth_chain: &AuthChain,
         include_access: bool,
     ) -> Result<(), DeployFailure> {
-        if let Some(sources) = &self.validator {
-            let ctx = super::validator::Context {
-                sources,
-                auth_chain,
-            };
-            return super::validator::validate_staging(entity, files, &ctx, include_access)
-                .await
-                .map_err(super::validator::into_deploy_failure);
+        match &self.validator {
+            LocalValidation::Content(sources) => {
+                let ctx = super::validator::Context {
+                    sources,
+                    auth_chain,
+                };
+                super::validator::validate_staging(entity, files, &ctx, include_access)
+                    .await
+                    .map_err(super::validator::into_deploy_failure)
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            LocalValidation::PartialChecks => {
+                if include_access
+                    && let Some(signer) = auth_chain.first().map(|link| link.payload.to_lowercase())
+                {
+                    self.validate_land_rights(entity, &signer).await?;
+                }
+                Ok(())
+            }
         }
-        if include_access
-            && let Some(signer) = auth_chain.first().map(|link| link.payload.to_lowercase())
-        {
-            self.validate_land_rights(entity, &signer).await?;
-        }
-        Ok(())
     }
 
     /// Forgets every per-pointer TTL: a route test deploys to one pointer
@@ -757,6 +791,7 @@ impl WriteDeployer {
     /// a parcel the signer may deploy to. A source that cannot decide
     /// (`land_authz::Unavailable`) is `Unavailable`, never a grant and never
     /// a refusal blamed on the depositor.
+    #[cfg(any(test, feature = "test-support"))]
     async fn validate_land_rights(
         &self,
         entity: &Entity,
@@ -776,9 +811,12 @@ impl WriteDeployer {
             match parsed {
                 Some(c) => coords.push(c),
                 None => {
-                    return Err(DeployFailure::Rejected(vec![format!(
-                        "Scene pointers must be x,y parcel coordinates. Invalid pointer: ({pointer})"
-                    )]));
+                    return Err(DeployFailure::Rejected(
+                        RejectionKind::Validation,
+                        vec![format!(
+                            "Scene pointers must be x,y parcel coordinates. Invalid pointer: ({pointer})"
+                        )],
+                    ));
                 }
             }
         }
@@ -799,12 +837,13 @@ impl WriteDeployer {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(DeployFailure::Rejected(errors))
+            Err(DeployFailure::Rejected(RejectionKind::Validation, errors))
         }
     }
 
     /// `Ok(None)` is provably absent, `Err` a storage fault: damage this node cannot read is
     /// never reported as a depositor's miss.
+    #[cfg(any(test, feature = "test-support"))]
     async fn is_content_stored_already(
         &self,
         hashes: &[String],
@@ -838,50 +877,58 @@ impl WriteDeployer {
         entity: &Entity,
         files: &HashMap<String, Bytes>,
         auth_chain: &AuthChain,
-        context: &str,
+        _context: &str,
     ) -> Result<(), DeployFailure> {
-        if let Some(sources) = &self.validator {
-            let ctx = super::validator::Context {
-                sources,
-                auth_chain,
-            };
-            return super::validator::validate(entity, files, &ctx)
-                .await
-                .map_err(super::validator::into_deploy_failure);
-        }
-        // The chain was checked before the server checks.
-        if context == "LOCAL"
-            && let Some(signer) = auth_chain.first().map(|link| link.payload.to_lowercase())
-        {
-            self.validate_land_rights(entity, &signer).await?;
-        }
+        match &self.validator {
+            LocalValidation::Content(sources) => {
+                let ctx = super::validator::Context {
+                    sources,
+                    auth_chain,
+                };
+                super::validator::validate(entity, files, &ctx)
+                    .await
+                    .map_err(super::validator::into_deploy_failure)
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            LocalValidation::PartialChecks => {
+                // The chain was checked before the server checks.
+                if _context == "LOCAL"
+                    && let Some(signer) = auth_chain.first().map(|link| link.payload.to_lowercase())
+                {
+                    self.validate_land_rights(entity, &signer).await?;
+                }
 
-        let not_uploaded: Vec<String> = entity
-            .content
-            .iter()
-            .map(|c| c.hash.clone())
-            .filter(|hash| !files.contains_key(hash))
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        if !not_uploaded.is_empty() {
-            let stored = self
-                .is_content_stored_already(&not_uploaded)
-                .await
-                .map_err(|e| DeployFailure::Unavailable(vec![e]))?;
-            let mut missing: Vec<String> = not_uploaded
-                .into_iter()
-                .filter(|hash| !stored.get(hash).copied().unwrap_or(false))
-                .collect();
-            if !missing.is_empty() {
-                missing.sort();
-                return Err(DeployFailure::Rejected(vec![format!(
-                    "These content files are neither uploaded nor already stored: {}",
-                    missing.join(", ")
-                )]));
+                let not_uploaded: Vec<String> = entity
+                    .content
+                    .iter()
+                    .map(|c| c.hash.clone())
+                    .filter(|hash| !files.contains_key(hash))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                if !not_uploaded.is_empty() {
+                    let stored = self
+                        .is_content_stored_already(&not_uploaded)
+                        .await
+                        .map_err(|e| DeployFailure::Unavailable(vec![e]))?;
+                    let mut missing: Vec<String> = not_uploaded
+                        .into_iter()
+                        .filter(|hash| !stored.get(hash).copied().unwrap_or(false))
+                        .collect();
+                    if !missing.is_empty() {
+                        missing.sort();
+                        return Err(DeployFailure::Rejected(
+                            RejectionKind::Validation,
+                            vec![format!(
+                                "These content files are neither uploaded nor already stored: {}",
+                                missing.join(", ")
+                            )],
+                        ));
+                    }
+                }
+                Ok(())
             }
         }
-        Ok(())
     }
 
     async fn is_content_unchanged(&self, entity: &Entity) -> bool {
@@ -963,16 +1010,6 @@ pub(crate) fn newer_entity_message(entity: &Entity) -> String {
     )
 }
 
-/// Whether `message` refuses pointers another deploy of this process holds.
-pub(crate) fn is_pointer_conflict_message(message: &str) -> bool {
-    message.starts_with("The following pointers are currently being deployed: ")
-}
-
-/// Whether `message` is [`newer_entity_message`]'s.
-pub(crate) fn is_newer_entity_message(message: &str) -> bool {
-    message
-        .starts_with("There is a newer entity pointed by one or more of the pointers you provided")
-}
 pub(crate) const REQUEST_TTL_FORWARDS_MS: i64 = 15 * 60 * 1000;
 
 impl WriteDeployer {
@@ -1052,7 +1089,7 @@ impl WriteDeployer {
             .and_then(|d| super::denylist::refusal(&entity, d))
         {
             warn!(entity_id, ?errors, "deployment refused: denylisted");
-            return Err(DeployFailure::Rejected(errors));
+            return Err(DeployFailure::Rejected(RejectionKind::Validation, errors));
         }
 
         let auth_chain: AuthChain = serde_json::from_value(auth_chain)
@@ -1066,10 +1103,13 @@ impl WriteDeployer {
             return Err(vec!["The entity does not have any pointer.".to_string()].into());
         }
         let in_flight = |busy: Vec<String>| {
-            vec![format!(
-                "The following pointers are currently being deployed: '{}'. Please try again in a few seconds.",
-                busy.join(",")
-            )]
+            DeployFailure::Rejected(
+                RejectionKind::PointerContention,
+                vec![format!(
+                    "The following pointers are currently being deployed: '{}'. Please try again in a few seconds.",
+                    busy.join(",")
+                )],
+            )
         };
         let max_pointers = if entity.entity_type == EntityType::Scene {
             MAX_SCENE_POINTERS
@@ -1086,13 +1126,18 @@ impl WriteDeployer {
         // Upstream's early refusal, without taking a claim.
         let busy = self.busy_pointers(entity.entity_type.as_str(), &entity.pointers);
         if !busy.is_empty() {
-            return Err(in_flight(busy).into());
+            return Err(in_flight(busy));
         }
 
         // An early refusal, as upstream's; the write's own check is binding,
         // so a failed lookup goes on to it.
         match self.has_newer_deployment(&entity).await {
-            Ok(true) => return Err(vec![newer_entity_message(&entity)].into()),
+            Ok(true) => {
+                return Err(DeployFailure::Rejected(
+                    RejectionKind::Superseded,
+                    vec![newer_entity_message(&entity)],
+                ));
+            }
             Ok(false) => {}
             Err(e) => warn!(entity_id, error = %e, "newer-entity lookup failed"),
         }
@@ -1109,12 +1154,18 @@ impl WriteDeployer {
             .rate_limiter
             .is_rate_limited(entity.entity_type.as_str(), pointers_lc)
         {
-            return Err(rate_limited_msg().into());
+            return Err(DeployFailure::Rejected(
+                RejectionKind::RateLimited,
+                rate_limited_msg(),
+            ));
         }
         let content_unchanged =
             entity.entity_type == EntityType::Profile && self.is_content_unchanged(&entity).await;
         if content_unchanged && self.rate_limiter.is_unchanged_limited(pointers_lc) {
-            return Err(rate_limited_msg().into());
+            return Err(DeployFailure::Rejected(
+                RejectionKind::RateLimited,
+                rate_limited_msg(),
+            ));
         }
 
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -1162,9 +1213,9 @@ impl WriteDeployer {
         let validation_started = Instant::now();
         match self.validate(&entity, &vfiles, &auth_chain, context).await {
             Ok(()) => {}
-            Err(DeployFailure::Rejected(errors)) => {
+            Err(DeployFailure::Rejected(kind, errors)) => {
                 warn!(entity_id, ?errors, "deployment rejected by validation");
-                return Err(DeployFailure::Rejected(errors));
+                return Err(DeployFailure::Rejected(kind, errors));
             }
             Err(DeployFailure::Unavailable(errors)) => {
                 warn!(
@@ -1196,7 +1247,10 @@ impl WriteDeployer {
             self.rate_limiter
                 .reserve(entity.entity_type.as_str(), pointers_lc, content_unchanged)
         else {
-            return Err(rate_limited_msg().into());
+            return Err(DeployFailure::Rejected(
+                RejectionKind::RateLimited,
+                rate_limited_msg(),
+            ));
         };
         let persisted = match self
             .persist(&entity, &entity_bytes, &uploads, &auth_chain, context)
@@ -1530,7 +1584,10 @@ impl WriteDeployer {
         tracing::debug!(target: "catalyst_perf", phase="persist", entity_id=%entity.id, storage_us, db_us=db_started.elapsed().as_micros() as u64);
 
         if outcome.newer {
-            return Err(DeployFailure::Rejected(vec![newer_entity_message(entity)]));
+            return Err(DeployFailure::Rejected(
+                RejectionKind::Superseded,
+                vec![newer_entity_message(entity)],
+            ));
         }
         let Some(dep_id) = outcome.dep_id else {
             info!(entity_id = %entity.id, "entity already deployed; treating as success");

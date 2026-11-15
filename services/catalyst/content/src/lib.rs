@@ -58,6 +58,7 @@ pub mod write_deployer;
 // the upstream forwarding of local deploys (CONTENT_FORWARD_UPSTREAM_URL).
 pub mod create_entity;
 pub mod denylist;
+pub mod failed_deployments_store;
 pub mod forward;
 pub mod land_publish;
 pub mod partial_deployments;

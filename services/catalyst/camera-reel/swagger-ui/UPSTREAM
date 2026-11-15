@@ -1,0 +1,5 @@
+Repository: https://github.com/swagger-api/swagger-ui
+Version: v5.3.1
+Distribution: utoipa-swagger-ui 3.1.5, res/swagger-ui-5.3.1.zip
+Package SHA256: 84614caa239fb25b2bb373a52859ffd94605ceb256eeb1d63436325cf81e3653
+Files: unmodified dist/*, LICENSE, NOTICE

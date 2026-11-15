@@ -33,6 +33,7 @@ use crate::storage::Storage;
 use tokio::time::{Duration, Instant};
 
 mod captures;
+mod signed_fetch;
 
 const API_URL: &str = "http://127.0.0.1:5149/camera-reel-service";
 const PREFIX: &str = "/camera-reel-service";
@@ -294,7 +295,7 @@ async fn signed_headers(w: &Wallet, method: &str, path: &str, v6: bool) -> Vec<(
         AuthLink {
             link_type: AuthLinkType::SIGNER,
             payload: format!("{:#x}", w.signer.address()),
-            signature: None,
+            signature: Some(String::new()),
         },
         AuthLink {
             link_type: AuthLinkType::EcdsaSignedEntity,
@@ -1806,13 +1807,8 @@ async fn upload_over_signed_fetch_is_served_back_and_owned() {
         Some((body.clone(), &ct)),
     )
     .await;
-    assert_eq!(
-        (status, json_of(&resp)),
-        (
-            StatusCode::UNAUTHORIZED,
-            json!({ "message": "Unauthorized" })
-        )
-    );
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(resp, b"Unathorized");
     let (other, other_ct) = multipart(
         &bytes,
         "image/png",
@@ -1845,21 +1841,25 @@ async fn upload_over_signed_fetch_is_served_back_and_owned() {
     assert_eq!(uploaded["currentImages"], 1);
     assert_eq!(uploaded["maxImages"], 500);
     let image_hash = hash_bytes_v1(&bytes);
+    let image_id = uploaded["image"]["id"].as_str().unwrap().to_string();
     assert_eq!(
         uploaded["image"]["url"],
-        format!("{API_URL}/api/images/{image_hash}")
+        format!("{API_URL}/api/images/{image_id}-shot.png")
     );
     assert_eq!(uploaded["image"]["isPublic"], false);
     assert_eq!(uploaded["image"]["metadata"]["placeId"], place);
-    let image_id = uploaded["image"]["id"].as_str().unwrap().to_string();
     let thumbnail_url = uploaded["image"]["thumbnailUrl"].as_str().unwrap();
-    let thumbnail_hash = thumbnail_url.rsplit('/').next().unwrap().to_string();
+    assert_eq!(
+        thumbnail_url,
+        format!("{API_URL}/api/images/{image_id}-thumbnail-shot.png")
+    );
+    let thumbnail_hash = s.db().get_image(&image_id).await.unwrap().thumbnail_hash;
 
     // the blobs, from the ONE store, typed by their bytes
     let (status, headers, served) = send(
         s.app(),
         "GET",
-        &format!("{PREFIX}/api/images/{image_hash}"),
+        &format!("{PREFIX}/api/files/{image_hash}"),
         vec![],
         None,
     )
@@ -1870,7 +1870,7 @@ async fn upload_over_signed_fetch_is_served_back_and_owned() {
     let (status, _, thumb) = send(
         s.app(),
         "GET",
-        &format!("{PREFIX}/api/images/{thumbnail_hash}"),
+        &format!("{PREFIX}/api/files/{thumbnail_hash}"),
         vec![],
         None,
     )
@@ -2005,7 +2005,7 @@ async fn upload_over_signed_fetch_is_served_back_and_owned() {
     let (status, _, _) = send(
         s.app(),
         "GET",
-        &format!("{PREFIX}/api/images/{image_hash}"),
+        &format!("{PREFIX}/api/files/{image_hash}"),
         vec![],
         None,
     )
@@ -2138,7 +2138,7 @@ async fn the_moderator_hides_a_rejected_row_and_its_blobs() {
     let (status, _, served) = send(
         s.app(),
         "GET",
-        &format!("{PREFIX}/api/images/{hash}"),
+        &format!("{PREFIX}/api/files/{hash}"),
         vec![],
         None,
     )
@@ -2173,7 +2173,7 @@ async fn the_moderator_hides_a_rejected_row_and_its_blobs() {
     let (status, _, _) = send(
         s.app(),
         "GET",
-        &format!("{PREFIX}/api/images/{hash}"),
+        &format!("{PREFIX}/api/files/{hash}"),
         vec![],
         None,
     )
@@ -2219,7 +2219,7 @@ async fn the_moderator_hides_a_rejected_row_and_its_blobs() {
     let (status, _, _) = send(
         s.app(),
         "GET",
-        &format!("{PREFIX}/api/images/{hash}"),
+        &format!("{PREFIX}/api/files/{hash}"),
         vec![],
         None,
     )
@@ -2292,7 +2292,7 @@ async fn node_around(s: &Scratch) -> Router {
 async fn bytes_everywhere(app: &Router, hash: &str) -> [(StatusCode, bool); 3] {
     let mut out = [(StatusCode::IM_A_TEAPOT, false); 3];
     for (i, path) in [
-        format!("{PREFIX}/api/images/{hash}"),
+        format!("{PREFIX}/api/files/{hash}"),
         format!("/contents/{hash}"),
         format!("/builder-api/contents/{hash}"),
     ]
@@ -2332,14 +2332,8 @@ async fn a_rejected_or_deleted_photo_is_withheld_on_every_contents_route() {
     let uploaded = json_of(&resp);
     let id = uploaded["image"]["id"].as_str().unwrap().to_string();
     let image_hash = s.hash(&hash_bytes_v1(&bytes));
-    let thumb_hash = s.hash(
-        uploaded["image"]["thumbnailUrl"]
-            .as_str()
-            .unwrap()
-            .rsplit('/')
-            .next()
-            .unwrap(),
-    );
+    let stored_thumbnail = s.db().get_image(&id).await.unwrap().thumbnail_hash;
+    let thumb_hash = s.hash(&stored_thumbnail);
     assert_ne!(image_hash, thumb_hash);
     let served = [(StatusCode::OK, true); 3];
     let withheld = [(StatusCode::NOT_FOUND, false); 3];
@@ -2846,6 +2840,8 @@ async fn the_wearable_gallery_is_the_public_photos_of_an_item_whoever_asks() {
     s.done().await;
 }
 
+#[path = "storage_parity_tests.rs"]
+mod storage_parity_tests;
 // ---- parity with camera-reel-service 3e8bd0b: screen rects, CORS, extractor
 // rejections, routing fallbacks, upload checks ----
 
@@ -3205,7 +3201,7 @@ async fn query_and_body_rejections_are_upstreams_plain_text_400() {
         (status, body.as_slice()),
         (StatusCode::BAD_REQUEST, &b"Content type error"[..])
     );
-    let big = vec![b' '; crate::extract::MAX_JSON_BODY_BYTES + 1];
+    let big = vec![b' '; (2 * 1024 * 1024) + 1];
     let (status, _, _) = send(
         app.clone(),
         "POST",
@@ -3277,7 +3273,7 @@ async fn a_failed_world_lookup_is_a_502_without_the_database_error() {
         (status, json_of(&body)),
         (
             StatusCode::BAD_GATEWAY,
-            json!({ "message": "failed to resolve world name" })
+            json!({ "message": "failed to resolve world name: request failed: place lookup unavailable" })
         )
     );
     let batch = json!({ "placesIds": ["somebody.dcl.eth"] })
@@ -3295,7 +3291,7 @@ async fn a_failed_world_lookup_is_a_502_without_the_database_error() {
         (status, json_of(&body)),
         (
             StatusCode::BAD_GATEWAY,
-            json!({ "message": "failed to resolve world name" })
+            json!({ "message": "failed to resolve world name: request failed: place lookup unavailable" })
         )
     );
     let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -3418,7 +3414,7 @@ async fn an_uploaded_screen_rect_is_validated_and_read_back_everywhere() {
 }
 
 #[tokio::test]
-async fn upload_checks_the_cap_first_then_the_form_as_upstream() {
+async fn upload_checks_form_types_then_cap_then_metadata_as_upstream() {
     let mut settings = Settings::new(API_URL);
     settings.writes_enabled = true;
     settings.max_images_per_user = 1;
@@ -3441,12 +3437,22 @@ async fn upload_checks_the_cap_first_then_the_form_as_upstream() {
     ] {
         let (body, ct) = upload(file_name, is_public);
         let headers = signed_headers(&w, "post", &path, true).await;
-        let (status, _, resp) = send(s.app(), "POST", &path, headers, Some((body, &ct))).await;
+        let (status, headers, resp) =
+            send(s.app(), "POST", &path, headers, Some((body, &ct))).await;
         assert_eq!(
-            (status, json_of(&resp)),
-            (StatusCode::BAD_REQUEST, json!({ "message": message })),
+            status,
+            StatusCode::BAD_REQUEST,
             "{file_name:?} {is_public:?}"
         );
+        if message == "invalid is_public field" {
+            assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+            assert_eq!(
+                String::from_utf8(resp).unwrap(),
+                "An error occurred processing field `is_public`: Plain text deserialize error: cannot parse boolean: provided string was not `true` or `false`"
+            );
+        } else {
+            assert_eq!(json_of(&resp), json!({ "message": message }));
+        }
     }
     assert_eq!(s.count(&owner).await, 0);
 
@@ -3456,17 +3462,38 @@ async fn upload_checks_the_cap_first_then_the_form_as_upstream() {
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&resp));
     assert_eq!(json_of(&resp)["image"]["isPublic"], false);
 
-    // At the cap, a request whose form would be a 400 is the 403 first.
+    // MultipartForm<Upload> parses Text<bool> before the source handler runs,
+    // so a malformed boolean still fails before the quota check at the cap.
     let (body, ct) = multipart_raw(b"not an image", "a/b.png", &json!("not metadata"), "maybe");
+    let headers = signed_headers(&w, "post", &path, true).await;
+    let (status, headers, resp) = send(s.app(), "POST", &path, headers, Some((body, &ct))).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        String::from_utf8_lossy(&resp)
+    );
+    assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+    assert_eq!(
+        String::from_utf8(resp).unwrap(),
+        "An error occurred processing field `is_public`: Plain text deserialize error: cannot parse boolean: provided string was not `true` or `false`"
+    );
+
+    // Once form types parse, the cap precedes metadata, image and filename checks.
+    let (body, ct) = multipart_raw(b"not an image", "a/b.png", &json!("not metadata"), "true");
     let headers = signed_headers(&w, "post", &path, true).await;
     let (status, _, resp) = send(s.app(), "POST", &path, headers, Some((body, &ct))).await;
     assert_eq!(
-        (status, json_of(&resp)),
-        (
-            StatusCode::FORBIDDEN,
-            json!({ "reason": "maxLimitReached", "message": "you have reached the limit of 1 max images" })
-        )
+        status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        String::from_utf8_lossy(&resp)
     );
+    assert_eq!(
+        json_of(&resp),
+        json!({ "reason": "maxLimitReached", "message": "you have reached the limit of 1 max images" })
+    );
+    assert_eq!(s.count(&owner).await, 1);
     s.done().await;
 }
 

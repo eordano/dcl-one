@@ -3,19 +3,23 @@ use bevy::prelude::*;
 use bevy_console::ConsoleCommand;
 use console::{AddDebugSection, DebugSection, DoAddConsoleCommand};
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<ParticleState, _>(particle_state)
-        .add_debug_section(DebugSection {
-            title: "SDK particles",
-            query: "/particle_state",
-            fields: &[
-                ("Live particles in active scenes", "live"),
-                ("Emitters", "emitters"),
-                ("Allocated slots", "capacity"),
-            ],
-            actions: &[],
-            inputs: &[],
-        });
+pub(super) struct ParticleDebugPanelPlugin;
+
+impl Plugin for ParticleDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<ParticleState, _>(particle_state)
+            .add_debug_section(DebugSection {
+                title: "SDK particles",
+                query: "/particle_state",
+                fields: &[
+                    ("Live particles in active scenes", "live"),
+                    ("Emitters", "emitters"),
+                    ("Allocated slots", "capacity"),
+                ],
+                actions: &[],
+                inputs: &[],
+            });
+    }
 }
 
 /// Read live CPU particle rings for emitters in scenes containing the player.

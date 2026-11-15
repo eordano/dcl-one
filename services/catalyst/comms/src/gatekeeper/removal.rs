@@ -1,4 +1,5 @@
 //! Comms-owned durable ban removals; no network call runs in a SQL transaction.
+use crate::gatekeeper::admission::cluster::safety::{DispatchPhase, DispatchState};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2075,10 +2076,10 @@ async fn begin_island_dispatch(
         let dispatch = SafetyStore::dispatch(&mut lease.tx, id)
             .await
             .map_err(|_| anyhow!("invalid island dispatch"))?;
-        existing_obligation = dispatch.state == "settled_late";
+        existing_obligation = dispatch.state == DispatchState::SettledLate;
         if matches!(
-            dispatch.state.as_str(),
-            "dispatched" | "quarantine" | "confirmed"
+            dispatch.state,
+            DispatchState::Dispatched | DispatchState::Quarantine | DispatchState::Confirmed
         ) {
             lease
                 .commit()
@@ -2162,7 +2163,9 @@ async fn drive_island_dispatch(
     identity: &str,
     connection: bool,
 ) -> Result<bool> {
-    use crate::gatekeeper::admission::cluster::safety::Settlement;
+    use crate::gatekeeper::admission::cluster::safety::{
+        QuarantinePolicy, RemovalOutcome, Settlement, classify_removal,
+    };
     let mut dispatch = dispatch.clone();
     let service = state.room_service();
     for repair in 0..2 {
@@ -2175,32 +2178,26 @@ async fn drive_island_dispatch(
         } else {
             call.await
         };
-        let settlement = match outcome {
-            Ok(_) => {
-                if state.cluster.self_hosted_token_quarantine && dispatch.phase == "initial" {
-                    Settlement::Quarantine(
-                        crate::gatekeeper::admission::cluster::MAX_ISLAND_TOKEN_TTL_SECONDS
-                            + 60
-                            + 2,
-                    )
-                } else if !state.cluster.self_hosted_token_quarantine
-                    && chrono::Utc::now().timestamp_millis().max(0) as u64 + 1000
-                        >= dispatch.cutoff.saturating_mul(1000)
-                {
-                    Settlement::SettledLate
-                } else {
-                    Settlement::Confirmed
-                }
-            }
+        let classified = match outcome {
+            Ok(_) => RemovalOutcome::Positive,
             Err(RoomServiceError::RemovalRejected | RoomServiceError::RemovalRoomMissing) => {
-                if dispatch.phase == "quarantine_final" {
-                    Settlement::SettledLate
-                } else {
-                    Settlement::Rejected
-                }
+                RemovalOutcome::Rejected
             }
-            Err(_) => return Err(IslandDispatchUncertain.into()),
+            Err(_) => RemovalOutcome::Unknown,
         };
+        let quarantine = if state.cluster.self_hosted_token_quarantine {
+            QuarantinePolicy::Enabled { applies: true }
+        } else {
+            QuarantinePolicy::Disabled
+        };
+        let settlement = classify_removal(
+            classified,
+            dispatch.phase,
+            quarantine,
+            chrono::Utc::now().timestamp_millis().max(0) as u64,
+            dispatch.cutoff,
+        )
+        .ok_or(IslandDispatchUncertain)?;
         if !matches!(
             state
                 .island_safety
@@ -2211,7 +2208,7 @@ async fn drive_island_dispatch(
             return Err(anyhow!("island settlement was not recorded"));
         }
         if matches!(outcome, Err(RoomServiceError::RemovalRoomMissing))
-            && dispatch.phase == "quarantine_final"
+            && dispatch.phase == DispatchPhase::QuarantineFinal
             && repair == 0
         {
             // Definite absence is recorded, never treated as revocation. Establish
@@ -2242,10 +2239,10 @@ async fn remove_island(
     let Some(mut dispatch) = begin_island_dispatch(state, row, actor, room, identity).await? else {
         return finish(&state.pool, row).await.map_err(Into::into);
     };
-    if dispatch.state == "confirmed" {
+    if dispatch.state == DispatchState::Confirmed {
         return finish(&state.pool, row).await.map_err(Into::into);
     }
-    if dispatch.state == "quarantine" {
+    if dispatch.state == DispatchState::Quarantine {
         let Some(final_dispatch) = state
             .island_safety
             .begin_quarantine_final(dispatch.dispatch_id)

@@ -14,7 +14,9 @@ use std::collections::{BTreeMap, HashSet};
 
 use sqlx::PgConnection;
 
-use super::engine::{Flow, SELECT_VISITS, Visit, connections, drop_visit};
+use super::engine::{
+    Flow, SELECT_VISITS, Visit, connections, drop_visit, persist_remaining_connections,
+};
 
 /// Prune batches per table per sweep: with the default batch, 20,000 rows
 /// per table a minute, the bound on one sweep's transaction.
@@ -151,30 +153,7 @@ impl Flow<'_> {
             &old_sessions,
         )
         .await?;
-        if kept.is_empty() {
-            sqlx::query(
-                "DELETE FROM social.presence_visits WHERE badge_id = $1 AND wallet = $2 AND room = $3",
-            )
-            .bind(&visit.badge_id)
-            .bind(&visit.wallet)
-            .bind(&visit.room)
-            .execute(&mut *conn)
-            .await?;
-        } else {
-            let (joins, sessions): (Vec<i64>, Vec<String>) = kept.into_iter().unzip();
-            sqlx::query(
-                "UPDATE social.presence_visits SET joins = $4, sessions = $5, opened_at = $6 \
-                 WHERE badge_id = $1 AND wallet = $2 AND room = $3",
-            )
-            .bind(&visit.badge_id)
-            .bind(&visit.wallet)
-            .bind(&visit.room)
-            .bind(&joins)
-            .bind(&sessions)
-            .bind(joins[0])
-            .execute(&mut *conn)
-            .await?;
-        }
+        persist_remaining_connections(conn, visit, &kept).await?;
         Ok(old.len())
     }
 

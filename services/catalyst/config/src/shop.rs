@@ -485,6 +485,15 @@ pub struct ShopConfig {
     )]
     pub shop_base_url: String,
 
+    /// Credits' feature service; empty uses explicit node overrides only.
+    #[arg(long, env = "CREDITS_FEATURE_FLAGS_URL", default_value = "")]
+    pub credits_feature_flags_url: String,
+    /// Credits' own Referer context, normalized with https when no scheme is supplied.
+    #[arg(long, env = "CREDITS_SERVER_URL", default_value = "")]
+    pub credits_server_url: String,
+    #[arg(long, env = "CREDITS_FEATURE_FLAGS_REFRESH_SECS", default_value_t = 60)]
+    pub credits_feature_flags_refresh_secs: u64,
+
     /// The feature-flags service the Shop reads decentraland.org's `dapps` rollout flags from (as sites'
     /// `FEATURE_FLAGS_URL`); empty reads only this node's local overrides (`explore_api.feature_flags_local`).
     #[arg(long, env = "SHOP_FEATURE_FLAGS_URL", default_value = "")]

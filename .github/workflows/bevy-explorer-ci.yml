@@ -40,7 +40,8 @@
       - tooling/tests/test_image_publish.py
       - .github/workflows/apis-sites-images.yml
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    # ready_for_review starts the jobs on larger runners that a draft holds (tooling/bevy-ci.py).
+    types: [opened, synchronize, reopened, ready_for_review, closed]
     paths:
       - .cargo/**
       - rust-toolchain*
@@ -94,7 +95,7 @@ concurrency:
 name: Bevy Explorer / CI
 jobs:
   source:
-    # Every build job needs this one, so a closed PR runs only preview-cleanup.
+    # A closed PR runs only preview-cleanup: this job, the format jobs and Changes skip it, and every build job needs Changes.
     if: github.event.action != 'closed'
     name: Integration guards
     runs-on: ubuntu-24.04
@@ -118,6 +119,9 @@ jobs:
       - name: Verify the vendored texture decoder bytes and patch replay
         run: python3 rendering/bevy-explorer/source/vendor/basisu/verify.py
   changes:
+    # It reads nothing from the guards, so it runs beside them. The build jobs need only this job; stop-builds ends
+    # them when a guard or a format check fails.
+    if: github.event.action != 'closed'
     name: Changes
     runs-on: ubuntu-24.04
     permissions:
@@ -130,6 +134,7 @@ jobs:
       web: ${{ steps.plan.outputs.web }}
       native-matrix: ${{ steps.plan.outputs.native-matrix == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:macos') }}
       images: ${{ steps.consumers.outputs.images }}
+      held: ${{ steps.plan.outputs.held }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select engine builds from their inputs
@@ -148,12 +153,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 tooling/bevy-ci.py consumer-plan
     timeout-minutes: 10
-    needs:
-      - source
   test:
     name: Test Suite
     needs:
-      - source
       - changes
     if: ${{ needs.changes.outputs.test == 'true' && (needs.changes.outputs.native-matrix == 'true' || github.actor != 'dependabot[bot]') }}
     strategy:
@@ -213,7 +215,7 @@ jobs:
           sudo python3 ../../../apps/bevy-explorer/install-linux-deps.py \
             libasound2-dev libudev-dev ninja-build clang curl pkg-config \
             libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev \
-            libssl-dev libx11-dev libgl1-mesa-dev libxext-dev \
+            libssl-dev libx11-dev libgl1-mesa-dev mesa-vulkan-drivers libxext-dev \
             libglib2.0-dev libdrm-dev libgbm-dev libxfixes-dev libxdamage-dev libxrandr-dev libxcomposite-dev
       - name: Install clang for webrtc-sys
         if: runner.os == 'Linux'
@@ -237,6 +239,10 @@ jobs:
             try { Invoke-WebRequest $ffUrl -OutFile ffmpeg-6.0-full_build-shared.7z; break }
             catch { if ($i -eq 3) { throw }; Write-Host "ffmpeg download failed (attempt $i), retrying..."; Start-Sleep -Seconds 5 }
           }
+          # The release tag can get a different file. Accept only the archive with this digest.
+          $ffSha256 = "a852648944cdf4ce3aeebf16d750a036fe67ab657b82eb43f9f7fdcc7bef3af7"
+          $ffActual = (Get-FileHash ffmpeg-6.0-full_build-shared.7z -Algorithm SHA256).Hash.ToLower()
+          if ($ffActual -ne $ffSha256) { throw "ffmpeg archive has SHA-256 $ffActual, expected $ffSha256" }
           7z x ffmpeg-6.0-full_build-shared.7z
           mkdir ffmpeg
           mv ffmpeg-*/* ffmpeg/
@@ -317,10 +323,22 @@ jobs:
           fi
           python3 "$GITHUB_WORKSPACE/tooling/dev-regressions.py" --bevy-artifacts target/native-test-artifacts.jsonl
           cargo test --all --profile ci-test --locked -- --test-threads=1
+      - name: Test environment and shadow shader pipelines
+        if: runner.os == 'Linux'
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          set -o pipefail
+          cargo test -p visuals --lib --profile ci-test --locked -- --ignored --test-threads=1 \
+            | tee "$RUNNER_TEMP/explorer-shader-tests.log"
+          grep -Fx 'test environment::tests::scene_environment_pipelines_compile ... ok' "$RUNNER_TEMP/explorer-shader-tests.log"
+          grep -Fx 'test shell_texturing::test::soft_shadow_pipelines_compile ... ok' "$RUNNER_TEMP/explorer-shader-tests.log"
       - name: Use Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      - name: Test Explorer UI enums
+        run: node --test crates/dcl_js/src/modules/RestrictedActions.test.cjs
       - name: Test Explorer routes against the gateway
         if: runner.os == 'Linux'
         run: |
@@ -337,6 +355,8 @@ jobs:
         env:
           DCL_WEB_DRIVER_REQUIRE_CHROME: '1'
         run: node --test local-harness/web-driver/driver.test.mjs
+      - name: Test scene information
+        run: node --test crates/dcl_js/src/modules/Scene.test.cjs
       - name: Test scene signed fetch
         run: node --test crates/dcl_js/src/modules/SignedFetch.test.cjs
       - name: Test scene topic messaging
@@ -437,7 +457,7 @@ jobs:
           set -o pipefail
           ../../../apps/bevy-explorer/dist/headless/native/headless \
             --realm https://decentraland.github.io/scene-explorer-tests/scene-explorer-tests \
-            --location 52,-52 --server-mode --preview --timeout 90 2>&1 | tee smoke.log
+            --location 52,-52 --server-mode --preview --timeout 30 2>&1 | tee smoke.log
       - name: Assert scenes ticked
         run: |
           if ! grep -q "first tick reached" smoke.log; then
@@ -509,9 +529,9 @@ jobs:
         shell: bash
     timeout-minutes: 100
     needs:
-      - source
       - changes
   fmt:
+    if: github.event.action != 'closed'
     name: Rustfmt
     runs-on: ubuntu-24.04
     steps:
@@ -527,8 +547,20 @@ jobs:
         working-directory: rendering/bevy-explorer/source
         shell: bash
     timeout-minutes: 100
-    needs:
-      - source
+  stop-builds:
+    # A failed guard or format check means the commit needs a new push, so the build jobs of this run would only use
+    # runner time. The token of a PR from a fork cannot cancel a run; those runs finish.
+    if: failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    name: Stop the build jobs after a failed guard or format check
+    needs: [source, fmt, toml]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "${{ github.run_id }}" --repo "${{ github.repository }}"
   clippy:
     if: needs.changes.outputs.clippy == 'true'
     name: Clippy
@@ -574,9 +606,9 @@ jobs:
         shell: bash
     timeout-minutes: 100
     needs:
-      - source
       - changes
   toml:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     steps:
@@ -595,8 +627,6 @@ jobs:
       run:
         working-directory: rendering/bevy-explorer/source
         shell: bash
-    needs:
-      - source
   build-deploy-web:
     if: needs.changes.outputs.web == 'true'
     name: Web engine, HUD and bridge scene
@@ -608,10 +638,11 @@ jobs:
       # Bevy Explorer / Benchmark refuses unoptimized web apps; while its fleet is off ('none'),
       # nothing measures a PR's, so PR builds skip wasm-opt.
       BEVY_WEB_OPT: ${{ github.event_name == 'pull_request' && vars.BENCHMARK_ENABLED_RUNNERS == 'none' && 'unoptimized' || 'optimized' }}
-      # Same-repo PRs publish under the pr-<n> dist-tag as a preview, which the CI status comment
-      # links; fork PRs have no secrets. oddish tags a main/master branch next whatever custom-tag
-      # says, so a PR from one never publishes.
-      BEVY_WEB_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish-tag != '') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'main' && github.head_ref != 'master') }}
+      # A same-repo PR with the ci:preview label publishes under the pr-<n> dist-tag as a preview,
+      # which the CI status comment links (label, then push or reopen); no PR job reads the
+      # publication. Fork PRs have no secrets. oddish tags a main/master branch next whatever
+      # custom-tag says, so a PR from one never publishes.
+      BEVY_WEB_PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish-tag != '') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'main' && github.head_ref != 'master' && contains(github.event.pull_request.labels.*.name, 'ci:preview')) }}
     outputs:
       publish: ${{ env.BEVY_WEB_PUBLISH }}
     permissions:
@@ -759,6 +790,9 @@ jobs:
         working-directory: rendering/bevy-explorer/source/react-web/bridge-scene
       # Publishing waits minutes for the registry; publish-web does it on a standard runner so
       # APIs + Sites starts as soon as the web app is tested.
+      - name: Say how to get a preview
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.BEVY_WEB_PUBLISH != 'true'
+        run: echo '::notice::This pull request has no web preview. Add the ci:preview label, then push or reopen, to publish one.'
       - name: Upload the stamped package for publication
         if: env.BEVY_WEB_PUBLISH == 'true'
         continue-on-error: ${{ github.event_name == 'pull_request' }}
@@ -774,7 +808,6 @@ jobs:
         shell: bash
     timeout-minutes: 100
     needs:
-      - source
       - changes
   publish-web:
     if: needs.build-deploy-web.outputs.publish == 'true'
@@ -839,7 +872,9 @@ jobs:
     # A PR preview never fails the run.
     continue-on-error: ${{ github.event_name == 'pull_request' }}
     timeout-minutes: 60
+    # Publication waits for the guards. On main and on a manual run no job stops the build after a failed guard.
     needs:
+      - source
       - build-deploy-web
   rollout-web:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -890,6 +925,7 @@ jobs:
     if: >-
       !cancelled() && needs.source.result == 'success' && needs.changes.result == 'success' &&
       needs.changes.outputs.images == 'true' &&
+      needs.changes.outputs.held != 'true' &&
       (needs.build-deploy-web.result == 'success' || needs.build-deploy-web.result == 'skipped')
     permissions:
       contents: read

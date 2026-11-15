@@ -13,28 +13,32 @@ use common::{
 use console::{AddDebugSection, DebugSection, DoAddConsoleCommand};
 use wallet::Wallet;
 
-pub(super) fn register(app: &mut App) {
-    app.init_resource::<ClientLoginDelivery>()
-        .add_console_command::<ClientLoginDebug, _>(debug)
-        .add_debug_section(DebugSection {
-            title: "Client login events",
-            query: "/client_login_state",
-            fields: &[
-                ("Delivery active", "active"),
-                ("Pending events", "pending"),
-                ("Queue saved", "durable"),
-                ("Memory-only delivery", "memoryOnly"),
-                ("Storage failures", "storageFailures"),
-                ("Storage in flight", "storageInFlight"),
-                ("Request in flight", "inFlight"),
-                ("Attempts", "attempts"),
-                ("Result", "result"),
-                ("Discarded events", "discarded"),
-                ("Retry in milliseconds", "retryInMs"),
-            ],
-            actions: &[],
-            inputs: &[],
-        });
+pub(super) struct ClientLoginPlugin;
+
+impl Plugin for ClientLoginPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ClientLoginDelivery>()
+            .add_console_command::<ClientLoginDebug, _>(debug)
+            .add_debug_section(DebugSection {
+                title: "Client login events",
+                query: "/client_login_state",
+                fields: &[
+                    ("Delivery active", "active"),
+                    ("Pending events", "pending"),
+                    ("Queue saved", "durable"),
+                    ("Memory-only delivery", "memoryOnly"),
+                    ("Storage failures", "storageFailures"),
+                    ("Storage in flight", "storageInFlight"),
+                    ("Request in flight", "inFlight"),
+                    ("Attempts", "attempts"),
+                    ("Result", "result"),
+                    ("Discarded events", "discarded"),
+                    ("Retry in milliseconds", "retryInMs"),
+                ],
+                actions: &[],
+                inputs: &[],
+            });
+    }
 }
 
 #[derive(Resource)]

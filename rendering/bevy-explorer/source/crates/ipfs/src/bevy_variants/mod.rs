@@ -836,18 +836,22 @@ impl IpfsIo {
     }
 }
 
-pub(crate) fn build(app: &mut App) {
-    app.add_systems(Update, detect_gpu_formats);
-    debug_panel::register(app);
-}
+pub(crate) struct BevyVariantsPlugin;
 
-/// After the asset plugins exist: an app without images has nothing to fall back.
-pub(crate) fn finish(app: &mut App) {
-    if app
-        .world()
-        .contains_resource::<Events<AssetLoadFailedEvent<Image>>>()
-    {
-        app.add_systems(Update, fall_back_from_failed_variants);
+impl Plugin for BevyVariantsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, detect_gpu_formats);
+        app.add_plugins(debug_panel::BevyVariantsDebugPanelPlugin);
+    }
+
+    /// After the asset plugins exist: an app without images has nothing to fall back.
+    fn finish(&self, app: &mut App) {
+        if app
+            .world()
+            .contains_resource::<Events<AssetLoadFailedEvent<Image>>>()
+        {
+            app.add_systems(Update, fall_back_from_failed_variants);
+        }
     }
 }
 

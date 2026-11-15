@@ -1244,3 +1244,64 @@ async fn source_host_fallback_excludes_shared_root_statistics_aliases() {
         );
     }
 }
+
+#[tokio::test]
+async fn camera_reel_paths_bypass_shared_trailing_slash_normalization() {
+    let (state, _, _, _, _sub) = setup();
+    let shared = Router::new()
+        .route(
+            "/camera-reel-service/api/users/{address}",
+            get(
+                |axum::extract::Path(address): axum::extract::Path<String>,
+                 matched: axum::extract::MatchedPath,
+                 axum::extract::OriginalUri(original): axum::extract::OriginalUri| async move {
+                    axum::Json(json!({
+                        "address": address,
+                        "handler": matched.as_str().strip_prefix("/camera-reel-service").unwrap(),
+                        "original": original.to_string(),
+                    }))
+                },
+            ),
+        )
+        .route(
+            "/camera-reel-service/api/docs/ui/",
+            get(|| async { "docs" }),
+        )
+        .route("/other", get(|| async { "other" }));
+    let app = http::mount_services(
+        shared,
+        state.clone(),
+        http::standalone(state),
+        Router::new(),
+    );
+    for (path, status) in [
+        ("/camera-reel-service/api/users/example", StatusCode::OK),
+        (
+            "/camera-reel-service/api/users/example/",
+            StatusCode::NOT_FOUND,
+        ),
+        ("/camera-reel-service/api/docs/ui/", StatusCode::OK),
+        ("/camera-reel-service/api/docs/ui", StatusCode::NOT_FOUND),
+        ("/other/", StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{path}");
+        if path == "/camera-reel-service/api/users/example" {
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                body,
+                json!({
+                    "address": "example",
+                    "handler": "/api/users/{address}",
+                    "original": "/camera-reel-service/api/users/example",
+                })
+            );
+        }
+    }
+}

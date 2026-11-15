@@ -20,7 +20,7 @@
 
 use axum::http::HeaderMap;
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::auth::admin_bearer::Refusal;
 use crate::auth::eip1654::Eip1654Validator;
@@ -119,49 +119,9 @@ fn signer_gate_permits(metadata: &Value, rejected: &[&str]) -> bool {
         && !own_string(metadata, "signer").is_some_and(|s| rejected.contains(&s))
 }
 
-fn objects_to_inspect<'a>(value: &'a Value, out: &mut Vec<&'a Map<String, Value>>) {
-    match value {
-        Value::Array(items) => items.iter().for_each(|item| objects_to_inspect(item, out)),
-        Value::Object(object) => out.push(object),
-        _ => {}
-    }
-}
-
-/// Refuses legacy-signed metadata whose declared keys are not delivered in
-/// their declared spelling (keys only; values such as `sceneId` are
-/// case-sensitive CIDs).
+/// Only legacy-signed metadata requires canonical declared key spelling.
 fn legacy_metadata_keys_are_canonical(metadata: &Value, canonical_keys: &[&str]) -> bool {
-    for declared_path in canonical_keys {
-        let mut containers: Vec<&Value> = vec![metadata];
-        for segment in declared_path.split('.') {
-            let folded = segment.to_lowercase();
-            let mut objects: Vec<&Map<String, Value>> = Vec::new();
-            for container in &containers {
-                objects_to_inspect(container, &mut objects);
-            }
-            let mut next: Vec<&Value> = Vec::new();
-            for object in objects {
-                let delivered: Vec<&String> = object
-                    .keys()
-                    .filter(|key| key.to_lowercase() == folded)
-                    .collect();
-                if delivered.is_empty() {
-                    continue;
-                }
-                if delivered.len() > 1 || delivered[0].as_str() != segment {
-                    return false;
-                }
-                if let Some(value) = object.get(segment) {
-                    next.push(value);
-                }
-            }
-            if next.is_empty() {
-                break;
-            }
-            containers = next;
-        }
-    }
-    true
+    crate::signed_fetch::first_metadata_key_mismatch(metadata, canonical_keys).is_none()
 }
 
 enum Verdict {

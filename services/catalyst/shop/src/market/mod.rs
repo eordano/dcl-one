@@ -744,7 +744,7 @@ impl MarketplaceState {
 /// Refuses to walk an endpoint that serves another chain than `expected`:
 /// the walk would read another network's logs into this one's rows.
 pub(crate) async fn ensure_chain(
-    rpc: &crate::land_authz::indexer::Rpc<'_>,
+    rpc: &crate::chain_index::rpc::Rpc<'_>,
     expected: i64,
 ) -> anyhow::Result<()> {
     let v = rpc.call("eth_chainId", serde_json::json!([])).await?;
@@ -822,7 +822,7 @@ fn spawn_index_jobs(state: &Arc<MarketplaceState>, jobs: &Jobs) {
                         let (state, nft_indexes, ctx) = (&state, &nft_indexes, &ctx);
                         async move {
                             let Some(url) = rpc_url(state, *net) else { return Ok(()) };
-                            let rpc = crate::land_authz::indexer::Rpc::at(&state.http, &url);
+                            let rpc = crate::chain_index::rpc::Rpc::at(&state.http, &url);
                             let progress = |m: String| ctx.progress(m);
                             let outcome = if name == chain_walk::INDEXER_NFT {
                                 if !nft_index::mirror_complete(&state.pool, *net).await {

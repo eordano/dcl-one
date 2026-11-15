@@ -6,10 +6,11 @@
 //!
 //! - [`extract_auth_chain`] reads the chain and checks its shape;
 //! - [`check_timestamp_window`] bounds the timestamp to a window around now
-//!   (the future side capped at [`MAX_FUTURE_SKEW_SECS`]);
+//!   (the future side capped at [`MAX_FUTURE_SKEW_SECS`]),
+//!   [`check_past_window`] only how old it may be;
 //! - [`parse_metadata`] reads the metadata object, over which
 //!   [`field_is_canonical`] and [`is_refused_signer`] are upstream's `signer`
-//!   gates;
+//!   gates and [`names_scene_signer`] the scene check alone;
 //! - [`candidate_paths`] is the path rule ([`SignedPath`]);
 //! - [`verify_signature`] tries the payloads: the crypto-middleware 6.x one
 //!   (method and path folded, the metadata bytes bound to the signature) over
@@ -158,6 +159,24 @@ pub fn check_timestamp_window(
     Ok(())
 }
 
+/// dcl-crypto-middleware-rs's expiration: `timestamp` is an unsigned
+/// integer count of milliseconds, stale once more than `max_age_ms` before
+/// `now_ms`; a timestamp ahead of now is never stale.
+pub fn check_past_window(timestamp: &str, now_ms: u128, max_age_ms: u128) -> Result<(), SkewError> {
+    let signed_at = timestamp
+        .parse::<u128>()
+        .map_err(|_| SkewError::InvalidTimestamp(timestamp.to_string()))?;
+    if signed_at.saturating_add(max_age_ms) < now_ms {
+        let secs = |ms: u128| i64::try_from(ms / 1000).unwrap_or(i64::MAX);
+        return Err(SkewError::Expired {
+            signed_at: secs(signed_at),
+            now: secs(now_ms),
+            window_secs: secs(max_age_ms),
+        });
+    }
+    Ok(())
+}
+
 /// Upstream's `verifyMetadata`: the metadata object, a JSON `null` read as
 /// an empty one; `None` for anything else, refused before anything verifies.
 pub fn parse_metadata(raw: &str) -> Option<Value> {
@@ -214,6 +233,20 @@ pub fn is_refused_signer(metadata: &Value) -> bool {
         return true;
     }
     matches!(metadata.get("signer"), Some(Value::String(value)) if value == SCENE_SIGNER)
+}
+
+/// Whether `metadata` names the scene signer under any spelling of the
+/// `signer` key or its value (case folded, trimmed as upstream trims). Only
+/// the scene signer is looked for: other keys and values, canonical or not,
+/// pass, so a surface that reads nothing else from the metadata refuses a
+/// scene's request without refusing an ordinary one.
+pub fn names_scene_signer(metadata: &Value) -> bool {
+    metadata.as_object().is_some_and(|object| {
+        object.iter().any(|(key, value)| {
+            key.to_lowercase() == "signer"
+                && matches!(value, Value::String(v) if js_trim(v).to_lowercase() == SCENE_SIGNER)
+        })
+    })
 }
 
 /// The crypto-middleware < 6.0.0 payload: everything, metadata included, lowercased.
@@ -498,6 +531,37 @@ mod tests {
         );
         assert_eq!(timestamp_or_zero(Some("")), "0");
         assert_eq!(timestamp_or_zero(None), "0");
+    }
+
+    #[test]
+    fn the_past_window_bounds_only_the_age() {
+        assert_eq!(check_past_window("100000", 160_000, 60_000), Ok(()));
+        assert!(matches!(
+            check_past_window("100000", 160_001, 60_000),
+            Err(SkewError::Expired {
+                signed_at: 100,
+                now: 160,
+                window_secs: 60
+            })
+        ));
+        assert_eq!(check_past_window("999999999999999", 1, 60_000), Ok(()));
+        for garbage in ["", "-1", "1.5", "soon"] {
+            assert_eq!(
+                check_past_window(garbage, 1, 60_000),
+                Err(SkewError::InvalidTimestamp(garbage.into()))
+            );
+        }
+    }
+
+    #[test]
+    fn the_scene_signer_is_found_under_any_spelling() {
+        let scene = |raw: &str| names_scene_signer(&serde_json::from_str(raw).unwrap());
+        assert!(scene(r#"{"signer":"decentraland-kernel-scene"}"#));
+        assert!(scene(r#"{"Signer":" Decentraland-Kernel-Scene\ufeff"}"#));
+        assert!(!scene("{}"));
+        assert!(!scene(r#"{"Signer":"dcl:explorer"}"#));
+        assert!(!scene(r#"{"signer":1}"#));
+        assert!(!scene(r#""decentraland-kernel-scene""#));
     }
 
     #[test]

@@ -1,0 +1,10 @@
+[package]
+name = "pipeline_test"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+bevy = { workspace = true }
+assets = { workspace = true }

@@ -30,6 +30,13 @@ impl AuthChainErrorBody {
 
 #[derive(Debug, Error)]
 pub enum ApiError {
+    #[error("Claim would exceed a mana cap (weekly: {weekly})")]
+    ClaimCap { weekly: bool },
+    #[error("{message}")]
+    ClaimBlocked {
+        message: String,
+        reason: Option<super::dto::CreditFlagReason>,
+    },
     #[error("{0}")]
     BadRequest(String),
     #[error("{0}")]
@@ -115,8 +122,10 @@ impl ApiError {
 
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::BadRequest(_) | Self::InvalidAuthChain(_) => StatusCode::BAD_REQUEST,
-            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::BadRequest(_) | Self::InvalidAuthChain(_) | Self::ClaimCap { .. } => {
+                StatusCode::BAD_REQUEST
+            }
+            Self::Unauthorized(_) | Self::ClaimBlocked { .. } => StatusCode::UNAUTHORIZED,
             Self::PaymentRequired(_) => StatusCode::PAYMENT_REQUIRED,
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
@@ -157,6 +166,25 @@ impl From<crate::shared::signed_fetch::SignedFetchError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let Self::ClaimBlocked { message, reason } = self {
+            let mut body = json!({"ok":false,"message":message,"isBlockedForClaiming":true});
+            if let Some(reason) = reason {
+                body["reason"] = json!(reason);
+            }
+            return (StatusCode::UNAUTHORIZED, Json(body)).into_response();
+        }
+        if let Self::ClaimCap { weekly } = self {
+            let (message, key) = if weekly {
+                ("Claim would exceed the weekly mana cap", "weeklyExceeds")
+            } else {
+                ("Claim would exceed the season mana cap", "seasonExceeds")
+            };
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok":false,"message":message,key:true})),
+            )
+                .into_response();
+        }
         if let ApiError::InvalidAuthChain(reason) = &self {
             tracing::debug!(reason = %reason, "signed-fetch auth chain rejected");
             return (StatusCode::BAD_REQUEST, Json(AuthChainErrorBody::adr44())).into_response();

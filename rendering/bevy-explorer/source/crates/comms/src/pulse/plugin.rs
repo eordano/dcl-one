@@ -551,7 +551,7 @@ pub struct PulsePlugin;
 
 impl Plugin for PulsePlugin {
     fn build(&self, app: &mut App) {
-        debug::register(app);
+        app.add_plugins(debug::PulseDebugPlugin);
         app.add_event::<PlayerTeleported>();
         app.add_systems(Startup, configure_pulse);
         app.add_systems(

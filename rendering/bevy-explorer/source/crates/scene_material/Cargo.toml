@@ -12,7 +12,7 @@ boimp = { workspace = true }
 nonmax = { workspace = true }
 
 [dev-dependencies]
-assets = { workspace = true, features = ["test-support"] }
+pipeline_test = { workspace = true }
 # present only to enable the naga_oil `override_any` feature in a per-crate test build, as the
 # root crate does for the app (see [workspace.dependencies]); not referenced from Rust
 naga_oil = { workspace = true }

@@ -70,7 +70,7 @@ impl RpcCouponChainReader {
             .endpoints
             .for_chain(chain_id)
             .ok_or(ChainReadError::NotConfigured(chain_id))?;
-        let rpc = crate::land_authz::indexer::Rpc::at(&self.http, url);
+        let rpc = crate::chain_index::rpc::Rpc::at(&self.http, url);
         let payload = rpc
             .call("eth_call", json!([{ "to": to, "data": data }, "latest"]))
             .await

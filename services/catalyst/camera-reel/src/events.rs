@@ -16,18 +16,19 @@
 //!   update changed it (a request for the visibility it already has records
 //!   nothing).
 //!
-//! Consumer contract: a consumer reads [`read_after`] from the last id it
-//! processed, in id order, and keeps that cursor in its own schema,
-//! committed with its own effects; the outbox keeps no per-consumer state.
+//! The Credits photo-goal worker reads `photo-taken` rows with a bounded
+//! cursor and periodic reconciliation for transactions that commit late.
+//! The test-only `read_after` helper checks the outbox's ordered read shape.
+//! The outbox keeps no per-consumer state.
 //! Rows older than [`RETENTION`] are deleted by the fleet-wide
 //! `camera-photo-events-retention` job ([`spawn_retention_job`]), so a
-//! consumer that falls further behind misses events. No consumer reads it
-//! yet: the credits program (`shop::credits`, a higher layer) reads it for
-//! its photo goals once that program exists.
+//! consumer that falls further behind misses events. The Credits program
+//! also records its own receipt and progress transactionally.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(test)]
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{PgExecutor, PgPool};
@@ -48,6 +49,7 @@ const RETENTION_MAX_BATCHES: usize = 100;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// One outbox row.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
 pub struct PhotoEvent {
     pub id: i64,
@@ -138,6 +140,7 @@ pub(crate) async fn record<'e>(
 /// its cursor past an id still being committed by a slower transaction
 /// could skip it; read with a margin (re-read the last few ids, dedupe on
 /// `id`) when that matters.
+#[cfg(test)]
 pub async fn read_after<'e>(
     executor: impl PgExecutor<'e>,
     after_id: i64,

@@ -1026,7 +1026,7 @@
       "candidate": [
         {
           "path": "services/catalyst/social/src/rpc/service/mod.rs",
-          "line": 179,
+          "line": 189,
           "kind": "counter",
           "scope": "production_file_inline_test_possible",
           "labels": [

@@ -16,6 +16,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use catalyst::content::batch_deployer::{BatchDeployer, BatchDeployerConfig};
 use catalyst::content::bloom_filter::BloomFilter;
+use catalyst::content::failed_deployments_store::LiveFailedDeploymentsStore;
 use catalyst::content::sync::orchestrator::{
     SyncControl, SyncDependencies, SyncOrchestratorConfig,
 };
@@ -23,9 +24,7 @@ use catalyst::content::sync::pointer_changes::POINTER_CHANGES_OVERLAP_MS;
 use catalyst::content::sync::{
     LiveDeploymentRepository, LiveProcessedSnapshotStore, SyncOrchestrator, SyncState, SyncStatus,
 };
-use catalyst::content::sync_deployer::{
-    DEFAULT_FLUSH_CONCURRENCY, LiveFailedDeploymentsStore, LiveSyncDeployer,
-};
+use catalyst::content::sync_deployer::{DEFAULT_FLUSH_CONCURRENCY, LiveSyncDeployer};
 use catalyst::storage::Storage;
 use serde_json::json;
 use sqlx::PgPool;

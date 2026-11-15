@@ -24,9 +24,20 @@ use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 
-use crate::land_authz::indexer::{
-    BlockHeader, IndexError, Rpc, RpcLog, hex_to_i64, is_address_limit,
+use crate::chain_index::rpc::{
+    BlockHeader, Rpc, RpcError as IndexError, RpcLog, hex_to_i64, is_address_limit,
 };
+
+pub(crate) fn topic_address(topic: &str) -> Option<String> {
+    let hex = topic.strip_prefix("0x")?;
+    (hex.len() == 64).then(|| format!("0x{}", &hex[24..]).to_ascii_lowercase())
+}
+
+pub(crate) fn topic_u256(topic: &str) -> Option<String> {
+    alloy_primitives::U256::from_str_radix(topic.strip_prefix("0x")?, 16)
+        .ok()
+        .map(|v| v.to_string())
+}
 
 pub const INDEXER_MANA: &str = "mana_transfers";
 
@@ -906,6 +917,28 @@ pub async fn run_pass(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_topic_decoders_preserve_prefix_width_and_integer_boundaries() {
+        let address = format!("0x{}{}", "F".repeat(24), "AB".repeat(20));
+        assert_eq!(
+            super::topic_address(&address),
+            Some(format!("0x{}", "ab".repeat(20)))
+        );
+        assert_eq!(super::topic_address(&address[2..]), None);
+        assert_eq!(super::topic_address("0x01"), None);
+        assert_eq!(super::topic_u256("0x0"), Some("0".into()));
+        assert_eq!(super::topic_u256("0xFF"), Some("255".into()));
+        assert_eq!(
+            super::topic_u256(&format!("0x{}", "f".repeat(64))),
+            Some(alloy_primitives::U256::MAX.to_string())
+        );
+        assert_eq!(super::topic_u256("0x"), Some("0".into()));
+        for invalid in ["ff", "0xgg"] {
+            assert_eq!(super::topic_u256(invalid), None);
+        }
+        assert_eq!(super::topic_u256(&format!("0x1{}", "0".repeat(64))), None);
+    }
+
     use super::*;
 
     #[test]

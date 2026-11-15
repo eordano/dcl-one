@@ -144,27 +144,31 @@ pub struct PhotoStats {
     pub effect_until: f64,
 }
 
-pub(crate) fn register(app: &mut App) {
-    app.init_resource::<PhotoStats>()
-        .init_resource::<CameraReelStorage>()
-        .add_event::<TakePhotoRequest>()
-        .add_event::<PhotoCaptured>()
-        .add_event::<PhotoUploaded>()
-        .add_event::<PhotoUploadFailed>()
-        .add_systems(
-            Update,
-            (
-                request_photo_on_key,
-                start_capture,
-                finish_capture,
-                finish_encode,
-                finish_upload,
-                report_photo_mode_opened,
-            )
-                .chain()
-                .in_set(SceneSets::Input)
-                .after(crate::mode::apply_photo_mode_requests),
-        );
+pub(crate) struct PhotoCapturePlugin;
+
+impl Plugin for PhotoCapturePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PhotoStats>()
+            .init_resource::<CameraReelStorage>()
+            .add_event::<TakePhotoRequest>()
+            .add_event::<PhotoCaptured>()
+            .add_event::<PhotoUploaded>()
+            .add_event::<PhotoUploadFailed>()
+            .add_systems(
+                Update,
+                (
+                    request_photo_on_key,
+                    start_capture,
+                    finish_capture,
+                    finish_encode,
+                    finish_upload,
+                    report_photo_mode_opened,
+                )
+                    .chain()
+                    .in_set(SceneSets::Input)
+                    .after(crate::mode::apply_photo_mode_requests),
+            );
+    }
 }
 
 fn request_photo_on_key(

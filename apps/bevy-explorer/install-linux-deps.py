@@ -49,7 +49,8 @@ def configure(apt_root):
 
 def install(packages, apt_root=Path('/etc/apt')):
     configure(apt_root)
-    env = {**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'}
+    # The runner is disposable: needrestart's scan and service restarts after the install only use time.
+    env = {**os.environ, 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1'}
     started = time.monotonic()
     # Do not proceed with stale indexes when any repository update fails.
     subprocess.run(['apt-get', '-o', 'APT::Update::Error-Mode=any', 'update'],

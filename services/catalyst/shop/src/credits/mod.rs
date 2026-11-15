@@ -11,7 +11,7 @@
 //! `/topup/mana[/quote]`, `/credits/checkout`, `/credits/orders/{id}`,
 //! `/credits/authorize[/cancel]`, `/stripe/webhook`, `/cart`,
 //! `/cart/items[/{collection}/{item}]`, `/checkout[/{id}]`, `/prices/quote`,
-//! `/seasons` (static since the seasons domain was removed), `/captcha`, and
+//! `/seasons`, seasonal photo goals and `/captcha`, and
 //! the operator routes `/admin/credits/{grant,revoke}`,
 //! `/admin/users/{a}/block`, `/admin/packs[/{sku}]`, `/admin/purchases`,
 //! `/admin/checkouts[/{id}/{refund,force-fulfill}]`, `/admin/ledger`,
@@ -82,6 +82,8 @@ pub mod dto;
 pub mod errors;
 pub mod escrow;
 pub mod feed;
+pub mod fulfillment;
+pub mod goals;
 pub mod handlers;
 pub mod history;
 pub mod money;
@@ -135,6 +137,7 @@ const CHAIN_SEPOLIA: i64 = 11_155_111;
 /// secrets through `<NAME>_FILE`). No `Debug`: five fields are credentials.
 #[derive(Clone)]
 pub struct RawSettings {
+    pub goal_flags_source: goals::flags::Source,
     /// `OPS_WRITES_ENABLED` (false).
     pub writes_enabled: bool,
     /// `CATALYRST_CREDITS_ADMIN_TOKEN` (or `_FILE`): the operator bearer; unset refuses the admin routes.
@@ -226,6 +229,7 @@ pub struct RawSettings {
 impl Default for RawSettings {
     fn default() -> Self {
         Self {
+            goal_flags_source: goals::flags::Source::default(),
             writes_enabled: false,
             admin_token: None,
             captcha_secret: None,
@@ -275,6 +279,7 @@ impl Default for RawSettings {
 
 #[derive(Clone)]
 pub struct Settings {
+    pub goal_flags_source: goals::flags::Source,
     pub writes_enabled: bool,
     pub admin_token: Option<String>,
     pub captcha_secret: Option<String>,
@@ -339,6 +344,7 @@ impl Settings {
     /// Names the variable in every refusal, never a value. The two external
     /// endpoints (Stripe, hCaptcha) must be public https: both carry a secret.
     pub fn parse(raw: RawSettings) -> anyhow::Result<Self> {
+        let goal_flags_source = raw.goal_flags_source.normalize()?;
         let stripe_api_base = raw.stripe_api_base.trim().trim_end_matches('/').to_string();
         let stripe_api_base = if stripe_api_base.is_empty() {
             stripe::DEFAULT_STRIPE_API_BASE.to_string()
@@ -534,6 +540,7 @@ impl Settings {
             None
         };
         Ok(Self {
+            goal_flags_source,
             writes_enabled: raw.writes_enabled,
             admin_token: non_empty(raw.admin_token),
             captcha_secret,
@@ -628,6 +635,17 @@ pub struct State {
     pub revoker: Option<Arc<settlement::Revoker>>,
     /// The MANA/USD feed a USD-pegged group's marketplace settles at (`feed.rs`).
     pub feed: Arc<dyn feed::MarketplaceFeed>,
+    /// Existing chain transport for the seasonal program paused() view.
+    pub goals_chain: Option<Arc<crate::evm::chain::ChainComponent>>,
+    pub goal_flags: goals::flags::Flags,
+    /// Rotating in-process scan hint; receipts alone acknowledge source events.
+    pub(crate) goal_scan_after: std::sync::atomic::AtomicI64,
+    /// Fixed upper bound for the current round, so arrivals cannot postpone retries.
+    pub(crate) goal_scan_horizon: std::sync::atomic::AtomicI64,
+    pub(crate) goal_scan_reconcile_at_ms: std::sync::atomic::AtomicI64,
+    /// An event failed since the last round started: the next round starts
+    /// from the beginning without waiting for the reconcile interval.
+    pub(crate) goal_scan_retry: std::sync::atomic::AtomicBool,
 }
 
 pub type SharedState = Arc<State>;
@@ -722,7 +740,13 @@ impl State {
             },
             _ => None,
         };
+        let goal_flags = goals::flags::Flags::new(settings.goal_flags_source.clone(), http);
         Self {
+            goal_flags,
+            goal_scan_after: std::sync::atomic::AtomicI64::new(0),
+            goal_scan_horizon: std::sync::atomic::AtomicI64::new(0),
+            goal_scan_reconcile_at_ms: std::sync::atomic::AtomicI64::new(0),
+            goal_scan_retry: std::sync::atomic::AtomicBool::new(false),
             credits,
             usage,
             pricing,
@@ -735,6 +759,7 @@ impl State {
             gate,
             revoker,
             feed,
+            goals_chain: chain,
         }
     }
 
@@ -757,7 +782,7 @@ impl State {
     /// ledger, so it runs beside the other credits writers, under the
     /// restore stamps `serve` installs before its jobs start.
     pub fn spawn_jobs(self: &Arc<Self>, jobs: &Jobs) {
-        checkout::OutboxWorker {
+        fulfillment::OutboxWorker {
             credits: self.credits.clone(),
             pricing: self.pricing.clone(),
             broker: self.broker.clone(),
@@ -883,8 +908,8 @@ impl State {
     }
 
     /// The fulfilment worker as a value, for a test driving `run_once` by hand.
-    pub fn outbox_worker(&self) -> checkout::OutboxWorker {
-        checkout::OutboxWorker {
+    pub fn outbox_worker(&self) -> fulfillment::OutboxWorker {
+        fulfillment::OutboxWorker {
             credits: self.credits.clone(),
             pricing: self.pricing.clone(),
             broker: self.broker.clone(),
@@ -905,6 +930,8 @@ pub fn router(state: SharedState) -> Router {
     let writes_enabled = state.settings.writes_enabled;
     let api = Router::new()
         .route("/users", post(handlers::users::enroll))
+        .route("/users/{wallet_id}", delete(handlers::users::unregister))
+        .route("/users/{wallet_id}/status", get(handlers::users::status))
         .route(
             "/users/{wallet_id}/progress",
             get(handlers::users::progress),
@@ -978,6 +1005,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/checkout/{id}", get(handlers::cart::get_checkout))
         .route("/prices/quote", post(handlers::prices::quote))
         .route("/seasons", get(handlers::users::seasons))
+        .route("/season", get(handlers::users::season))
         .route(
             "/captcha",
             get(handlers::captcha::generate).post(handlers::captcha::claim),
@@ -1006,6 +1034,8 @@ pub fn shop_router(state: SharedState) -> Router {
     let writes_enabled = state.settings.writes_enabled;
     let api = Router::new()
         .route("/v1/users", post(handlers::users::enroll))
+        .route("/v1/users/{wallet_id}", delete(handlers::users::unregister))
+        .route("/v1/users/{wallet_id}/status", get(handlers::users::status))
         .route(
             "/v1/users/{wallet_id}/progress",
             get(handlers::users::progress),
@@ -1084,6 +1114,7 @@ pub fn shop_router(state: SharedState) -> Router {
         .route("/v1/checkouts/{id}", get(handlers::cart::get_checkout))
         .route("/v1/credit-quotes", post(handlers::prices::quote))
         .route("/v1/credit-program/seasons", get(handlers::users::seasons))
+        .route("/v1/credit-program/season", get(handlers::users::season))
         .route(
             "/v1/captcha",
             get(handlers::captcha::generate).post(handlers::captcha::claim),

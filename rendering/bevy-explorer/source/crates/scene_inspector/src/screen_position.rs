@@ -15,8 +15,12 @@ use crate::{
     active_scene::SceneResolver, read_commands::parse_entity_id, snapshot::PendingSnapshotRequests,
 };
 
-pub fn add_screen_position_command(app: &mut App) {
-    app.add_console_command::<EntityScreenPositionCommand, _>(entity_screen_position_cmd);
+pub struct ScreenPositionCommandPlugin;
+
+impl Plugin for ScreenPositionCommandPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<EntityScreenPositionCommand, _>(entity_screen_position_cmd);
+    }
 }
 
 /// Report, as JSON, where a scene entity of the active scene is on screen, in logical window

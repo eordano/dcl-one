@@ -23,9 +23,10 @@ use sqlx::{PgConnection, PgPool};
 
 use super::MarketplaceState;
 use super::chain_walk::{self, ChainIndex, ChainNet, INDEXER_SALES, LogGroup};
-use super::nft_index::{self, DecodeError, topic_address, topic_u256};
+use super::chain_walk::{topic_address, topic_u256};
+use super::nft_index::{self, DecodeError};
+use crate::chain_index::rpc::{Rpc, RpcLog};
 use crate::jobs::{Jobs, PeriodicCfg};
-use crate::land_authz::indexer::{Rpc, RpcLog};
 
 /// `Issue(address indexed _beneficiary, uint256 indexed _tokenId, uint256 indexed _itemId, uint256 _issuedId, address _caller)` (v2 collections).
 pub const TOPIC_ISSUE: &str = "0x57e2fe3f4d57a597e655a893f43c395d7dc18cb9c9c1898eda75cc0ad7608525";

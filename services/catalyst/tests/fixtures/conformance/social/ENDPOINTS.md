@@ -409,32 +409,28 @@ and port 5461 with the environment (bounded outfits/emote sync from
 Logs: `replay-<service>.log` in the run's scratchpad; the node and its
 database were stopped and dropped after the run.
 
-## In-process replay of camera-reel (2026-11-13 20:46 UTC)
+## In-process replay of camera-reel
 
 `camera-reel/src/tests/captures.rs`, test
-`the_camera_reel_host_answers_as_its_captures`, at revision `189e64ad9`
-with `CATALYST_TEST_DATABASE_URL` set. It mounts the router under
+`the_camera_reel_host_answers_as_its_captures`, mounts the router under
 `/camera-reel-service` as `serve` does and replays all 21 captures through
-`social::test_fixtures::replay` (status, recorded headers, body by the shared
-diff). It seeds the captured photos from the captured bodies: documents,
-place ids, public flag and `created_at` from `dateTime`. Filler rows bring
-the corpus place to its 523 public photos and the item gallery to its 12.
-The shared diff skips `id` and `url` leaves. The test therefore checks the
-ids, their order and the hash URLs of the five photo answers separately.
+`social::test_fixtures::replay` (status, recorded headers and body).
+It seeds the captured photos from their recorded documents, place ids,
+public flag, original filenames and `created_at` from `dateTime`. Filler
+rows bring the corpus place to its 523 public photos and the item gallery
+to its 12. The API and bucket origins come from the captures; requests stay
+in process and never contact those origins.
 
-13 of 21 are identical. The other 8 differ only by the deliberate
-differences in `camera-reel/src/lib.rs` or upstream additions after the
-capture, each listed in the test:
-
-| fixture | difference | reason |
-| --- | --- | --- |
-| `image-redirect`, `image-file-redirect` | 404 `{"message":"image not found"}` (29 B) instead of 307 to the legacy bucket key | images are addressed by blob hash; a photo id or the legacy `{id}-{ts}.jpg` key names no hash |
-| `image-metadata`, `place-images`, `place-images-page2`, `places-images-batch`, `wearable-images` | `url` and `thumbnailUrl` are `<api_url>/api/images/<hash>` instead of `.../api/images/<id>-[thumbnail-]<ts>.jpg` | the same hash addressing; ids, order, counts and every other field are identical |
-| `docs-openapi` | `components.schemas.ScreenRect` and `User.properties.screenRect` extra | added by camera-reel-service `3e8bd0b` (#61) after the capture |
-| `docs-openapi` | `components.schemas.GalleryImageWithPlace` extra | the captured document references this component but never defines it |
+The replay passed with PostgreSQL on 2026-11-13: 20 of 21 captures match.
+Only `docs-openapi` differs from the 2026-09-25 capture: the `ScreenRect`
+schema and nullable `User.screenRect` property were added in upstream
+`3e8bd0b`. Both redirects match their captured status, headers and empty
+body. The shared diff skips `id` and `url` leaves, so the test separately
+checks exact photo ids, order, original URLs and thumbnail URLs for all five
+photo answers.
 
 `docs::tests::the_spec_is_the_captured_one_plus_the_later_upstream_screen_rect`
-compares the whole document with the capture under these three additions.
-The `ScreenRect` schema follows the `3e8bd0b` struct (four required `float`
-numbers). Its generated text was not compared because the upstream document
-at that revision was not built.
+compares the whole pinned document with the capture under those two
+additions. `GalleryImageWithPlace` remains undefined, as in the pinned
+upstream document. The companion test checks the wire fields and every
+path parameter. All three regressions passed in the 134-test Camera suite.

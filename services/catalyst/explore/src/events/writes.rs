@@ -35,6 +35,7 @@ use axum::extract::{OriginalUri, Path, State};
 use axum::http::{HeaderMap, Method};
 use chrono::Utc;
 use serde_json::{Map, Value, json};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
 
@@ -321,80 +322,6 @@ async fn answer_admin(
         .await?
         .ok_or_else(|| not_found(id))?;
     Ok(Json(ApiData::ok(record.api_shape())))
-}
-
-// ---------------------------------------------------------------------------
-// Signed request log
-
-/// A privileged wallet write (a non-owner's edit or delete, a grant's
-/// approval or editor fields) is logged in `explore.signed_actions` and
-/// applied in the same transaction as the event write. The
-/// `x-identity-metadata` header is optional: a signed `body_sha256` must
-/// match the body (400), a signed `nonce` must be a canonical UUID (400) and
-/// its replay answers 409; without a nonce the action is recorded under a
-/// digest of the request and never refused.
-async fn record_signed_request(
-    tx: &mut Transaction<'_, Postgres>,
-    headers: &HeaderMap,
-    signer: &str,
-    event_id: &str,
-    method: &str,
-    path: &str,
-    body: &[u8],
-) -> Result<(), ApiError> {
-    let metadata: Value = headers
-        .get("x-identity-metadata")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| serde_json::from_str(h).ok())
-        .unwrap_or_else(|| json!({}));
-    let digest = hex::encode(Sha256::digest(body));
-    if let Some(expected) = metadata.get("body_sha256").and_then(Value::as_str)
-        && expected != digest
-    {
-        return Err(ApiError::bad_request(
-            "Event body must match signed body_sha256",
-        ));
-    }
-    let nonce = match metadata.get("nonce") {
-        None | Some(Value::Null) => None,
-        Some(nonce) => Some(
-            nonce
-                .as_str()
-                .filter(|nonce| {
-                    uuid::Uuid::parse_str(nonce).is_ok_and(|id| id.to_string() == *nonce)
-                })
-                .ok_or_else(|| {
-                    ApiError::bad_request("Signed event nonce must be a canonical UUID")
-                })?,
-        ),
-    };
-    let timestamp = headers
-        .get("x-identity-timestamp")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.parse::<i64>().ok())
-        .ok_or_else(|| ApiError::bad_request("Invalid timestamp"))?;
-    let hash = hex::encode(Sha256::digest(match nonce {
-        Some(nonce) => format!("legacy-event:{signer}:{nonce}"),
-        None => format!("legacy-event:{signer}:{timestamp}:{method}:{path}:{digest}"),
-    }));
-    let payload = json!({"method":method,"path":path,"body_sha256":digest,"nonce":nonce});
-    let fresh = crate::fed::record_action(
-        tx,
-        &crate::fed::Action {
-            scope: crate::fed::Scope::Events,
-            signature_hash: &hash,
-            signer,
-            subject_id: Some(event_id),
-            action_type: "EventPrivilegedWrite",
-            payload: &payload,
-            signed_at: timestamp / 1000,
-        },
-    )
-    .await?;
-    if !fresh && nonce.is_some() {
-        return Err(ApiError::http(409, "Event request already applied"));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -869,7 +796,17 @@ async fn update_event(
         if !is_owner {
             state.operator_writes()?;
         }
-        record_signed_request(&mut tx, headers, signer, event_id, method, path, bytes).await?;
+        super::audit::record_signed_request(
+            &mut tx,
+            headers,
+            signer,
+            event_id,
+            method,
+            path,
+            bytes,
+            super::audit::SignedWrite::Event,
+        )
+        .await?;
     }
 
     // updateEvent.ts:176-181
@@ -1302,7 +1239,7 @@ pub async fn delete_event(
         if !is_owner || mirrored {
             // dcl-one: another wallet's delete is an operator write, logged.
             state.operator_writes()?;
-            record_signed_request(
+            super::audit::record_signed_request(
                 &mut tx,
                 &headers,
                 signer,
@@ -1310,6 +1247,7 @@ pub async fn delete_event(
                 method.as_str(),
                 uri.path(),
                 &body,
+                super::audit::SignedWrite::Event,
             )
             .await?;
         }

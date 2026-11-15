@@ -2,7 +2,8 @@
 // shaders. Each overrides environment_map::compute_radiances to sample with sky_envmap_input and
 // level the result with sky_envmap_level, and overrides ambient::ambient_light to return nothing.
 //
-// Only the upper hemisphere of the maps is generated. Directions below the horizon read their
+// A scene-authored nadir uses the full sphere (ambient alpha carries a -2 offset).
+// Otherwise only the upper hemisphere of the maps is generated. Directions below the horizon read their
 // mirror image above it, standing in for the sky reflected back up off the ground, tinted towards
 // the ground and, for reflections, blurred: see sky_envmap_ground.wgsl for the curve.
 //
@@ -19,13 +20,16 @@
 // The overrides themselves stay in each top-level shader: naga_oil only applies an override
 // declared there, and only the override can call bevy's original compute_radiances.
 
-#import bevy_pbr::{environment_map, lighting}
+#import bevy_pbr::{environment_map, lighting, mesh_view_bindings::lights}
 #import "embedded://shaders/sky_envmap_ground.wgsl"::{sky_envmap_ground_shininess, sky_envmap_ground_tint}
 
 // the input to sample the envmap with in place of `input`. bevy samples along R exactly at zero
 // roughness, so R is set to where it would have sampled, mirrored up
 fn sky_envmap_input(input: lighting::LayerLightingInput) -> lighting::LayerLightingInput {
     let direction = environment_map::radiance_sample_direction(input.N, input.R, input.roughness);
+    if lights.ambient_color.a < -1.5 {
+        return input;
+    }
     return lighting::LayerLightingInput(
         sky_envmap_upper(input.N),
         sky_envmap_upper(direction),
@@ -39,9 +43,12 @@ fn sky_envmap_input(input: lighting::LayerLightingInput) -> lighting::LayerLight
 // the lights uniform's ambient_color
 fn sky_envmap_level(radiances: environment_map::EnvironmentMapRadiances, input: lighting::LayerLightingInput, upper: lighting::LayerLightingInput, ambient: vec4<f32>) -> environment_map::EnvironmentMapRadiances {
     let direction = environment_map::radiance_sample_direction(input.N, input.R, input.roughness);
+    let authored = ambient.a < -1.5;
+    let diffuse_tint = select(sky_envmap_ground_tint(input.N), vec3<f32>(1.0), authored);
+    let specular_tint = select(sky_envmap_ground_tint(direction), vec3<f32>(1.0), authored);
     return environment_map::EnvironmentMapRadiances(
-        sky_envmap_ambient(radiances.irradiance * sky_envmap_ground_tint(input.N), ambient, 1.0),
-        sky_envmap_ambient(radiances.radiance * sky_envmap_ground_tint(direction), ambient, upper.perceptual_roughness),
+        sky_envmap_ambient(radiances.irradiance * diffuse_tint, ambient, 1.0),
+        sky_envmap_ambient(radiances.radiance * specular_tint, ambient, upper.perceptual_roughness),
     );
 }
 
@@ -64,7 +71,7 @@ fn sky_envmap_ambient(color: vec3<f32>, ambient: vec4<f32>, compression_weight: 
 
     var levelled = color;
     if brightest > goal_brightest && goal_brightest > 0.0 {
-        let compression = saturate(-ambient.a) * compression_weight;
+        let compression = saturate(-ambient.a - select(0.0, 2.0, ambient.a < -1.5)) * compression_weight;
         levelled = color * pow(goal_brightest / brightest, compression);
     }
 

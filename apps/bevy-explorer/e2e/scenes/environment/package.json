@@ -1,0 +1,9 @@
+{
+  "name": "bevy-explorer-e2e-scene-environment",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Root sky, sun and fog overrides with optional zero values",
+  "scripts": {
+    "build": "dcl-scene-cli build --built-in"
+  }
+}

@@ -226,8 +226,8 @@ impl Plugin for SettingBridgePlugin {
         add_enum_setting::<CacheSizeSetting>(app, &mut settings, &mut schedule, &config);
         add_enum_setting::<PointAtMarkerVisibility>(app, &mut settings, &mut schedule, &config);
 
-        debug_quality::register(app, &settings);
         app.insert_resource(settings);
+        app.add_plugins(debug_quality::DebugQualityPlugin);
         app.insert_resource(ApplyAppSettingsSchedule(schedule));
         app.init_resource::<ActiveCameras>();
         app.init_resource::<SessionGraphics>();

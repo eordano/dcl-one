@@ -66,6 +66,19 @@ A scene with no `node_modules` folder (a fresh clone) gets the vendored SDK rest
 built-in pipeline runs, with a line saying so and a second one when `package.json` pins another
 `@dcl/sdk`; `--skip-install` turns that off, and an existing `node_modules` is never touched.
 
+The embedded SDK retains its pinned 7.29.1 runtime and local fixes. Its Skybox, Sun and
+EnvironmentFog bindings (1223–1225) are generated from the monorepo protocol/SDK sources.
+After generating the SDK components, `node apps/dcl-scene-cli/scripts/refresh-environment-sdk.mjs`
+refreshes only those bindings and their prebuilt registry exports. It requires the SDK TypeScript
+and Explorer HUD esbuild dependencies to be installed. The refresh checks the pinned base files,
+keeps unrelated ZIP entries byte-for-byte, and records source/output hashes inside
+`@dcl/sdk/prebuilt/environment-bindings.json`. Run
+`node --test apps/dcl-scene-cli/scripts/environment-sdk.test.mjs` for the embedded CJS and
+prebuilt-registry wire contracts and strict declaration check; this development check requires
+Node, Python 3 and the installed SDK TypeScript dependency. SDK CI runs it after installation.
+The normal scene build uses these bindings without npm.
+
+
 The built-in pipeline bundles to `bin/index.js`, type-checks beside the build with incremental tsc
 (`.dcl-cache/`), and encodes `main.crdt` in Rust (`DCL_ONE_CRDT_VERIFY=1` compares with node).
 A watcher (`start`, `build --watch`) keeps one node process with tsc 5.x or 6.x loaded and the last

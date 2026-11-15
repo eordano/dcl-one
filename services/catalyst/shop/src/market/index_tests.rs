@@ -36,7 +36,7 @@ use super::nft_index::{self, NftIndex};
 use super::sales_index::{self, SalesIndex};
 use super::trade_events::{self, TradeEventsIndex};
 use super::{MarketSettings, MarketplaceState, Settings, SharedState};
-use crate::land_authz::indexer::Rpc;
+use crate::chain_index::rpc::Rpc;
 
 struct ScratchDb {
     name: String,
@@ -116,7 +116,7 @@ struct FakeChain {
 impl FakeChain {
     fn new(
         head: u64,
-        logs: Vec<crate::land_authz::indexer::RpcLog>,
+        logs: Vec<crate::chain_index::rpc::RpcLog>,
         max_span: u64,
         max_addresses: usize,
     ) -> Arc<Self> {
@@ -146,7 +146,7 @@ impl FakeChain {
     }
 }
 
-fn log_json(l: &crate::land_authz::indexer::RpcLog) -> Value {
+fn log_json(l: &crate::chain_index::rpc::RpcLog) -> Value {
     json!({
         "address": l.address, "topics": l.topics, "data": l.data, "blockNumber": l.block_number, "logIndex": l.log_index,
         "blockTimestamp": l.block_timestamp, "transactionHash": l.transaction_hash.clone().unwrap_or_else(|| format!("0x{:064x}", 7)),
@@ -387,8 +387,8 @@ fn log_at(
     data: Vec<u8>,
     block: u64,
     index: u64,
-) -> crate::land_authz::indexer::RpcLog {
-    crate::land_authz::indexer::RpcLog {
+) -> crate::chain_index::rpc::RpcLog {
+    crate::chain_index::rpc::RpcLog {
         address: address.to_string(),
         topics,
         data: format!("0x{}", hex::encode(data)),
@@ -478,7 +478,7 @@ fn traded(
     caller: &str,
     signer: &str,
     hashed: &str,
-) -> crate::land_authz::indexer::RpcLog {
+) -> crate::chain_index::rpc::RpcLog {
     let mut log =
         trade_events::tests::traded_log(block, index, market, caller, signer, "0x01", 1, false);
     log.topics[2] = hashed.to_string();
@@ -491,7 +491,7 @@ fn cancelled(
     market: &str,
     caller: &str,
     hashed: &str,
-) -> crate::land_authz::indexer::RpcLog {
+) -> crate::chain_index::rpc::RpcLog {
     log_at(
         market,
         vec![
@@ -510,7 +510,7 @@ fn signer_index(
     market: &str,
     signer: &str,
     value: u64,
-) -> crate::land_authz::indexer::RpcLog {
+) -> crate::chain_index::rpc::RpcLog {
     log_at(
         market,
         vec![
@@ -861,7 +861,7 @@ fn transfer(
     token: U256,
     block: u64,
     index: u64,
-) -> crate::land_authz::indexer::RpcLog {
+) -> crate::chain_index::rpc::RpcLog {
     log_at(
         contract,
         vec![
@@ -2553,7 +2553,7 @@ async fn mana_sync_atomic_replay_and_reorg() {
     use super::mana_transfers::{self, ManaTransfersIndex};
     let mana = mana_transfers::contract(ChainNet::Matic);
     let event = |block: u64, index: u64, from: &str, to: &str, amount: U256| {
-        crate::land_authz::indexer::RpcLog {
+        crate::chain_index::rpc::RpcLog {
             address: mana.clone(),
             topics: vec![
                 mana_transfers::TRANSFER.into(),
@@ -2617,7 +2617,7 @@ async fn mana_sync_atomic_replay_and_reorg() {
             chain_walk::INDEXER_MANA,
             ChainNet::Matic,
             97,
-            &crate::land_authz::indexer::BlockHeader {
+            &crate::chain_index::rpc::BlockHeader {
                 number: 99,
                 hash: chain.hash_of(99),
                 timestamp: time_of(99)
@@ -2655,7 +2655,7 @@ async fn mana_sync_failed_window_rolls_back_and_legacy_cursor_replays() {
         return;
     };
     use super::mana_transfers::{self, ManaTransfersIndex};
-    let bad = crate::land_authz::indexer::RpcLog {
+    let bad = crate::chain_index::rpc::RpcLog {
         address: mana_transfers::contract(ChainNet::Matic),
         topics: vec![mana_transfers::TRANSFER.into()],
         data: "0x00".into(),

@@ -415,6 +415,31 @@ class InventoryTests(unittest.TestCase):
                 guard.validate_runtime_script(bad)
 
 
+    def test_the_shards_of_the_actual_test_script_run_every_binary_once(self):
+        script = (ROOT / "tooling/catalyst-test.sh").read_text()
+        select = script[script.index('shard="${CATALYST_TEST_SHARD:-1/1}"'):script.index('cores=')]
+        names = [f"/target/debug/deps/{name}" for name in "gfedcba"]
+
+        def run(value):
+            with tempfile.TemporaryDirectory() as logs:
+                Path(logs, "binaries").write_text("".join(name + "\n" for name in names))
+                env = {**os.environ, "logs": logs}
+                env.pop("CATALYST_TEST_SHARD", None)
+                if value is not None:
+                    env["CATALYST_TEST_SHARD"] = value
+                result = subprocess.run(["bash", "-euo", "pipefail", "-c", select], env=env,
+                                        capture_output=True, text=True)
+                return result.returncode, Path(logs, "shard").read_text().split() if result.returncode == 0 else []
+
+        self.assertEqual(run(None), (0, sorted(names)))
+        for total in (1, 2, 3, 4, 7, 9):
+            shards = [run(f"{index}/{total}") for index in range(1, total + 1)]
+            self.assertEqual([code for code, _ in shards], [0] * total)
+            self.assertEqual(sorted(name for _, shard in shards for name in shard), sorted(names))
+        for bad in ("3", "0/3", "4/3", "1/0", "a/b", "1/3/3", "/3", "2/3x", " 2/3", "02/03", "-1/3"):
+            with self.subTest(bad=bad):
+                self.assertEqual(run(bad)[0], 1)
+
     def test_actual_test_script_rejects_filters_skipped_binaries_and_early_exit(self):
         script = (ROOT / "tooling/catalyst-test.sh").read_text()
         guard.validate_test_script(script)
@@ -423,7 +448,10 @@ class InventoryTests(unittest.TestCase):
                     script.replace("set -euo pipefail", "set -uo pipefail"),
                     script.replace('"$@" --no-run', '"$@" --test unrelated --no-run'),
                     script.replace('"$1" > "$log"', '"$1" --skip required > "$log"'),
-                    script.replace('run "$jobs" < "$logs/binaries"', 'run "$jobs" < <(head -n 1 "$logs/binaries")'),
+                    script.replace('run "$jobs" < "$logs/shard"', 'run "$jobs" < <(head -n 1 "$logs/shard")'),
+                    script.replace("'NR % n == i % n'", "'NR == 1'"),
+                    script.replace('${CATALYST_TEST_SHARD:-1/1}', '${CATALYST_TEST_SHARD:-1/2}'),
+                    script.replace('[[ "$shard" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] && ', ''),
                     script.replace('< "$logs/others"', '< <(head -n 1 "$logs/others")'),
                     script.replace('run "$socket_jobs" < "$logs/sockets"\n', ''),
                     script.replace('print(artifact["executable"])', 'print(artifact["executable"]) if "comms" not in artifact["executable"] else None'),

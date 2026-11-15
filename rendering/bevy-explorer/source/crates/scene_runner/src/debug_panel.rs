@@ -21,159 +21,163 @@ use crate::{
     vec3_to_parcel, ContainerEntity, ContainingScene,
 };
 
-pub(super) fn register(app: &mut App) {
-    app.init_resource::<ShowBounds>()
-        .add_console_command::<BoundsCommand, _>(set_bounds)
-        .add_systems(Update, draw_bounds.run_if(|show: Res<ShowBounds>| show.0))
-        .add_console_command::<SceneState, _>(scene_state)
-        .add_console_command::<SceneContent, _>(scene_content)
-        .add_console_command::<LoadingState, _>(loading_state)
-        .add_console_command::<TextureState, _>(texture_state)
-        .add_debug_section(DebugSection {
-            title: "Current Scene",
-            query: "/current_scene_state",
-            fields: &[
-                ("Name", "name"),
-                ("SDK", "sdk"),
-                ("Parcels", "parcels"),
-                ("Height (m)", "height"),
-                ("Global position (m) (X / Y / Z)", "world"),
-                ("Scene position (m) (X / Y / Z)", "relative"),
-                ("Tick", "tick"),
-                ("Scene tick FPS", "history.fps"),
-                ("Minimum FPS (last 256 observed ticks)", "history.minFps"),
-                ("Maximum FPS (last 256 observed ticks)", "history.maxFps"),
-                (
-                    "Hiccups over 50 ms (last 256 observed ticks)",
-                    "history.hiccups",
-                ),
-                ("Tick FPS history", "history.tickFps"),
-                (
-                    "Component payload bytes/tick from scene",
-                    "history.from.bytes",
-                ),
-                ("Component updates/tick from scene", "history.from.updates"),
-                ("Component payload bytes/tick to scene", "history.to.bytes"),
-                ("Component updates/tick to scene", "history.to.updates"),
-                (
-                    "From scene in chart window (bytes / updates)",
-                    "history.from.total",
-                ),
-                (
-                    "To scene in chart window (bytes / updates)",
-                    "history.to.total",
-                ),
-                (
-                    "From scene per second (bytes / updates)",
-                    "history.from.rate",
-                ),
-                ("To scene per second (bytes / updates)", "history.to.rate"),
-                (
-                    "Updates/tick from scene (min / max / spikes)",
-                    "history.from.range",
-                ),
-                (
-                    "Updates/tick to scene (min / max / spikes)",
-                    "history.to.range",
-                ),
-                ("CRDT bytes from scene", "worker.crdt_bytes"),
-                ("CRDT bytes/s from scene", "bytesPerSecond"),
-                ("IPC responses from scene", "worker.ipc_responses"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Worker fetches started", "worker.fetch_started"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Worker fetches completed", "worker.fetch_completed"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Worker fetches failed", "worker.fetch_failed"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Worker fetch bytes received", "worker.fetch_bytes_down"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Current native V8 heap used (bytes)", "heap"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Current native V8 heap limit (bytes)", "heapLimit"),
-                #[cfg(not(target_arch = "wasm32"))]
-                (
-                    "Current native V8 external memory (bytes)",
-                    "externalMemory",
-                ),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Sampled native JS engines", "engines.count"),
-                #[cfg(not(target_arch = "wasm32"))]
-                ("Sampled native JS heaps used (bytes)", "engines.used"),
-                #[cfg(not(target_arch = "wasm32"))]
-                (
-                    "Sampled native JS external memory (bytes)",
-                    "engines.external",
-                ),
-            ],
-            actions: &[],
-            inputs: &[DebugInput {
-                label: "Show scene bounds",
-                field: "bounds",
-                command: "/show_parcel_scene_bounds {value}",
-                kind: DebugInputKind::Toggle,
-            }],
-        })
-        .add_debug_section(DebugSection {
-            title: "Scene Content",
-            query: "/current_scene_content",
-            fields: &[
-                ("Entities known to renderer", "entities"),
-                ("Mesh bodies (all)", "allBodies"),
-                ("Triangles in mesh bodies (all)", "allTriangles"),
-                ("Visible triangles", "triangles"),
-                ("Visible meshes (bodies)", "bodies"),
-                ("Unique geometries", "geometries"),
-                ("Visible unique geometries", "visibleGeometries"),
-                ("Unique materials", "materials"),
-                ("Visible unique materials", "visibleMaterials"),
-                ("Material textures", "textures"),
-                ("Colliders", "colliders"),
-            ],
-            actions: &[],
-            inputs: &[],
-        })
-        .add_debug_section(DebugSection {
-            title: "Scene Loading",
-            query: "/scene_loading_state",
-            fields: &[
-                ("Current parcel loading", "current"),
-                ("Current parcel stage", "stage"),
-                ("Pending glTF containers", "gltf"),
-                ("Pending SDK asset preloads", "preloads"),
-                ("Spawning", "spawned"),
-                ("Reading definition", "definition"),
-                ("Reading main.crdt", "crdt"),
-                ("Starting JavaScript", "javascript"),
-                ("Failed", "failed"),
-                ("Running scenes", "running"),
-                ("Blocked scenes", "blocked"),
-                ("Broken scenes", "broken"),
-            ],
-            actions: &[("Reload current parcel scene", "/reload --current")],
-            inputs: &[],
-        })
-        .add_debug_section(DebugSection {
-            title: "Resource Promises",
-            query: "/scene_loading_state",
-            fields: &[
-                ("Pending glTF containers", "gltf"),
-                ("Pending SDK asset preloads", "preloads"),
-                ("Pending texture preloads", "texturePreloads"),
-            ],
-            actions: &[],
-            inputs: &[],
-        })
-        .add_debug_section(DebugSection {
-            title: "Cache Textures",
-            query: "/texture_cache_state",
-            fields: &[
-                ("Resident image assets", "count"),
-                ("Retained image bytes (CPU)", "bytes"),
-            ],
-            actions: &[],
-            inputs: &[],
-        });
+pub(super) struct SceneDebugPanelPlugin;
+
+impl Plugin for SceneDebugPanelPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ShowBounds>()
+            .add_console_command::<BoundsCommand, _>(set_bounds)
+            .add_systems(Update, draw_bounds.run_if(|show: Res<ShowBounds>| show.0))
+            .add_console_command::<SceneState, _>(scene_state)
+            .add_console_command::<SceneContent, _>(scene_content)
+            .add_console_command::<LoadingState, _>(loading_state)
+            .add_console_command::<TextureState, _>(texture_state)
+            .add_debug_section(DebugSection {
+                title: "Current Scene",
+                query: "/current_scene_state",
+                fields: &[
+                    ("Name", "name"),
+                    ("SDK", "sdk"),
+                    ("Parcels", "parcels"),
+                    ("Height (m)", "height"),
+                    ("Global position (m) (X / Y / Z)", "world"),
+                    ("Scene position (m) (X / Y / Z)", "relative"),
+                    ("Tick", "tick"),
+                    ("Scene tick FPS", "history.fps"),
+                    ("Minimum FPS (last 256 observed ticks)", "history.minFps"),
+                    ("Maximum FPS (last 256 observed ticks)", "history.maxFps"),
+                    (
+                        "Hiccups over 50 ms (last 256 observed ticks)",
+                        "history.hiccups",
+                    ),
+                    ("Tick FPS history", "history.tickFps"),
+                    (
+                        "Component payload bytes/tick from scene",
+                        "history.from.bytes",
+                    ),
+                    ("Component updates/tick from scene", "history.from.updates"),
+                    ("Component payload bytes/tick to scene", "history.to.bytes"),
+                    ("Component updates/tick to scene", "history.to.updates"),
+                    (
+                        "From scene in chart window (bytes / updates)",
+                        "history.from.total",
+                    ),
+                    (
+                        "To scene in chart window (bytes / updates)",
+                        "history.to.total",
+                    ),
+                    (
+                        "From scene per second (bytes / updates)",
+                        "history.from.rate",
+                    ),
+                    ("To scene per second (bytes / updates)", "history.to.rate"),
+                    (
+                        "Updates/tick from scene (min / max / spikes)",
+                        "history.from.range",
+                    ),
+                    (
+                        "Updates/tick to scene (min / max / spikes)",
+                        "history.to.range",
+                    ),
+                    ("CRDT bytes from scene", "worker.crdt_bytes"),
+                    ("CRDT bytes/s from scene", "bytesPerSecond"),
+                    ("IPC responses from scene", "worker.ipc_responses"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Worker fetches started", "worker.fetch_started"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Worker fetches completed", "worker.fetch_completed"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Worker fetches failed", "worker.fetch_failed"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Worker fetch bytes received", "worker.fetch_bytes_down"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Current native V8 heap used (bytes)", "heap"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Current native V8 heap limit (bytes)", "heapLimit"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    (
+                        "Current native V8 external memory (bytes)",
+                        "externalMemory",
+                    ),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Sampled native JS engines", "engines.count"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Sampled native JS heaps used (bytes)", "engines.used"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    (
+                        "Sampled native JS external memory (bytes)",
+                        "engines.external",
+                    ),
+                ],
+                actions: &[],
+                inputs: &[DebugInput {
+                    label: "Show scene bounds",
+                    field: "bounds",
+                    command: "/show_parcel_scene_bounds {value}",
+                    kind: DebugInputKind::Toggle,
+                }],
+            })
+            .add_debug_section(DebugSection {
+                title: "Scene Content",
+                query: "/current_scene_content",
+                fields: &[
+                    ("Entities known to renderer", "entities"),
+                    ("Mesh bodies (all)", "allBodies"),
+                    ("Triangles in mesh bodies (all)", "allTriangles"),
+                    ("Visible triangles", "triangles"),
+                    ("Visible meshes (bodies)", "bodies"),
+                    ("Unique geometries", "geometries"),
+                    ("Visible unique geometries", "visibleGeometries"),
+                    ("Unique materials", "materials"),
+                    ("Visible unique materials", "visibleMaterials"),
+                    ("Material textures", "textures"),
+                    ("Colliders", "colliders"),
+                ],
+                actions: &[],
+                inputs: &[],
+            })
+            .add_debug_section(DebugSection {
+                title: "Scene Loading",
+                query: "/scene_loading_state",
+                fields: &[
+                    ("Current parcel loading", "current"),
+                    ("Current parcel stage", "stage"),
+                    ("Pending glTF containers", "gltf"),
+                    ("Pending SDK asset preloads", "preloads"),
+                    ("Spawning", "spawned"),
+                    ("Reading definition", "definition"),
+                    ("Reading main.crdt", "crdt"),
+                    ("Starting JavaScript", "javascript"),
+                    ("Failed", "failed"),
+                    ("Running scenes", "running"),
+                    ("Blocked scenes", "blocked"),
+                    ("Broken scenes", "broken"),
+                ],
+                actions: &[("Reload current parcel scene", "/reload --current")],
+                inputs: &[],
+            })
+            .add_debug_section(DebugSection {
+                title: "Resource Promises",
+                query: "/scene_loading_state",
+                fields: &[
+                    ("Pending glTF containers", "gltf"),
+                    ("Pending SDK asset preloads", "preloads"),
+                    ("Pending texture preloads", "texturePreloads"),
+                ],
+                actions: &[],
+                inputs: &[],
+            })
+            .add_debug_section(DebugSection {
+                title: "Cache Textures",
+                query: "/texture_cache_state",
+                fields: &[
+                    ("Resident image assets", "count"),
+                    ("Retained image bytes (CPU)", "bytes"),
+                ],
+                actions: &[],
+                inputs: &[],
+            });
+    }
 }
 
 #[derive(Resource, Default)]

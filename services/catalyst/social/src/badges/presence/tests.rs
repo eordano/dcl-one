@@ -304,7 +304,19 @@ async fn a_late_leave_of_an_earlier_session_does_not_close_the_new_one() {
     t.join(ALICE, "s2", T0 + 100 * SEC, At::Scene(SCENE)).await;
     t.leave(ALICE, "s1", T0 + 90 * SEC, At::Scene(SCENE)).await;
     assert_eq!(t.visits().await[0].2, ["s2"]);
+    let persisted: (Vec<i64>, Vec<String>, i64) = sqlx::query_as(
+        "SELECT joins, sessions, opened_at FROM social.presence_visits WHERE wallet = $1",
+    )
+    .bind(ALICE)
+    .fetch_one(&t.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        persisted,
+        (vec![T0 + 100 * SEC], vec!["s2".into()], T0 + 100 * SEC)
+    );
     t.leave(ALICE, "s2", T0 + 400 * SEC, At::Scene(SCENE)).await;
+    assert!(t.visits().await.is_empty());
     let (_, doc, completed) = t.progress("stay", ALICE).await.unwrap();
     assert_eq!(doc["intervals"], proven(&[(0, 90), (100, 400)]));
     assert_eq!(completed, Some(T0 + 310 * SEC));
@@ -886,6 +898,19 @@ async fn connections_past_the_maximum_age_are_forgotten_and_old_facts_pruned() {
     let s = t.sweep(at, None).await;
     assert_eq!(s.expired, 1);
     assert_eq!(t.visits().await[0].2, ["live"]);
+    let persisted: (Vec<i64>, Vec<String>, i64) = sqlx::query_as(
+        "SELECT joins, sessions, opened_at FROM social.presence_visits WHERE wallet = $1",
+    )
+    .bind(ALICE)
+    .fetch_one(&t.pool)
+    .await
+    .unwrap();
+    assert_eq!(persisted, (vec![T0 + HOUR], vec!["live".into()], T0 + HOUR));
+    assert_eq!(
+        t.progress("stay", ALICE).await,
+        None,
+        "expiry grants no badge time"
+    );
     let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM social.presence_applied_events")
         .fetch_one(&t.pool)
         .await

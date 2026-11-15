@@ -459,9 +459,9 @@ fn access_calls_of(entity: &Value) -> usize {
 }
 
 pub fn deployment_failure_response(failure: DeployFailure) -> Response {
-    let unavailable = !matches!(failure, DeployFailure::Rejected(_));
+    let unavailable = !matches!(failure, DeployFailure::Rejected(_, _));
     let (status, errors) = match failure {
-        DeployFailure::Rejected(errors) => (StatusCode::BAD_REQUEST, errors),
+        DeployFailure::Rejected(_, errors) => (StatusCode::BAD_REQUEST, errors),
         DeployFailure::Unavailable(errors) | DeployFailure::Unverifiable(errors) => {
             (StatusCode::SERVICE_UNAVAILABLE, errors)
         }
@@ -858,10 +858,13 @@ async fn deploy_regular(
     if !state.sync.takes_deploys() {
         let Some(entity_type) = entity_type_of(&files, &entity_id) else {
             return Ok(Answer::Decided(deployment_failure_response(
-                DeployFailure::Rejected(vec![
-                    "The entity file was not part of the uploaded files or has no type."
-                        .to_string(),
-                ]),
+                DeployFailure::Rejected(
+                    crate::write_deployer::RejectionKind::Validation,
+                    vec![
+                        "The entity file was not part of the uploaded files or has no type."
+                            .to_string(),
+                    ],
+                ),
             )));
         };
         if !state.sync.takes_deploys_of(&entity_type) {
@@ -1245,16 +1248,25 @@ mod tests {
 
     #[tokio::test]
     async fn a_failure_keeps_its_kind_and_an_undecidable_one_carries_retry_after() {
-        let rejected = deployment_failure_response(DeployFailure::Rejected(vec!["no".into()]));
-        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
-        assert!(rejected.headers().get(header::RETRY_AFTER).is_none());
-        let body = axum::body::to_bytes(rejected.into_body(), 4096)
-            .await
-            .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({ "errors": ["no"] })
-        );
+        use crate::write_deployer::RejectionKind;
+        for kind in [
+            RejectionKind::Validation,
+            RejectionKind::PointerContention,
+            RejectionKind::RateLimited,
+            RejectionKind::Superseded,
+        ] {
+            let rejected =
+                deployment_failure_response(DeployFailure::Rejected(kind, vec!["no".into()]));
+            assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+            assert!(rejected.headers().get(header::RETRY_AFTER).is_none());
+            let body = axum::body::to_bytes(rejected.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({ "errors": ["no"] })
+            );
+        }
         let unavailable =
             deployment_failure_response(DeployFailure::Unavailable(vec!["down".into()]));
         assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);

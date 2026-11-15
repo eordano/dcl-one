@@ -56,7 +56,13 @@ impl Plugin for StarsPlugin {
                 ExtractResourcePlugin::<StarsSettings>::default(),
                 ExtractComponentPlugin::<StarsView>::default(),
             ))
-            .add_systems(Update, (update_stars_settings, bind_depth_texture));
+            .add_systems(
+                Update,
+                (
+                    update_stars_settings.after(crate::apply_global_light),
+                    bind_depth_texture,
+                ),
+            );
 
         let render_app = app.sub_app_mut(RenderApp);
         render_app
@@ -128,14 +134,21 @@ mod settings {
 /// Stars fade in as the sun drops below the horizon, like the sky's night colour.
 fn update_stars_settings(
     light: Res<SceneGlobalLight>,
+    environment: Res<crate::environment::SceneEnvironment>,
     time: Res<Time>,
     mut settings: ResMut<StarsSettings>,
 ) {
     // the light travels upward once the sun is below the horizon
-    let t = (light.sun_direction.y / 0.15).clamp(0.0, 1.0);
+    let direction = environment.sun_direction.unwrap_or(light.sun_direction);
+    let t = (direction.y / 0.15).clamp(0.0, 1.0);
     let night = t * t * (3.0 - 2.0 * t);
-    let sun_position = -light.sun_direction;
-    settings.night = night;
+    let sun_position = -direction;
+    settings.night = if environment.texture.is_some() {
+        0.0
+    } else {
+        night
+    };
+    settings.brightness = environment.star_brightness.unwrap_or(4.0);
     settings.sun_position = sun_position;
     settings.time = time.elapsed_secs();
 }

@@ -455,11 +455,13 @@ async fn a_wearable_entity_fetches_its_manifest_and_reads_its_variants() {
                 metadata: None,
             },
         );
-        // as `request_collectibles` registers it: the catalyst's contents, not the realm's
+        // as `request_collectibles` registers it: the catalyst's contents, not the realm's. The
+        // name is reserved and never resolves, so a read of the original fails the test and
+        // reaches no host.
         context.modifiers.insert(
             WEARABLE.to_owned(),
             crate::IpfsModifier {
-                base_url: Some("https://peer.decentraland.org/content/contents/".to_owned()),
+                base_url: Some("https://catalyst.invalid/content/contents/".to_owned()),
             },
         );
     }
@@ -475,6 +477,15 @@ async fn a_wearable_entity_fetches_its_manifest_and_reads_its_variants() {
     let _ = io.bevy_variants.bc.set(true);
 
     io.request_bevy_variants(WEARABLE);
+    // A read waits for the manifest only until its deadline, then reads the original. The
+    // deadline has its own test; this one reads after the manifest is there.
+    let mut manifest = io.bevy_variants.manifest(WEARABLE).unwrap();
+    let state = manifest
+        .wait_for(|state| !matches!(state, ManifestState::Pending))
+        .await
+        .unwrap()
+        .clone();
+    assert!(matches!(state, ManifestState::Loaded(_)), "{state:?}");
     let path = PathBuf::from(&IpfsPath::new(IpfsType::new_content_file(
         WEARABLE.to_owned(),
         "male/tex.png".to_owned(),

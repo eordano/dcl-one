@@ -96,7 +96,7 @@ impl Plugin for AutomationPlugin {
                 PreUpdate,
                 input::play_input_script.before(bevy::input::InputSystem),
             );
-        pointer::register(app);
+        app.add_plugins(pointer::AutomationPointerPlugin);
     }
 }
 

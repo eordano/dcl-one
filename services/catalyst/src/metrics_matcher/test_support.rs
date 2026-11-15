@@ -318,8 +318,13 @@ async fn http_and_costs(workers: usize) -> Value {
         let d = done.clone();
         let p = progress.clone();
         let c = client.clone();
+        let (entered, running) = tokio::sync::oneshot::channel();
         let other = tokio::spawn(async move {
+            let mut entered = Some(entered);
             while !d.load(Ordering::SeqCst) {
+                if let Some(entered) = entered.take() {
+                    entered.send(()).unwrap();
+                }
                 assert_eq!(
                     c.get(format!("http://{address}/unrelated"))
                         .send()
@@ -333,6 +338,9 @@ async fn http_and_costs(workers: usize) -> Value {
                 p.fetch_add(1, Ordering::SeqCst);
             }
         });
+        // The load starts only after the unrelated task has started its first
+        // request; otherwise the load can end before that task runs.
+        running.await.unwrap();
         let mut jobs = Vec::new();
         let start = Instant::now();
         for _ in 0..concurrency {

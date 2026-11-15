@@ -699,7 +699,6 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn ghost_and_reveal_shaders_compile() {
-        use assets::test_support::{compile_pipelines, headless_app, render_target};
         use bevy::{
             asset::RenderAssetUsages,
             core_pipeline::prepass::{DepthPrepass, NormalPrepass},
@@ -710,6 +709,7 @@ mod tests {
                 storage::ShaderStorageBuffer,
             },
         };
+        use pipeline_test::{compile_pipelines, headless_app, render_target};
         use scene_material::{
             SceneBound, SceneBounds, EMPTY_SCENE_CELLS, SCENE_MATERIAL_CONE_ONLY_DITHER_MESH_TAG,
             SCENE_MATERIAL_TOON_MESH_TAG,

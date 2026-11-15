@@ -91,9 +91,6 @@ mod test {
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn floor_pipelines_compile() {
-        use assets::test_support::{
-            compile_pipelines, fragment_pipelines, headless_app, render_target,
-        };
         use bevy::{
             core_pipeline::prepass::{DepthPrepass, NormalPrepass},
             pbr::{NotShadowCaster, NotShadowReceiver},
@@ -103,6 +100,7 @@ mod test {
             },
         };
         use boimp::{GridMode, ImposterData, ImposterRenderPlugin};
+        use pipeline_test::{compile_pipelines, fragment_pipelines, headless_app, render_target};
 
         let mut app = headless_app();
         app.add_plugins((

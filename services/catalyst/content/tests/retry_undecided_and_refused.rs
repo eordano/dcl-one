@@ -6,11 +6,10 @@
 use std::sync::Arc;
 
 use alloy::signers::{Signer, local::PrivateKeySigner};
+use catalyst_content::failed_deployments_store::LiveFailedDeploymentsStore;
 use catalyst_content::sync::retry_failed::{RetryFailedConfig, RetryFailedDeployments};
 use catalyst_content::sync::{AuthChain, AuthLink, AuthLinkType, FailedDeployment, FailureReason};
-use catalyst_content::sync_deployer::{
-    LiveFailedDeploymentsStore, LiveSyncDeployer, SyncValidation,
-};
+use catalyst_content::sync_deployer::{LiveSyncDeployer, SyncValidation};
 use catalyst_content::validator::{Settings, Sources};
 
 const TEST_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -217,7 +216,7 @@ async fn an_undecided_entity_outlives_the_cap_and_a_refused_one_is_never_retried
             elapse(0).await;
             let stats = retry.execute_retry_cycle().await.unwrap();
             assert_eq!((stats.still_failing, stats.evicted), (1, 0));
-            catalyst_content::sync::retry_failed::prune_failed_deployments(&pool, 0)
+            catalyst_content::failed_deployments_store::prune_failed_deployments(&pool, 0)
                 .await
                 .unwrap();
             let record = read(entity_id.clone())

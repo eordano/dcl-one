@@ -81,6 +81,7 @@ Code that serves none of these deliverables is removed, not kept for reference:
   - Only the primary `serve` (`FLEET_JOBS_ENABLED`) serves `/ws` and the island subscriber.
   - Social replicas derive online status from Pulse's wallet topology over NATS; every `serve` recovers room occupancy through the gatekeeper's LiveKit adapter; presence owns observations, source age and public/admission projections.
 - `storage`: the shared hash-addressed blob store.
+- `shop::credits::goals` owns seasonal MANA rewards, separately from the paid USD ledger. Its photo worker reads `camera_reel.photo_events` (`id`, `kind`, `photo_id`, `user_address`, `payload`, `created_at`) and `social.subscriptions` (`address`, `email`) through shared SQL; its policy reads `explore_api.feature_flags_local` (`app`, `name`, `value`). It never changes those rows. It commits its receipt, progress, signed grant and notification through Social's transaction-aware notification helper in one transaction. Changing a shared column updates this paragraph and `DATABASE.md` in the same change.
 - Domain ownership is not a separate deployable; keep the shared SQL and process contracts.
 
 - Prefer the smallest readable implementation: no forwarding layers, internal HTTP hops or per-service pools; direct SQL and a passed transaction for atomic writes.

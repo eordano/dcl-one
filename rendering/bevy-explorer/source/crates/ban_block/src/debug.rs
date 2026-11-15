@@ -1,7 +1,11 @@
 //! `/ban_block_state` and the "Bans and blocks" debug section.
 
 use alloy_core::primitives::Address;
-use bevy::{app::App, ecs::system::Res, time::Time};
+use bevy::{
+    app::{App, Plugin},
+    ecs::system::Res,
+    time::Time,
+};
 use bevy_console::ConsoleCommand;
 use common::util::AsH160;
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
@@ -13,38 +17,42 @@ use crate::{
     SceneRoomView,
 };
 
-pub(crate) fn register(app: &mut App) {
-    app.add_console_command::<BanBlockStateCommand, _>(ban_block_state)
-        .add_debug_section(DebugSection {
-            title: "Bans and blocks",
-            query: "/ban_block_state",
-            fields: &[
-                ("Blocks", "blocks.state"),
-                ("Blocked", "blocks.blocked"),
-                ("Blocked by", "blocks.blockedBy"),
-                ("Platform ban", "platformBan.isBanned"),
-                ("Ban reason", "platformBan.reason"),
-                ("Ban matched on", "platformBan.matchedOn"),
-                ("Ban source", "platformBan.source"),
-                ("Checked (s ago)", "platformBan.checkedAgoSecs"),
-                ("Scene admission", "sceneAdmission.state"),
-                ("Refusal scope", "sceneAdmission.scope"),
-                ("Scene room", "sceneRoom.state"),
-                ("Scene banned addresses", "sceneRoom.bannedAddresses"),
-                ("Scene admins", "sceneRoom.sceneAdmins"),
-                ("Lookup: blocked either way", "lookup.isBlockedEitherWay"),
-                ("Lookup: direction", "lookup.direction"),
-                ("Lookup: banned in scene", "lookup.bannedInScene"),
-                ("Lookup: admin", "lookup.adminPermissions"),
-            ],
-            actions: &[("Re-check platform ban", "/ban_block_refresh")],
-            inputs: &[DebugInput {
-                label: "Look up address",
-                field: "lookup.address",
-                command: "/ban_block_state {value}",
-                kind: DebugInputKind::Text,
-            }],
-        });
+pub(crate) struct BanBlockDebugPlugin;
+
+impl Plugin for BanBlockDebugPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<BanBlockStateCommand, _>(ban_block_state)
+            .add_debug_section(DebugSection {
+                title: "Bans and blocks",
+                query: "/ban_block_state",
+                fields: &[
+                    ("Blocks", "blocks.state"),
+                    ("Blocked", "blocks.blocked"),
+                    ("Blocked by", "blocks.blockedBy"),
+                    ("Platform ban", "platformBan.isBanned"),
+                    ("Ban reason", "platformBan.reason"),
+                    ("Ban matched on", "platformBan.matchedOn"),
+                    ("Ban source", "platformBan.source"),
+                    ("Checked (s ago)", "platformBan.checkedAgoSecs"),
+                    ("Scene admission", "sceneAdmission.state"),
+                    ("Refusal scope", "sceneAdmission.scope"),
+                    ("Scene room", "sceneRoom.state"),
+                    ("Scene banned addresses", "sceneRoom.bannedAddresses"),
+                    ("Scene admins", "sceneRoom.sceneAdmins"),
+                    ("Lookup: blocked either way", "lookup.isBlockedEitherWay"),
+                    ("Lookup: direction", "lookup.direction"),
+                    ("Lookup: banned in scene", "lookup.bannedInScene"),
+                    ("Lookup: admin", "lookup.adminPermissions"),
+                ],
+                actions: &[("Re-check platform ban", "/ban_block_refresh")],
+                inputs: &[DebugInput {
+                    label: "Look up address",
+                    field: "lookup.address",
+                    command: "/ban_block_state {value}",
+                    kind: DebugInputKind::Text,
+                }],
+            });
+    }
 }
 
 /// The ban and block status, as JSON; with an address, also that address's standing.

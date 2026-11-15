@@ -2,9 +2,9 @@
 //! skybox, attached as an `EnvironmentMapLight` to every camera that renders
 //! the sky. Regenerated whenever the sky is redrawn.
 //!
-//! Only the upper hemisphere of the maps is generated. The pbr shaders' lookups
-//! (`sky_envmap_lookup.wgsl`) mirror downward directions up, and level the result
-//! towards the `AmbientLight`, which they use in place of the flat ambient.
+//! The default ground reflects the upper hemisphere. A scene-authored nadir enables the
+//! full sphere so that its lower sky also lights downward-facing surfaces. PBR lookups
+//! level the result towards `AmbientLight` in place of the flat ambient.
 //!
 //! At the low sky reflections setting the maps are one texel per face instead:
 //! the sky, the horizon and the ground as three colours, straight from the sky.
@@ -61,6 +61,11 @@ const GENERATED_FACES: u32 = 5;
 
 pub struct SkyEnvmapPlugin;
 
+#[derive(Resource)]
+struct SkyEnvmapImports {
+    _ground: Handle<Shader>,
+}
+
 /// The generated cubemaps, in the skybox's own units: the filtered maps, and the one-texel maps
 /// of the low setting.
 #[derive(Resource, Clone, ExtractResource)]
@@ -94,6 +99,8 @@ pub struct SkyEnvmapSettings {
     pub compression: f32,
     /// which maps to generate, from the config
     pub quality: SkyReflectionSetting,
+    /// A scene supplies its own lower sky instead of the default reflected ground.
+    pub authored_lower_hemisphere: bool,
 }
 
 impl Default for SkyEnvmapSettings {
@@ -104,12 +111,14 @@ impl Default for SkyEnvmapSettings {
             floor: 0.5,
             compression: 0.8,
             quality: SkyReflectionSetting::High,
+            authored_lower_hemisphere: false,
         }
     }
 }
 
 impl Plugin for SkyEnvmapPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(Startup, load_envmap_imports);
         load_internal_asset!(
             app,
             SKY_ENVMAP_SHADER_HANDLE,
@@ -138,7 +147,7 @@ impl Plugin for SkyEnvmapPlugin {
             ExtractResourcePlugin::<SkyEnvmap>::default(),
             ExtractResourcePlugin::<SkyEnvmapSettings>::default(),
         ))
-        .add_systems(Update, attach_sky_envmap);
+        .add_systems(Update, attach_sky_envmap.after(crate::apply_global_light));
 
         app.add_console_command::<EnvmapConsoleCommand, _>(envmap_console_command);
     }
@@ -157,6 +166,14 @@ impl Plugin for SkyEnvmapPlugin {
         render_graph.add_node_edge(BevyAtmosphereLabel, SkyEnvmapLabel);
         render_graph.add_node_edge(SkyEnvmapLabel, CameraDriverLabel);
     }
+}
+
+fn load_envmap_imports(mut commands: Commands, server: Res<AssetServer>) {
+    // Internal shaders bypass dependency discovery. Startup runs after all embedded assets
+    // have been registered, including when their plugin follows this one.
+    commands.insert_resource(SkyEnvmapImports {
+        _ground: server.load("embedded://shaders/sky_envmap_ground.wgsl"),
+    });
 }
 
 fn cube_image(label: &'static str, size: u32, mips: u32) -> Image {
@@ -190,12 +207,17 @@ fn attach_sky_envmap(
     mut commands: Commands,
     envmap: Res<SkyEnvmap>,
     config: Res<AppConfig>,
+    environment: Res<crate::environment::SceneEnvironment>,
     mut settings: ResMut<SkyEnvmapSettings>,
     mut cameras: Query<
         (Entity, Option<&Exposure>, Option<&mut EnvironmentMapLight>),
         With<AtmosphereCamera>,
     >,
 ) {
+    let authored_lower = environment.nadir.is_some();
+    if settings.authored_lower_hemisphere != authored_lower {
+        settings.authored_lower_hemisphere = authored_lower;
+    }
     let quality = config.graphics.sky_reflections;
     if settings.quality != quality {
         settings.quality = quality;
@@ -275,6 +297,10 @@ mod decl {
         pub roughness: f32,
         pub sample_count: u32,
         pub source_lod: f32,
+        pub authored_lower: u32,
+        pub _padding_0: u32,
+        pub _padding_1: u32,
+        pub _padding_2: u32,
     }
 }
 use decl::Constants;
@@ -410,6 +436,10 @@ fn push_constants(
                 roughness: mip as f32 / (SPECULAR_MIPS - 1) as f32,
                 sample_count: SPECULAR_SAMPLES,
                 source_lod: 0.0,
+                authored_lower: u32::from(settings.authored_lower_hemisphere),
+                _padding_0: 0,
+                _padding_1: 0,
+                _padding_2: 0,
             })
         })
         .collect();
@@ -418,6 +448,10 @@ fn push_constants(
         roughness: 0.0,
         sample_count: DIFFUSE_SAMPLES,
         source_lod: DIFFUSE_SOURCE_LOD,
+        authored_lower: u32::from(settings.authored_lower_hemisphere),
+        _padding_0: 0,
+        _padding_1: 0,
+        _padding_2: 0,
     });
     let trilight = [settings.diffuse, settings.specular].map(|intensity| {
         uniforms.push(&Constants {
@@ -425,6 +459,10 @@ fn push_constants(
             roughness: 0.0,
             sample_count: TRILIGHT_SAMPLES,
             source_lod: 0.0,
+            authored_lower: u32::from(settings.authored_lower_hemisphere),
+            _padding_0: 0,
+            _padding_1: 0,
+            _padding_2: 0,
         })
     });
     (specular, irradiance, trilight)
@@ -610,7 +648,13 @@ impl render_graph::Node for SkyEnvmapNode {
         };
         let pipelines = world.resource::<SkyEnvmapPipelines>();
         let pipeline_cache = world.resource::<PipelineCache>();
-        let quality = world.resource::<SkyEnvmapSettings>().quality;
+        let settings = world.resource::<SkyEnvmapSettings>();
+        let quality = settings.quality;
+        let faces = if settings.authored_lower_hemisphere {
+            6
+        } else {
+            GENERATED_FACES
+        };
         let (
             Some(downsample_sky),
             Some(downsample),
@@ -641,7 +685,7 @@ impl render_graph::Node for SkyEnvmapNode {
             pass.set_pipeline(trilight);
             for (bind_group, offset) in &resources.trilight {
                 pass.set_bind_group(0, bind_group, &[*offset]);
-                pass.dispatch_workgroups(1, 1, GENERATED_FACES);
+                pass.dispatch_workgroups(1, 1, faces);
             }
             return Ok(());
         }
@@ -662,13 +706,13 @@ impl render_graph::Node for SkyEnvmapNode {
         for (mip, (bind_group, offset)) in resources.specular.iter().enumerate() {
             let size = groups(SPECULAR_SIZE >> mip);
             pass.set_bind_group(0, bind_group, &[*offset]);
-            pass.dispatch_workgroups(size, size, GENERATED_FACES);
+            pass.dispatch_workgroups(size, size, faces);
         }
 
         pass.set_pipeline(irradiance);
         let (bind_group, offset) = &resources.irradiance;
         pass.set_bind_group(0, bind_group, &[*offset]);
-        pass.dispatch_workgroups(groups(DIFFUSE_SIZE), groups(DIFFUSE_SIZE), GENERATED_FACES);
+        pass.dispatch_workgroups(groups(DIFFUSE_SIZE), groups(DIFFUSE_SIZE), faces);
 
         Ok(())
     }

@@ -44,7 +44,10 @@ await driver.close()
 `findChrome()` takes `CHROME_PATH`, else the places `local-harness/benchmark` looks. `launch`
 takes `headless` (default true), `args` (more Chrome flags) and `windowSize`. `ready()` waits for
 a frame of the page's origin with both `window.engine_console_command` and
-`window.__dclTrustedInput`. `frameTargets()` lists the page and the out-of-process iframes.
+`window.__dclTrustedInput`, and for the page to draw it (see "Wire protocol"); it rejects when its
+`timeout` (default 120 s) passes first. A page that never draws, such as a minimised headed window,
+makes `ready()` reject at that timeout. `frameTargets()` lists the page and the out-of-process
+iframes.
 `DCL_WEB_DRIVER_DEBUG=1` logs what the driver ignores or cannot answer.
 
 `consoleMessages()` is what the page said so far, every frame's: `console.*` calls, uncaught
@@ -80,9 +83,14 @@ It serves a call only from a default (not isolated-world) context of the origin 
 Control 2, Meta 4, Shift 8 in CDP's `modifiers`) until sent with `up`, and are on every event
 between. A key held with Alt, Control or Meta sends no text.
 
-Before the first click on a document the runner takes a screenshot of the page. A frame that has
-only just appeared cannot be hit-tested until its first frame is composited, and a click sent
-earlier is lost (it was, one time in five, with several browsers starting at once).
+The runner takes a screenshot of the page once for each document, which waits for the document's
+first frame. A frame that has only just appeared cannot be hit-tested until its first frame is
+composited, and a click sent earlier is lost (it was, one time in five, with several browsers
+starting at once). `ready()` waits for that screenshot within its own timeout, because a browser's
+first start on a machine can draw its first frame more than 5 s after the page's scripts have run.
+A click from a document `ready()` has not seen waits for it up to 5 s, less than the 10 s the page
+waits for the answer, and is then sent. A document pays that wait one time: later clicks are sent
+at once.
 
 ## Why the frame is offset
 

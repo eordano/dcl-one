@@ -13,44 +13,48 @@ use system_bridge::PortableState;
 use super::{Model, SmartWearables};
 use crate::portables::PortableScenesView;
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<SmartWearablesCommand, _>(smart_wearables)
-        .add_console_command::<SmartWearablesStateCommand, _>(smart_wearables_state)
-        .add_debug_section(DebugSection {
-            title: "Smart wearables",
-            query: "/smart_wearables_state",
-            fields: &[
-                (
-                    "Current scene allows portable experiences",
-                    "currentSceneAllows",
-                ),
-                ("Current scene hides their UI", "currentSceneHidesUi"),
-                ("Body shape", "bodyShape"),
-                ("Realm preview wearables", "previewCount"),
-                ("Entries (urn / state / reason)", "entries"),
-            ],
-            actions: &[],
-            inputs: &[
-                DebugInput {
-                    label: "Run without equipping (urn)",
-                    field: "",
-                    command: "/smart_wearable run {value}",
-                    kind: DebugInputKind::Text,
-                },
-                DebugInput {
-                    label: "Stop (urn)",
-                    field: "",
-                    command: "/smart_wearable kill {value}",
-                    kind: DebugInputKind::Text,
-                },
-                DebugInput {
-                    label: "Restart (urn)",
-                    field: "",
-                    command: "/smart_wearable restart {value}",
-                    kind: DebugInputKind::Text,
-                },
-            ],
-        });
+pub(super) struct SmartWearablesDiagnosticsPlugin;
+
+impl Plugin for SmartWearablesDiagnosticsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<SmartWearablesCommand, _>(smart_wearables)
+            .add_console_command::<SmartWearablesStateCommand, _>(smart_wearables_state)
+            .add_debug_section(DebugSection {
+                title: "Smart wearables",
+                query: "/smart_wearables_state",
+                fields: &[
+                    (
+                        "Current scene allows portable experiences",
+                        "currentSceneAllows",
+                    ),
+                    ("Current scene hides their UI", "currentSceneHidesUi"),
+                    ("Body shape", "bodyShape"),
+                    ("Realm preview wearables", "previewCount"),
+                    ("Entries (urn / state / reason)", "entries"),
+                ],
+                actions: &[],
+                inputs: &[
+                    DebugInput {
+                        label: "Run without equipping (urn)",
+                        field: "",
+                        command: "/smart_wearable run {value}",
+                        kind: DebugInputKind::Text,
+                    },
+                    DebugInput {
+                        label: "Stop (urn)",
+                        field: "",
+                        command: "/smart_wearable kill {value}",
+                        kind: DebugInputKind::Text,
+                    },
+                    DebugInput {
+                        label: "Restart (urn)",
+                        field: "",
+                        command: "/smart_wearable restart {value}",
+                        kind: DebugInputKind::Text,
+                    },
+                ],
+            });
+    }
 }
 
 /// List the smart wearables and their states.

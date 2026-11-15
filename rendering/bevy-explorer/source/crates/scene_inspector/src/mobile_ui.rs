@@ -3,8 +3,12 @@ use bevy_console::ConsoleCommand;
 use console::DoAddConsoleCommand;
 use scene_runner::MobileUiEmulation;
 
-pub fn add_mobile_ui_command(app: &mut App) {
-    app.add_console_command::<MobileUiCommand, _>(mobile_ui_cmd);
+pub struct MobileUiCommandPlugin;
+
+impl Plugin for MobileUiCommandPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<MobileUiCommand, _>(mobile_ui_cmd);
+    }
 }
 
 /// Tell scenes they run on a phone: the mobile platform, and the mobile client's interactable area

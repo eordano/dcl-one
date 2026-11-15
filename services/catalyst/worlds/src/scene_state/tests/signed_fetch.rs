@@ -7,7 +7,6 @@ use parking_lot::Mutex;
 
 use crate::http::Outbound;
 use crate::scene_state::crdt::{CrdtMessage, decode_batch, encode_batch};
-use crate::scene_state::delegation::verify::{StorageDelegationTarget, verify_storage_delegation};
 use crate::scene_state::delegation::{
     DelegationMinter, DelegationScope, DelegationSlot, Wallet, parse_storage_delegation,
     renewal_loop,
@@ -15,6 +14,7 @@ use crate::scene_state::delegation::{
 use crate::scene_state::jsruntime::{self, StorageCtx, parse_origin};
 use crate::scene_state::runtime::RuntimeLimits;
 use crate::shared::signed_fetch::build_legacy_payload;
+use crate::storage::delegation::{StorageDelegationTarget, verify_storage_delegation};
 
 const AUTHORITATIVE_KEY: &str =
     "0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
@@ -336,6 +336,21 @@ async fn signed_fetch_pipeline_signs_caps_and_confines_requests() {
     let authoritative = Wallet::from_hex(AUTHORITATIVE_KEY).unwrap();
     let trusted = vec![authoritative.address()];
     let wire_scope = header("x-authoritative-scope").unwrap();
+    let decoded_scope = BASE64.decode(&wire_scope).unwrap();
+    assert_eq!(BASE64.encode(&decoded_scope), wire_scope);
+    let scope: serde_json::Value = serde_json::from_slice(&decoded_scope).unwrap();
+    let expiration = scope["payload"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("Expiration: "))
+        .unwrap();
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(expiration)
+            .unwrap()
+            .to_rfc3339(),
+        expiration
+    );
     fn target<'a>(
         signer: &'a str,
         world: &'a str,

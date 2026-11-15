@@ -26,13 +26,13 @@ impl Plugin for SceneInspectorPlugin {
         app.init_resource::<PendingSnapshotRequests>();
         app.init_resource::<snapshot::PendingEntityAllocations>();
 
-        manual_registry::register_engine_components(app);
+        app.add_plugins(manual_registry::EngineComponentsPlugin);
 
-        read_commands::add_read_commands(app);
-        panel::register(app);
-        write_commands::add_write_commands(app);
-        asset_commands::add_asset_commands(app);
-        mobile_ui::add_mobile_ui_command(app);
+        app.add_plugins(read_commands::ReadCommandsPlugin);
+        app.add_plugins(panel::SceneInspectorPanelPlugin);
+        app.add_plugins(write_commands::WriteCommandsPlugin);
+        app.add_plugins(asset_commands::AssetCommandsPlugin);
+        app.add_plugins(mobile_ui::MobileUiCommandPlugin);
 
         // after the scene loop so replies are handled the frame they arrive, and before pruning
         // so a reply that raced a scene breaking is still delivered

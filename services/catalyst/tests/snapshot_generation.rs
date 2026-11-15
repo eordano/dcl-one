@@ -1017,10 +1017,10 @@ async fn a_second_node_syncs_from_the_first_nodes_snapshots_and_pointer_changes(
     let gen_a = SnapshotGenerator::new(node_a.clone(), true, settings(100));
     gen_a.spawn_job(&jobs_a);
     let old_local = seed_old_local_scene(&node_a, now).await;
-    let deployer = WriteDeployer::new(
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
         db_a.pool.clone(),
         node_a.storage.clone(),
-        Arc::new(catalyst::auth::PeerValidated),
+        Some(Arc::new(catalyst::auth::PeerValidated)),
     );
     let asset = b"a texture".to_vec();
     let asset_hash = catalyst::auth::hash_bytes_v1(&asset);
@@ -1259,10 +1259,10 @@ async fn an_unpublished_local_scene_is_left_out_of_what_a_peer_replays() {
 
     // A: an old local scene on 7,7, overwritten by a newer local deploy there.
     let old_local = seed_old_local_scene(&node_a, now).await;
-    let deployer = WriteDeployer::new(
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
         db_a.pool.clone(),
         node_a.storage.clone(),
-        Arc::new(catalyst::auth::PeerValidated),
+        Some(Arc::new(catalyst::auth::PeerValidated)),
     );
     let asset = b"a newer scene".to_vec();
     let asset_hash = catalyst::auth::hash_bytes_v1(&asset);
@@ -1436,10 +1436,10 @@ async fn restored_scene_database(
     node.sync.set_state(SyncState::Syncing);
 
     let old_local = seed_old_local_scene(&node, now).await;
-    let deployer = WriteDeployer::new(
+    let deployer = WriteDeployer::with_partial_validation_for_tests(
         db_a.pool.clone(),
         node.storage.clone(),
-        Arc::new(catalyst::auth::PeerValidated),
+        Some(Arc::new(catalyst::auth::PeerValidated)),
     );
     let asset = b"a newer scene".to_vec();
     let asset_hash = catalyst::auth::hash_bytes_v1(&asset);

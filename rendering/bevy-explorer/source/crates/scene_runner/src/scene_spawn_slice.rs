@@ -57,7 +57,7 @@ impl Plugin for SceneSpawnSlicePlugin {
             )
             .add_plugins(spawn_timing::SpawnTimingPlugin);
         if app.world().get_resource::<NoRenderApp>().is_none() {
-            diagnostics::add_debug_section(app);
+            app.add_plugins(diagnostics::InstantiationDebugPanelPlugin);
         }
     }
 }

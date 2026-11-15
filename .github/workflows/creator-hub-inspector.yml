@@ -54,7 +54,7 @@ jobs:
 
       - name: Bump release version
         id: semantic-version
-        uses: paulhatch/semantic-version@502226b17e3e242e4befd0a45690fcbb27dd1373 # v6.0.3
+        uses: paulhatch/semantic-version@5ae1354e589c5a67345fb2c6e65b025ff676d7c7 # v6.0.7
         with:
           tag_prefix: "@dcl/inspector@"
           version_format: ${major}.${minor}.${patch}
@@ -217,7 +217,7 @@ jobs:
       # Bevy engine/agent bundles stay out: the preview doesn't load them.
       - name: AWS role for the SDK bucket
         if: env.CAN_UPLOAD == 'true'
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.CREATOR_HUB_SDK_BUCKET_ROLE_ARN }}
           aws-region: ${{ secrets.SDK_TEAM_AWS_REGION }}

@@ -91,3 +91,48 @@ test('inherited metadata hash cannot satisfy body binding', async () => {
     await assert.rejects(api.getHeaders({url:'https://example.org/',init:{body:''}}));
   } finally { delete Object.prototype.hashPayload; }
 });
+
+test('getHeaders preserves caller headers and lets signer headers win without case duplicates', async () => {
+  for (const body of [undefined, '', '{}']) {
+    for (const headers of [
+      {accept:'application/json', 'Content-Type':'caller', 'X-Identity-Metadata':'forged', 'X-Identity-Auth-Chain-0':'forged', 'X-Authoritative-Scope':'forged'},
+      [['accept','application/json'], ['Content-Type','caller'], ['X-Identity-Metadata','forged'], ['X-Identity-Auth-Chain-0','forged'], ['X-Authoritative-Scope','forged']],
+      new Headers({accept:'application/json', 'Content-Type':'caller', 'X-Identity-Metadata':'forged', 'X-Identity-Auth-Chain-0':'forged', 'X-Authoritative-Scope':'forged'}),
+    ]) {
+      const before = [...new Headers(headers).entries()];
+      global.Deno = {core:{ops:{op_signed_fetch_headers: async () => [
+        ['x-identity-metadata',metadata], ['x-identity-auth-chain-0','engine-chain'], ['content-type','signed'],
+      ]}}};
+      const result = await api.getHeaders({url:'https://example.org/',init:{body,headers}});
+      const returned = new Headers(result.headers);
+      assert.equal(returned.get('accept'),'application/json');
+      assert.equal(returned.get('content-type'),'signed');
+      assert.equal(returned.get('x-identity-metadata'),metadata);
+      assert.equal(returned.get('x-identity-auth-chain-0'),'engine-chain');
+      assert.equal(returned.get('x-authoritative-scope'),null);
+      const names = Object.keys(result.headers).map(name => name.toLowerCase());
+      assert.equal(new Set(names).size,names.length);
+      assert.deepEqual([...new Headers(headers).entries()],before);
+    }
+  }
+});
+
+test('getHeaders snapshots caller headers, URL, method and body before awaiting the signer', async () => {
+  let resolveSign, signed;
+  global.Deno = {core:{ops:{op_signed_fetch_headers: (...args) => {
+    signed = args;
+    return new Promise(resolve => resolveSign = resolve);
+  }}}};
+  const input = {url:'https://example.org/Path',init:{method:'POST',body:'before',headers:{accept:'application/json'}}};
+  const pending = api.getHeaders(input);
+  input.url = 'https://changed.example/';
+  input.init.method = 'DELETE';
+  input.init.body = 'after';
+  input.init.headers.accept = 'text/plain';
+  resolveSign([['x-identity-metadata',metadata]]);
+  const result = await pending;
+  assert.deepEqual(signed,['https://example.org/Path','POST','before']);
+  assert.equal(result.headers.accept,'application/json');
+  assert.equal(result.headers['x-identity-metadata'],metadata);
+  assert.equal(input.init.headers.accept,'text/plain');
+});

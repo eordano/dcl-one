@@ -8,7 +8,16 @@ use crate::protocol::pulse::decentraland::pulse::PendingTakeover;
 
 const CAPACITY: i64 = 10_000;
 const CAPACITY_LOCK: i64 = 4_638_100_557_221;
-const SETTLED_RETENTION_SECONDS: i64 = (super::MAX_ISLAND_TOKEN_TTL_SECONDS + 60 + 2) as i64;
+// LiveKit verifier leeway plus NumericDate precision and scheduling margin.
+// Keep token expiry and quarantine coverage aligned with these margins:
+// durable_tests::durable_unknown_never_enters_quarantine_final_and_restart_waits_all_issuer_tokens
+// and subscriber::tests::subscriber_caps_programmatic_token_ttl_to_its_quarantine_budget.
+pub(super) const LIVEKIT_TOKEN_LEEWAY: std::time::Duration = std::time::Duration::from_secs(60);
+pub(super) const TOKEN_EXPIRY_SAFETY: std::time::Duration = std::time::Duration::from_secs(2);
+const FULL_MAX_ISSUER_WAIT_SECONDS: u64 = super::MAX_ISLAND_TOKEN_TTL_SECONDS
+    + LIVEKIT_TOKEN_LEEWAY.as_secs()
+    + TOKEN_EXPIRY_SAFETY.as_secs();
+const SETTLED_RETENTION_SECONDS: i64 = FULL_MAX_ISSUER_WAIT_SECONDS as i64;
 
 #[derive(Clone)]
 pub struct SafetyStore {
@@ -30,21 +39,116 @@ impl SafetyLease {
         self.tx.commit().await.map_err(|_| GatewayError::Unknown)
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchState {
+    Dispatched,
+    Confirmed,
+    Rejected,
+    Quarantine,
+    SettledLate,
+    Superseded,
+}
+impl DispatchState {
+    fn decode(value: &str) -> Result<Self, GatewayError> {
+        match value {
+            "dispatched" => Ok(Self::Dispatched),
+            "confirmed" => Ok(Self::Confirmed),
+            "rejected" => Ok(Self::Rejected),
+            "quarantine" => Ok(Self::Quarantine),
+            "settled_late" => Ok(Self::SettledLate),
+            "superseded" => Ok(Self::Superseded),
+            _ => Err(GatewayError::Unknown),
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dispatched => "dispatched",
+            Self::Confirmed => "confirmed",
+            Self::Rejected => "rejected",
+            Self::Quarantine => "quarantine",
+            Self::SettledLate => "settled_late",
+            Self::Superseded => "superseded",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchPhase {
+    Initial,
+    QuarantineFinal,
+}
+impl DispatchPhase {
+    fn decode(value: &str) -> Result<Self, GatewayError> {
+        match value {
+            "initial" => Ok(Self::Initial),
+            "quarantine_final" => Ok(Self::QuarantineFinal),
+            _ => Err(GatewayError::Unknown),
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Initial => "initial",
+            Self::QuarantineFinal => "quarantine_final",
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Dispatch {
     pub dispatch_id: Uuid,
     pub cutoff: u64,
-    pub state: String,
+    pub state: DispatchState,
     pub quarantine_until: Option<chrono::NaiveDateTime>,
-    pub phase: String,
+    pub phase: DispatchPhase,
     pub fresh: bool,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Settlement {
     Confirmed,
     Rejected,
     SettledLate,
     Quarantine(u64),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RemovalOutcome {
+    Positive,
+    Rejected,
+    Unknown,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum QuarantinePolicy {
+    Disabled,
+    Enabled { applies: bool },
+}
+
+/// Classify only the completed RPC outcome. Callers retain retry, room repair,
+/// cancellation and persistence ordering, and choose quarantine applicability.
+pub(crate) fn classify_removal(
+    outcome: RemovalOutcome,
+    phase: DispatchPhase,
+    quarantine: QuarantinePolicy,
+    now_ms: u64,
+    cutoff_seconds: u64,
+) -> Option<Settlement> {
+    match outcome {
+        RemovalOutcome::Unknown => None,
+        RemovalOutcome::Rejected => Some(if phase == DispatchPhase::QuarantineFinal {
+            Settlement::SettledLate
+        } else {
+            Settlement::Rejected
+        }),
+        RemovalOutcome::Positive => Some(match quarantine {
+            QuarantinePolicy::Enabled { applies: true } if phase == DispatchPhase::Initial => {
+                Settlement::Quarantine(FULL_MAX_ISSUER_WAIT_SECONDS)
+            }
+            QuarantinePolicy::Disabled
+                if now_ms.saturating_add(1000) >= cutoff_seconds.saturating_mul(1000) =>
+            {
+                Settlement::SettledLate
+            }
+            _ => Settlement::Confirmed,
+        }),
+    }
 }
 
 impl SafetyStore {
@@ -209,7 +313,10 @@ impl SafetyStore {
         let latest: Option<Uuid> = row.get("latest_dispatch");
         if let Some(id) = latest {
             let current = Self::dispatch(&mut lease.tx, id).await?;
-            if !matches!(current.state.as_str(), "rejected" | "settled_late") {
+            if !matches!(
+                current.state,
+                DispatchState::Rejected | DispatchState::SettledLate
+            ) {
                 lease.commit().await?;
                 return Ok(Some(current));
             }
@@ -284,18 +391,18 @@ impl SafetyStore {
         let phase = if let Some(previous) = previous {
             Self::dispatch(&mut lease.tx, previous).await?.phase
         } else {
-            "initial".to_owned()
+            DispatchPhase::Initial
         };
         let id = Uuid::new_v4();
         sqlx::query("INSERT INTO social.island_cleanup_dispatches(dispatch_id,wallet,purpose,pulse_source,pulse_takeover_id,enforcement_cause,intent_root_key,intent_target_key,intent_generation,room_name,participant_identity,cutoff,fence_generation,phase,state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'dispatched')")
             .bind(id).bind(wallet).bind(purpose).bind(source).bind(takeover).bind(enforcement.map(|v|v.0)).bind(enforcement.map(|v|v.1)).bind(enforcement.map(|v|v.2)).bind(enforcement.map(|v|v.3))
-            .bind(room).bind(identity).bind(cutoff as i64).bind(i64::try_from(lease.snapshot.generation).map_err(|_|GatewayError::Unknown)?.checked_add(1).ok_or(GatewayError::Unknown)?).bind(&phase)
+            .bind(room).bind(identity).bind(cutoff as i64).bind(i64::try_from(lease.snapshot.generation).map_err(|_|GatewayError::Unknown)?.checked_add(1).ok_or(GatewayError::Unknown)?).bind(phase.as_str())
             .execute(&mut *lease.tx).await.map_err(|_|GatewayError::Unknown)?;
         Self::advance(&mut lease.tx, wallet, None).await?;
         Ok(Some(Dispatch {
             dispatch_id: id,
             cutoff,
-            state: "dispatched".into(),
+            state: DispatchState::Dispatched,
             quarantine_until: None,
             phase,
             fresh: true,
@@ -313,11 +420,11 @@ impl SafetyStore {
         Ok(Dispatch {
             dispatch_id: id,
             cutoff: cutoff as u64,
-            state: row.try_get("state").map_err(|_| GatewayError::Unknown)?,
+            state: DispatchState::decode(row.try_get("state").map_err(|_| GatewayError::Unknown)?)?,
             quarantine_until: row
                 .try_get("quarantine_until")
                 .map_err(|_| GatewayError::Unknown)?,
-            phase: row.try_get("phase").map_err(|_| GatewayError::Unknown)?,
+            phase: DispatchPhase::decode(row.try_get("phase").map_err(|_| GatewayError::Unknown)?)?,
             fresh: false,
         })
     }
@@ -344,20 +451,20 @@ impl SafetyStore {
         };
         let mut lease = self.lock(&wallet).await?;
         let dispatch = Self::dispatch(&mut lease.tx, id).await?;
-        if dispatch.state != "dispatched" {
+        if dispatch.state != DispatchState::Dispatched {
             return Ok(false);
         }
         let (state, quarantine) = match outcome {
-            Settlement::Confirmed => ("confirmed", None),
-            Settlement::Rejected => ("rejected", None),
-            Settlement::SettledLate => ("settled_late", None),
+            Settlement::Confirmed => (DispatchState::Confirmed, None),
+            Settlement::Rejected => (DispatchState::Rejected, None),
+            Settlement::SettledLate => (DispatchState::SettledLate, None),
             Settlement::Quarantine(seconds) => (
-                "quarantine",
+                DispatchState::Quarantine,
                 Some(i64::try_from(seconds).map_err(|_| GatewayError::Unknown)?),
             ),
         };
         sqlx::query("UPDATE social.island_cleanup_dispatches SET state=$2,settled_at=timezone('UTC',clock_timestamp()),quarantine_until=CASE WHEN $3::bigint IS NULL THEN NULL ELSE timezone('UTC',clock_timestamp())+$3*interval '1 second' END WHERE dispatch_id=$1 AND state='dispatched'")
-            .bind(id).bind(state).bind(quarantine).execute(&mut *lease.tx).await.map_err(|_|GatewayError::Unknown)?;
+            .bind(id).bind(state.as_str()).bind(quarantine).execute(&mut *lease.tx).await.map_err(|_|GatewayError::Unknown)?;
         Self::advance(
             &mut lease.tx,
             &wallet,
@@ -476,7 +583,6 @@ impl SafetyStore {
         &self,
         id: Uuid,
     ) -> Result<Option<Dispatch>, GatewayError> {
-        const FULL_MAX_ISSUER_WAIT_SECONDS: u64 = super::MAX_ISLAND_TOKEN_TTL_SECONDS + 60 + 2;
         let wallet: Option<String> = sqlx::query_scalar(
             "SELECT wallet FROM social.island_cleanup_dispatches WHERE dispatch_id=$1",
         )
@@ -550,9 +656,9 @@ impl SafetyStore {
         Ok(Some(Dispatch {
             dispatch_id: next,
             cutoff,
-            state: "dispatched".into(),
+            state: DispatchState::Dispatched,
             quarantine_until: None,
-            phase: "quarantine_final".into(),
+            phase: DispatchPhase::QuarantineFinal,
             fresh: true,
         }))
     }
@@ -757,6 +863,104 @@ impl SafetyStore {
 #[cfg(test)]
 mod durable_tests {
     use super::*;
+
+    #[test]
+    fn stored_dispatch_values_decode_exactly_and_unknown_values_fail_closed() {
+        for (label, value) in [
+            ("dispatched", DispatchState::Dispatched),
+            ("confirmed", DispatchState::Confirmed),
+            ("rejected", DispatchState::Rejected),
+            ("quarantine", DispatchState::Quarantine),
+            ("settled_late", DispatchState::SettledLate),
+            ("superseded", DispatchState::Superseded),
+        ] {
+            assert_eq!(DispatchState::decode(label).unwrap(), value);
+            assert_eq!(value.as_str(), label);
+        }
+        for (label, value) in [
+            ("initial", DispatchPhase::Initial),
+            ("quarantine_final", DispatchPhase::QuarantineFinal),
+        ] {
+            assert_eq!(DispatchPhase::decode(label).unwrap(), value);
+            assert_eq!(value.as_str(), label);
+        }
+        for unknown in ["", "CONFIRMED", "confirmed ", "future", "initial"] {
+            assert!(matches!(
+                DispatchState::decode(unknown),
+                Err(GatewayError::Unknown)
+            ));
+        }
+        for unknown in ["", "INITIAL", "initial ", "future", "confirmed"] {
+            assert!(matches!(
+                DispatchPhase::decode(unknown),
+                Err(GatewayError::Unknown)
+            ));
+        }
+    }
+
+    #[test]
+    fn settlement_classification_preserves_boundaries_and_caller_applicability() {
+        use QuarantinePolicy::{Disabled, Enabled};
+        use RemovalOutcome::{Positive, Rejected, Unknown};
+        for (now, expected) in [
+            (98_999, Settlement::Confirmed),
+            (99_000, Settlement::SettledLate),
+            (200_000, Settlement::SettledLate),
+        ] {
+            assert_eq!(
+                classify_removal(Positive, DispatchPhase::Initial, Disabled, now, 100),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            classify_removal(
+                Positive,
+                DispatchPhase::Initial,
+                Enabled { applies: true },
+                200_000,
+                100
+            ),
+            Some(Settlement::Quarantine(122))
+        );
+        // Cross-room subscriber success must not inherit enforcement quarantine.
+        assert_eq!(
+            classify_removal(
+                Positive,
+                DispatchPhase::Initial,
+                Enabled { applies: false },
+                200_000,
+                100
+            ),
+            Some(Settlement::Confirmed)
+        );
+        assert_eq!(
+            classify_removal(
+                Positive,
+                DispatchPhase::QuarantineFinal,
+                Enabled { applies: true },
+                200_000,
+                100
+            ),
+            Some(Settlement::Confirmed)
+        );
+        for policy in [
+            Disabled,
+            Enabled { applies: true },
+            Enabled { applies: false },
+        ] {
+            assert_eq!(
+                classify_removal(Rejected, DispatchPhase::Initial, policy, 200_000, 100),
+                Some(Settlement::Rejected)
+            );
+            assert_eq!(
+                classify_removal(Rejected, DispatchPhase::QuarantineFinal, policy, 0, 100),
+                Some(Settlement::SettledLate)
+            );
+            for phase in [DispatchPhase::Initial, DispatchPhase::QuarantineFinal] {
+                assert_eq!(classify_removal(Unknown, phase, policy, 200_000, 100), None);
+            }
+        }
+    }
 
     async fn fixture() -> Option<(SafetyStore, String)> {
         let configured = std::env::var("CATALYST_TEST_DATABASE_URL")
@@ -1061,7 +1265,7 @@ mod durable_tests {
             .unwrap()
             .unwrap();
         assert_ne!(final_attempt.dispatch_id, initial.dispatch_id);
-        assert_eq!(final_attempt.phase, "quarantine_final");
+        assert_eq!(final_attempt.phase, DispatchPhase::QuarantineFinal);
         assert!(
             store
                 .begin_quarantine_final(final_attempt.dispatch_id)
@@ -1170,7 +1374,7 @@ mod durable_tests {
             .await
             .unwrap()
             .expect("existing obligation keeps a replacement slot at global capacity");
-        assert_eq!(final_attempt.phase, "quarantine_final");
+        assert_eq!(final_attempt.phase, DispatchPhase::QuarantineFinal);
         assert!(
             store
                 .authorize("capacity-1", None, final_attempt.cutoff)

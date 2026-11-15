@@ -45,7 +45,7 @@ impl Plugin for AVPlayerPlugin {
         app.add_plugins(VideoPlayerPlugin);
         #[cfg(all(not(test), feature = "ffmpeg"))]
         app.add_plugins(AudioSinkPlugin);
-        crate::debug_panel::register(app);
+        app.add_plugins(crate::debug_panel::MediaDebugPanelPlugin);
         app.add_plugins(AudioSourcePlugin);
         app.add_plugins(AudioSourcePluginImpl);
 

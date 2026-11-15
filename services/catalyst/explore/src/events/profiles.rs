@@ -45,6 +45,7 @@ use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value, json};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool};
 
@@ -760,7 +761,7 @@ pub async fn update_my_profile_settings(
         let signer = state.signer(&headers, "patch", uri.path()).await?;
         let patch = own_settings_patch(&body)?;
         let mut tx = state.pool.begin().await?;
-        record_signed_request(
+        super::audit::record_signed_request(
             &mut tx,
             &headers,
             &signer,
@@ -768,7 +769,7 @@ pub async fn update_my_profile_settings(
             "patch",
             uri.path(),
             &raw_body,
-            "ProfileSettingsUpdate",
+            super::audit::SignedWrite::Profile,
         )
         .await?;
         let (settings, _) = save_settings(&mut tx, &signer, &patch).await?;
@@ -797,89 +798,6 @@ pub async fn update_my_profile_settings(
         return Err(invalid_data());
     }
     Ok(ok(apply_profile_settings(&state, &signed, &signer).await?))
-}
-
-/// The audit row of a plain signed-fetch write, bound to its exact bytes
-/// when the client signed `body_sha256` and replay-protected when it signed
-/// a `nonce` (neither is required). The hash of a request
-/// without a nonce is its signer, timestamp and body, so an identical resend
-/// is logged once and never refused.
-#[allow(clippy::too_many_arguments)]
-async fn record_signed_request(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    headers: &HeaderMap,
-    signer: &str,
-    subject: &str,
-    method: &str,
-    path: &str,
-    body: &[u8],
-    action_type: &str,
-) -> Result<(), ApiError> {
-    let noun = if action_type == "ScheduleUpsert" {
-        "Schedule"
-    } else {
-        "Profile"
-    };
-    let metadata: Value = headers
-        .get("x-identity-metadata")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| serde_json::from_str(h).ok())
-        .unwrap_or_else(|| json!({}));
-    let digest = hex::encode(Sha256::digest(body));
-    if let Some(expected) = metadata.get("body_sha256").and_then(Value::as_str)
-        && expected != digest
-    {
-        return Err(ApiError::bad_request(format!(
-            "{noun} body must match signed body_sha256"
-        )));
-    }
-    let nonce = match metadata.get("nonce") {
-        None | Some(Value::Null) => None,
-        Some(nonce) => Some(
-            nonce
-                .as_str()
-                .filter(|nonce| {
-                    uuid::Uuid::parse_str(nonce).is_ok_and(|id| id.to_string() == *nonce)
-                })
-                .ok_or_else(|| {
-                    ApiError::bad_request(format!(
-                        "Signed {} nonce must be a canonical UUID",
-                        noun.to_ascii_lowercase()
-                    ))
-                })?,
-        ),
-    };
-    let timestamp = headers
-        .get("x-identity-timestamp")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.parse::<i64>().ok())
-        .ok_or_else(|| ApiError::bad_request("Invalid timestamp"))?;
-    let tag = format!("legacy-{}", noun.to_ascii_lowercase());
-    let hash = hex::encode(Sha256::digest(match nonce {
-        Some(nonce) => format!("{tag}:{signer}:{nonce}"),
-        None => format!("{tag}:{signer}:{timestamp}:{method}:{path}:{digest}"),
-    }));
-    let payload = json!({"method":method,"path":path,"body_sha256":digest,"nonce":nonce,"body":serde_json::from_slice::<Value>(body).unwrap_or(Value::Null)});
-    let fresh = fed::record_action(
-        tx,
-        &fed::Action {
-            scope: fed::Scope::Events,
-            signature_hash: &hash,
-            signer,
-            subject_id: Some(subject),
-            action_type,
-            payload: &payload,
-            signed_at: timestamp / 1000,
-        },
-    )
-    .await?;
-    if !fresh && nonce.is_some() {
-        return Err(ApiError::http(
-            409,
-            format!("{noun} request already applied"),
-        ));
-    }
-    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -951,7 +869,7 @@ pub async fn update_profile_settings(
         let target = profile_address(&profile_id)?;
         let patch = permissions_patch(&body)?;
         let mut tx = state.pool.begin().await?;
-        record_signed_request(
+        super::audit::record_signed_request(
             &mut tx,
             &headers,
             &signer,
@@ -959,7 +877,7 @@ pub async fn update_profile_settings(
             "patch",
             uri.path(),
             &raw_body,
-            "ProfileSettingsUpdate",
+            super::audit::SignedWrite::Profile,
         )
         .await?;
         let (settings, changed) = save_settings(&mut tx, &target, &patch).await?;
@@ -1362,7 +1280,7 @@ async fn apply_legacy_schedule(
         }
         None => (uuid::Uuid::new_v4().to_string(), None),
     };
-    record_signed_request(
+    super::audit::record_signed_request(
         &mut tx,
         headers,
         &signer,
@@ -1370,7 +1288,7 @@ async fn apply_legacy_schedule(
         method,
         path,
         raw_body,
-        "ScheduleUpsert",
+        super::audit::SignedWrite::Schedule,
     )
     .await?;
     let answer = match existing {

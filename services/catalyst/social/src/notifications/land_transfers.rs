@@ -216,26 +216,10 @@ mod tests {
             .connect_with(opts.database("postgres"))
             .await
             .unwrap();
-        let name = format!(
-            "catalyst_test_landnotif_{}",
-            &Uuid::new_v4().simple().to_string()[..12]
-        );
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE \"{name}\"")))
-            .execute(&admin)
-            .await
-            .unwrap();
-        let mut url = url::Url::parse(&base_url).unwrap();
-        url.set_path(&format!("/{name}"));
-        let pool = crate::db::connect_pool(
-            url.as_str(),
-            &crate::db::PoolSettings {
-                max_connections: 2,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        crate::db::apply_schema(&pool).await.unwrap();
+        let Some(pool) = crate::db::scratch::isolated_pool(2).await else {
+            return;
+        };
+        let name = pool.connect_options().get_database().unwrap().to_string();
         let land = "0xf87e31492faf9a91b02ee0deaad50d51d56d5d4d";
         let estate = "0x959e104e1a4db6317fa58f8295f586e1a978c297";
         let wallet = "0x00000000000000000000000000000000000000b0".to_string();

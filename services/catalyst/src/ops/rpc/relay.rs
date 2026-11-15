@@ -98,10 +98,25 @@ fn remember(state: &State, memo: Option<(String, Duration)>, body: &Value) {
     }
 }
 
+#[derive(Debug)]
+enum PostError {
+    Transport(String),
+    InvalidJson(reqwest::Error),
+}
+
+impl std::fmt::Display for PostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(error) => write!(f, "Upstream request failed: {error}"),
+            Self::InvalidJson(error) => write!(f, "Upstream returned invalid JSON: {error}"),
+        }
+    }
+}
+
 /// One upstream POST: through the guarded client, or the pooled client as
 /// is when the operator opted private upstreams in. Error texts never carry
 /// the URL (`SendError` strips it; `reqwest::Error::without_url`).
-async fn post_json(state: &State, upstream: &str, body: &Value) -> Result<Value, String> {
+async fn post_json(state: &State, upstream: &str, body: &Value) -> Result<Value, PostError> {
     let resp = if state.settings.allow_private_upstream {
         state
             .http
@@ -111,7 +126,7 @@ async fn post_json(state: &State, upstream: &str, body: &Value) -> Result<Value,
             .json(body)
             .send()
             .await
-            .map_err(|e| format!("Upstream request failed: {}", e.without_url()))?
+            .map_err(|e| PostError::Transport(e.without_url().to_string()))?
     } else {
         state
             .http
@@ -120,11 +135,11 @@ async fn post_json(state: &State, upstream: &str, body: &Value) -> Result<Value,
             .json(body)
             .send()
             .await
-            .map_err(|e| format!("Upstream request failed: {e}"))?
+            .map_err(|e| PostError::Transport(e.to_string()))?
     };
     resp.json::<Value>()
         .await
-        .map_err(|e| format!("Upstream returned invalid JSON: {}", e.without_url()))
+        .map_err(|e| PostError::InvalidJson(e.without_url()))
 }
 
 pub async fn handle_single(state: &Shared, network: &str, req: Value) -> Value {
@@ -142,7 +157,7 @@ pub async fn handle_single(state: &Shared, network: &str, req: Value) -> Value {
 async fn forward(state: &State, upstream: &str, id: Value, req: Value) -> Value {
     match post_json(state, upstream, &req).await {
         Ok(body) => normalize_response(id, body),
-        Err(message) => rpc_error(id, -32603, &message),
+        Err(error) => rpc_error(id, -32603, &error.to_string()),
     }
 }
 
@@ -165,13 +180,14 @@ async fn forward_batch(state: &Shared, upstream: &str, items: &[Forward]) -> Vec
         .collect();
     let body = match post_json(state, upstream, &Value::Array(wire)).await {
         Ok(body) => Some(body),
-        Err(message) if message.starts_with("Upstream request failed") => {
+        Err(error @ PostError::Transport(_)) => {
+            let message = error.to_string();
             return items
                 .iter()
                 .map(|item| rpc_error(item.id.clone(), -32603, &message))
                 .collect();
         }
-        Err(_) => None,
+        Err(PostError::InvalidJson(_)) => None,
     };
     let mut by_slot: HashMap<usize, Value> = HashMap::new();
     if let Some(Value::Array(elements)) = body {
@@ -353,6 +369,23 @@ pub(super) mod tests {
     }
 
     pub(crate) async fn mock_upstream(batches: bool) -> (String, Upstream) {
+        mock_upstream_with_reply(if batches {
+            BatchReply::Complete
+        } else {
+            BatchReply::Unsupported
+        })
+        .await
+    }
+
+    #[derive(Clone, Copy)]
+    enum BatchReply {
+        Complete,
+        Unsupported,
+        Body(axum::http::StatusCode, &'static str),
+    }
+
+    async fn mock_upstream_with_reply(batch_reply: BatchReply) -> (String, Upstream) {
+        use axum::response::IntoResponse;
         use axum::{Json, Router, routing::post};
         let posts = Arc::new(AtomicUsize::new(0));
         let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -365,16 +398,21 @@ pub(super) mod tests {
                     p.fetch_add(1, Ordering::SeqCst);
                     l.lock().unwrap().push(payload.clone());
                     let reply = match &payload {
-                        Value::Array(items) if batches => {
-                            Value::Array(items.iter().map(answer).collect())
-                        }
-                        Value::Array(_) => json!({
-                            "jsonrpc": "2.0", "id": null,
-                            "error": { "code": -32600, "message": "batch not supported" }
-                        }),
+                        Value::Array(items) => match batch_reply {
+                            BatchReply::Complete => {
+                                Value::Array(items.iter().map(answer).collect())
+                            }
+                            BatchReply::Unsupported => json!({
+                                "jsonrpc": "2.0", "id": null,
+                                "error": { "code": -32600, "message": "batch not supported" }
+                            }),
+                            BatchReply::Body(status, body) => {
+                                return (status, body).into_response();
+                            }
+                        },
                         single => answer(single),
                     };
-                    Json(reply)
+                    Json(reply).into_response()
                 }
             }),
         );
@@ -441,6 +479,118 @@ pub(super) mod tests {
             sent[1..].iter().filter(|p| p["id"] == json!("a")).count(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_or_incomplete_batches_retry_only_unanswered_slots_even_on_http_error() {
+        for (reply, expected_posts) in [
+            ("not JSON", 4),
+            (
+                r#"[{"id":0,"result":"0xbal0x1"},{"id":2,"result":"137"}]"#,
+                2,
+            ),
+        ] {
+            let (url, upstream) = mock_upstream_with_reply(BatchReply::Body(
+                axum::http::StatusCode::BAD_GATEWAY,
+                reply,
+            ))
+            .await;
+            let state = test_state(&[("polygon", &url)]);
+            let out = handle_payload(&state, "polygon", batch_payload()).await;
+            check_batch(&out);
+            assert_eq!(upstream.posts.load(Ordering::SeqCst), expected_posts);
+            let sent = upstream.payloads.lock().unwrap();
+            assert!(sent[1..].iter().all(Value::is_object));
+            if expected_posts == 2 {
+                assert_eq!(sent[1]["id"], json!("a"));
+                assert_eq!(sent[1]["params"][0], json!("0x2"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn transport_failure_returns_every_batch_slot_without_individual_retries_or_url() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for allow_private in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/v3/SECRET", listener.local_addr().unwrap());
+            let posts = Arc::new(AtomicUsize::new(0));
+            let received = posts.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut buffer = [0; 4096];
+                    assert!(socket.read(&mut buffer).await.unwrap() > 0);
+                    received.fetch_add(1, Ordering::SeqCst);
+                    socket.shutdown().await.unwrap();
+                }
+            });
+            let mut settings = Settings::for_tests(&[("polygon", &url)]);
+            settings.allow_private_upstream = allow_private;
+            let state = State::new(
+                settings,
+                crate::http::Outbound::for_tests(),
+                crate::ops::rpc::tests::lazy_pool(),
+            );
+            let out = handle_payload(&state, "polygon", batch_payload()).await;
+            server.abort();
+            assert_eq!(posts.load(Ordering::SeqCst), 1);
+            for index in [0, 2, 3] {
+                assert_eq!(
+                    out[index],
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": if index == 3 { Value::Null } else { json!("a") },
+                        "error": {
+                            "code": -32603,
+                            "message": "Upstream request failed: error sending request"
+                        }
+                    })
+                );
+            }
+            assert_eq!(out[1]["error"]["code"], json!(-32601));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_single_response_preserves_error_text_without_the_upstream_url() {
+        use axum::{Router, http::StatusCode, routing::post};
+
+        for allow_private in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/v3/SECRET", listener.local_addr().unwrap());
+            let app = Router::new().route(
+                "/v3/SECRET",
+                post(|| async { (StatusCode::BAD_GATEWAY, "not JSON") }),
+            );
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let mut settings = Settings::for_tests(&[("polygon", &url)]);
+            settings.allow_private_upstream = allow_private;
+            let state = State::new(
+                settings,
+                crate::http::Outbound::for_tests(),
+                crate::ops::rpc::tests::lazy_pool(),
+            );
+            let out = handle_single(
+                &state,
+                "polygon",
+                json!({ "id": "single", "method": "eth_getBalance", "params": ["0x1", "latest"] }),
+            )
+            .await;
+            server.abort();
+            assert_eq!(
+                out,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": "single",
+                    "error": {
+                        "code": -32603,
+                        "message": "Upstream returned invalid JSON: error decoding response body"
+                    }
+                })
+            );
+        }
     }
 
     #[tokio::test]

@@ -5,14 +5,14 @@
 
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 60;
-const ANSWER_RANGE: u32 = 101;
+const ANSWER_RANGE: u32 = 6001;
 
 const MARKER_HALF_PX: i64 = 2;
 
-pub const CLAIM_TOLERANCE: f64 = 4.0;
+pub const CLAIM_TOLERANCE: f64 = 3.0;
 
 pub fn answer_for_seed(seed: u64) -> f64 {
-    (seed % ANSWER_RANGE as u64) as f64
+    (4000 + seed % ANSWER_RANGE as u64) as f64 / 100.0
 }
 
 fn marker_pixel(answer_percent: f64) -> u32 {
@@ -148,6 +148,44 @@ fn crc32(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_answer_rounds_hundredths_once() {
+        assert_eq!(answer_for_seed(5098), 90.98);
+    }
+
+    #[tokio::test]
+    async fn first_and_refreshed_challenges_use_the_persisted_answer() {
+        let Some(db) = crate::test_db::OwnDatabase::create("captcha_answer_roundtrip").await else {
+            return;
+        };
+        let address = "0x1111111111111111111111111111111111111111";
+        let now = super::super::store::now();
+        // Reproduce the old generator's double rounding deterministically.
+        let generated = 40.0 + 5098.0 / 100.0;
+        assert_ne!(generated, 90.98);
+        let Challenge::Ready(first) =
+            challenge_with_generator(&db.pool, address, now, || Ok(generated))
+                .await
+                .unwrap()
+        else {
+            panic!("unexpected cooldown")
+        };
+        assert_eq!(first, 90.98);
+        let Challenge::Ready(refreshed) = challenge_with_generator(
+            &db.pool,
+            address,
+            now + chrono::Duration::seconds(1),
+            || panic!("an unexpired challenge must be reused"),
+        )
+        .await
+        .unwrap() else {
+            panic!("unexpected cooldown")
+        };
+        assert_eq!(first.to_bits(), refreshed.to_bits());
+        assert_eq!(render_png(first), render_png(refreshed));
+        db.drop().await;
+    }
 
     #[test]
     fn percent_pixel_percent_round_trips_within_tolerance() {
@@ -344,4 +382,121 @@ mod verdict_tests {
         assert!(!parse_verdict("not json"));
         assert!(!parse_verdict(""));
     }
+}
+
+pub enum Challenge {
+    Ready(f64),
+    Blocked(u64),
+}
+
+/// The cache's TTL is measured from the latest failure, rather than a rolling
+/// count of failures within a day. Success clears the complete failure history.
+pub async fn cooldown(
+    conn: &mut sqlx::PgConnection,
+    address: &str,
+    now: chrono::NaiveDateTime,
+) -> Result<u64, super::errors::ApiError> {
+    use sqlx::Row;
+    let row=sqlx::query("SELECT failed_attempts,last_failed_at FROM credits.captcha_attempts WHERE address=$1 AND last_failed_at>$2-interval '1 day'").bind(address).bind(now).fetch_optional(conn).await?;
+    Ok(row
+        .filter(|r| r.get::<i16, _>("failed_attempts") >= 3)
+        .map(|r| {
+            ((r.get::<chrono::NaiveDateTime, _>("last_failed_at") + chrono::Duration::days(1) - now)
+                .num_milliseconds()
+                .max(0) as u64)
+                .div_ceil(1000)
+        })
+        .unwrap_or(0))
+}
+
+pub async fn challenge(
+    pool: &sqlx::PgPool,
+    address: &str,
+    now: chrono::NaiveDateTime,
+) -> Result<Challenge, super::errors::ApiError> {
+    challenge_with_generator(pool, address, now, || {
+        let mut bytes = [0u8; 8];
+        getrandom::fill(&mut bytes).map_err(|_| {
+            super::errors::ApiError::Internal("captcha randomness unavailable".into())
+        })?;
+        Ok(answer_for_seed(u64::from_le_bytes(bytes)))
+    })
+    .await
+}
+
+async fn challenge_with_generator(
+    pool: &sqlx::PgPool,
+    address: &str,
+    now: chrono::NaiveDateTime,
+    generate: impl FnOnce() -> Result<f64, super::errors::ApiError>,
+) -> Result<Challenge, super::errors::ApiError> {
+    use sqlx::Row;
+    let mut tx = pool.begin().await?;
+    super::goals::wallet_lock(&mut tx, address).await?;
+    let remaining = cooldown(&mut tx, address, now).await?;
+    if remaining > 0 {
+        return Ok(Challenge::Blocked(remaining));
+    }
+    let previous=sqlx::query("SELECT id,answer_x::float8 AS answer FROM credits.captcha_challenges WHERE address=$1 AND consumed_at IS NULL AND expires_at>$2 ORDER BY id DESC LIMIT 1 FOR UPDATE").bind(address).bind(now).fetch_optional(&mut *tx).await?;
+    let expires = now + chrono::Duration::hours(2);
+    let (id, answer) = if let Some(row) = previous {
+        let id: i64 = row.get("id");
+        let answer: f64 = row.get("answer");
+        sqlx::query(
+            "UPDATE credits.captcha_challenges SET generated_at=$2,expires_at=$3 WHERE id=$1",
+        )
+        .bind(id)
+        .bind(now)
+        .bind(expires)
+        .execute(&mut *tx)
+        .await?;
+        (id, answer)
+    } else {
+        let answer = generate()?;
+        // Render and return the same value that later GETs and solves read:
+        // PostgreSQL's float8-to-NUMERIC conversion can round the input.
+        sqlx::query_as::<_, (i64, f64)>("INSERT INTO credits.captcha_challenges(address,answer_x,generated_at,expires_at) VALUES($1,$2,$3,$4) RETURNING id,answer_x::float8")
+            .bind(address).bind(answer).bind(now).bind(expires).fetch_one(&mut *tx).await?
+    };
+    sqlx::query("UPDATE credits.captcha_challenges SET consumed_at=$3 WHERE address=$1 AND consumed_at IS NULL AND id<>$2").bind(address).bind(id).bind(now).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Challenge::Ready(answer))
+}
+
+pub async fn solve(
+    pool: &sqlx::PgPool,
+    address: &str,
+    submitted: f64,
+    now: chrono::NaiveDateTime,
+) -> Result<(bool, bool), super::errors::ApiError> {
+    use sqlx::Row;
+    let mut tx = pool.begin().await?;
+    super::goals::wallet_lock(&mut tx, address).await?;
+    if cooldown(&mut tx, address, now).await? > 0 {
+        return Ok((false, true));
+    }
+    let row=sqlx::query("SELECT answer_x::float8 AS answer,generated_at FROM credits.captcha_challenges WHERE address=$1 AND consumed_at IS NULL AND expires_at>$2 ORDER BY id DESC LIMIT 1 FOR UPDATE").bind(address).bind(now).fetch_optional(&mut *tx).await?;
+    let Some(row) = row else {
+        return Ok((false, false));
+    };
+    // The source compares Date.now() values. PostgreSQL truncates timestamp
+    // nanoseconds to microseconds, so subtracting full-precision Rust times
+    // could accept an exactly-one-second solve after the storage round trip.
+    let generated_at = row.get::<chrono::NaiveDateTime, _>("generated_at");
+    let elapsed_ms = now.and_utc().timestamp_millis() - generated_at.and_utc().timestamp_millis();
+    let success =
+        (row.get::<f64, _>("answer") - submitted).abs() < CLAIM_TOLERANCE && elapsed_ms > 1000;
+    sqlx::query("UPDATE credits.captcha_challenges SET consumed_at=$2 WHERE address=$1 AND consumed_at IS NULL").bind(address).bind(now).execute(&mut *tx).await?;
+    let blocked = if success {
+        sqlx::query("DELETE FROM credits.captcha_attempts WHERE address=$1")
+            .bind(address)
+            .execute(&mut *tx)
+            .await?;
+        false
+    } else {
+        let attempts:i16=sqlx::query_scalar("INSERT INTO credits.captcha_attempts(address,failed_attempts,last_failed_at) VALUES($1,1,$2) ON CONFLICT(address) DO UPDATE SET failed_attempts=CASE WHEN credits.captcha_attempts.last_failed_at<=$2-interval '1 day' THEN 1 ELSE LEAST(3,credits.captcha_attempts.failed_attempts+1) END,last_failed_at=$2 RETURNING failed_attempts").bind(address).bind(now).fetch_one(&mut *tx).await?;
+        attempts >= 3
+    };
+    tx.commit().await?;
+    Ok((success, blocked))
 }

@@ -21,7 +21,6 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::NaiveDateTime;
 use serde::Serialize;
-use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -35,6 +34,9 @@ use super::{CommsState, SharedState};
 use crate::shared::signed_fetch::SignedPath;
 use crate::world_identity::{WorldName, is_world_realm_name};
 use crate::{Address, AuthorityNotEstablished, PermissionDecision};
+
+#[path = "streaming_notifications.rs"]
+pub(super) mod notifications;
 
 #[path = "streaming_jobs.rs"]
 mod jobs;
@@ -194,7 +196,13 @@ pub async fn scene_stream_access(
                     Renewal::Reuse => return Ok(Json(existing.response()).into_response()),
                     Renewal::Conflict => return Err(renewal_conflict()),
                     Renewal::Replace => {
-                        if !jobs::enqueue(&state, existing.id, None, false).await? {
+                        if !jobs::enqueue(
+                            &state,
+                            existing.id,
+                            jobs::CleanupCommand::IdleReplacement,
+                        )
+                        .await?
+                        {
                             return Err(renewal_conflict());
                         }
                         jobs::cleanup_access(&state, existing.id).await?;
@@ -373,7 +381,7 @@ async fn reset_access(
         let row = active_access(&state.pool, place_id)
             .await?
             .ok_or_else(|| ApiError::not_found(STREAM_ACCESS_NOT_FOUND_MSG))?;
-        if !jobs::enqueue(state, row.id, Some("streaming_key_reset"), true).await? {
+        if !jobs::enqueue(state, row.id, jobs::CleanupCommand::Reset).await? {
             return Err(renewal_conflict());
         }
         // The durable intent owns the old ingress's deletion and the reset notification,
@@ -397,30 +405,30 @@ async fn remove_access(
     let row = active_access(&state.pool, place_id)
         .await?
         .ok_or_else(|| ApiError::not_found("no active stream access for this scene"))?;
-    if !jobs::enqueue(state, row.id, Some("streaming_key_revoke"), true).await? {
+    if !jobs::enqueue(state, row.id, jobs::CleanupCommand::Revoke).await? {
         return Err(renewal_conflict());
     }
     jobs::cleanup_access(state, row.id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+pub(super) enum IngressEvent {
+    Started,
+    Ended,
+}
+
 /// The LiveKit webhook's ingress events: the active row of that ingress
 /// starts streaming (keeping the first start time) or stops.
 pub(super) async fn ingress_event(
     state: &CommsState,
-    event_kind: &str,
-    event: &Value,
+    event: IngressEvent,
+    ingress_id: Option<&str>,
 ) -> Result<(), ApiError> {
-    let Some(ingress_id) = event
-        .get("ingressInfo")
-        .and_then(|i| i.get("ingressId"))
-        .and_then(|v| v.as_str())
-        .filter(|id| !id.is_empty())
-    else {
+    let Some(ingress_id) = ingress_id.filter(|id| !id.is_empty()) else {
         return Ok(());
     };
-    match event_kind {
-        "ingress_started" => {
+    match event {
+        IngressEvent::Started => {
             sqlx::query(
                 "UPDATE social.scene_stream_access SET streaming = true, streaming_start_time = CASE WHEN streaming THEN COALESCE(streaming_start_time,$2) ELSE $2 END, streaming_state_version=streaming_state_version+1 \
                  WHERE ingress_id = $1 AND active",
@@ -430,10 +438,9 @@ pub(super) async fn ingress_event(
             .execute(&state.pool)
             .await?;
         }
-        "ingress_ended" => {
+        IngressEvent::Ended => {
             sqlx::query("UPDATE social.scene_stream_access SET streaming = false, streaming_state_version=streaming_state_version+1 WHERE ingress_id = $1 AND active").bind(ingress_id).execute(&state.pool).await?;
         }
-        _ => {}
     }
     Ok(())
 }

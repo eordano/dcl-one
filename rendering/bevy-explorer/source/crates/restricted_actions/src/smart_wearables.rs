@@ -67,7 +67,7 @@ impl Plugin for SmartWearablesPlugin {
                 .run_if(|| !server_mode()),
         );
         app.add_console_command::<SmartWearableCommand, _>(smart_wearable_command);
-        diagnostics::register(app);
+        app.add_plugins(diagnostics::SmartWearablesDiagnosticsPlugin);
     }
 }
 

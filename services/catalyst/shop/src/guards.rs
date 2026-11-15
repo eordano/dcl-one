@@ -111,6 +111,17 @@ impl From<Refusal> for Refused {
 /// Every [`Refusal`] variant as JSON: `code` names the variant, the rest are
 /// its fields under their names.
 pub fn refusal_json(refusal: &Refusal) -> Value {
+    let mut detail = base_refusal_json(refusal);
+    if matches!(
+        refusal,
+        Refusal::CreditsNotAllowed { .. } | Refusal::SecondaryCreditSpend { .. }
+    ) {
+        detail["allowed"] = json!([PaymentMethod::Mana]);
+    }
+    detail
+}
+
+pub(crate) fn base_refusal_json(refusal: &Refusal) -> Value {
     match refusal {
         Refusal::Incomplete { missing } => json!({ "code": "incomplete", "missing": missing }),
         Refusal::UnknownItem { asset } => json!({ "code": "unknownItem", "asset": asset }),
@@ -134,10 +145,10 @@ pub fn refusal_json(refusal: &Refusal) -> Value {
         Refusal::AmountOverflow { asset } => json!({ "code": "amountOverflow", "asset": asset }),
         Refusal::NotSignedIn => json!({ "code": "notSignedIn" }),
         Refusal::CreditsNotAllowed { asset, sale, kind } => {
-            json!({ "code": "creditsNotAllowed", "asset": asset, "sale": sale, "kind": kind, "allowed": [PaymentMethod::Mana] })
+            json!({ "code": "creditsNotAllowed", "asset": asset, "sale": sale, "kind": kind })
         }
         Refusal::SecondaryCreditSpend { asset } => {
-            json!({ "code": "secondaryCreditSpend", "asset": asset, "allowed": [PaymentMethod::Mana] })
+            json!({ "code": "secondaryCreditSpend", "asset": asset })
         }
         Refusal::UndecodedCustomCall { target, selector } => {
             json!({ "code": "undecodedCustomCall", "target": target, "selector": format!("0x{}", hex::encode(selector)) })
@@ -1055,6 +1066,138 @@ mod tests {
         .unwrap_err();
         assert_eq!(resale.status().as_u16(), 422, "{resale}");
         assert!(resale.to_string().contains("MANA only"), "{resale}");
+    }
+
+    #[test]
+    fn refusal_surfaces_keep_codes_and_guard_only_allowed_methods() {
+        use crate::policy::MissingFact;
+        use crate::types::{AssetKind, SaleKind};
+        let asset = AssetId::item(ChainId::POLYGON, BUYER, U256::from(7));
+        let venue = ContractRef {
+            chain_id: ChainId::POLYGON,
+            contract: BUYER,
+        };
+        let wei = ManaWei::new(U256::from(1));
+        let cases = [
+            (
+                Refusal::Incomplete {
+                    missing: MissingFact::CollectionItem,
+                },
+                "incomplete",
+            ),
+            (Refusal::UnknownItem { asset }, "unknownItem"),
+            (Refusal::RecordMismatch { asset }, "recordMismatch"),
+            (Refusal::NotMintable { asset }, "notMintable"),
+            (
+                Refusal::UnsupportedTrade { detail: "example" },
+                "unsupportedTrade",
+            ),
+            (Refusal::NameTaken { asset }, "nameTaken"),
+            (Refusal::NotARegistrar { asset }, "notARegistrar"),
+            (
+                Refusal::MethodNotAllowed {
+                    asset,
+                    method: PaymentMethod::Credits,
+                    allowed: vec![PaymentMethod::Mana],
+                },
+                "methodNotAllowed",
+            ),
+            (Refusal::NonPositiveQuote { asset }, "nonPositiveQuote"),
+            (Refusal::AmountOverflow { asset }, "amountOverflow"),
+            (Refusal::NotSignedIn, "notSignedIn"),
+            (
+                Refusal::CreditsNotAllowed {
+                    asset,
+                    sale: SaleKind::Secondary,
+                    kind: AssetKind::Wearable,
+                },
+                "creditsNotAllowed",
+            ),
+            (
+                Refusal::SecondaryCreditSpend { asset },
+                "secondaryCreditSpend",
+            ),
+            (
+                Refusal::UndecodedCustomCall {
+                    target: BUYER,
+                    selector: [1, 2, 3, 4],
+                },
+                "undecodedCustomCall",
+            ),
+            (
+                Refusal::ForwardedCustomCall {
+                    target: BUYER,
+                    selector: [1, 2, 3, 4],
+                },
+                "forwardedCustomCall",
+            ),
+            (
+                Refusal::ManaRemainderNotAllowed { asset },
+                "manaRemainderNotAllowed",
+            ),
+            (Refusal::AssetNotInGroup { asset }, "assetNotInGroup"),
+            (Refusal::LineNotSettled { asset }, "lineNotSettled"),
+            (Refusal::WrongCall { asset }, "wrongCall"),
+            (Refusal::MixedGroup, "mixedGroup"),
+            (
+                Refusal::CreditsChainUnsupported {
+                    chain_id: ChainId::ETHEREUM,
+                },
+                "creditsChainUnsupported",
+            ),
+            (
+                Refusal::WrongChain {
+                    expected: ChainId::POLYGON,
+                    got: ChainId::ETHEREUM,
+                },
+                "wrongChain",
+            ),
+            (
+                Refusal::GroupTooLarge { lines: 20, max: 10 },
+                "groupTooLarge",
+            ),
+            (Refusal::EmptyGroup, "emptyGroup"),
+            (
+                Refusal::NegativeDebit {
+                    debit: UsdCents::new(-1),
+                },
+                "negativeDebit",
+            ),
+            (
+                Refusal::CreditValueTooLarge {
+                    value: wei,
+                    cap: wei,
+                },
+                "creditValueTooLarge",
+            ),
+            (
+                Refusal::SettlementNeedAboveReference {
+                    need: wei,
+                    reference: wei,
+                },
+                "settlementNeedAboveReference",
+            ),
+            (
+                Refusal::UnlistedMarketplace { venue },
+                "unlistedMarketplace",
+            ),
+        ];
+        for (refusal, code) in cases {
+            let mana = crate::mana::wire::refusal_json(&refusal);
+            let mut guard = refusal_json(&refusal);
+            assert_eq!(mana["code"], code);
+            if matches!(
+                refusal,
+                Refusal::CreditsNotAllowed { .. } | Refusal::SecondaryCreditSpend { .. }
+            ) {
+                assert_eq!(
+                    guard.as_object_mut().unwrap().remove("allowed"),
+                    Some(json!(["mana"]))
+                );
+                assert!(mana.get("allowed").is_none());
+            }
+            assert_eq!(guard, mana, "{code}");
+        }
     }
 
     #[test]

@@ -121,6 +121,10 @@ jobs:
             try { Invoke-WebRequest $ffUrl -OutFile ffmpeg-6.0-full_build-shared.7z; break }
             catch { if ($i -eq 3) { throw }; Write-Host "ffmpeg download failed (attempt $i), retrying..."; Start-Sleep -Seconds 5 }
           }
+          # The release tag can get a different file. Accept only the archive with this digest.
+          $ffSha256 = "a852648944cdf4ce3aeebf16d750a036fe67ab657b82eb43f9f7fdcc7bef3af7"
+          $ffActual = (Get-FileHash ffmpeg-6.0-full_build-shared.7z -Algorithm SHA256).Hash.ToLower()
+          if ($ffActual -ne $ffSha256) { throw "ffmpeg archive has SHA-256 $ffActual, expected $ffSha256" }
           7z x ffmpeg-6.0-full_build-shared.7z
           mkdir ffmpeg
           mv ffmpeg-*/* ffmpeg/

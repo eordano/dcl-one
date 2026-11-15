@@ -514,6 +514,28 @@ pub struct Contract {
     pub chain_id: ChainId,
 }
 
+/// `unisex` asks for both shapes, the same request as male + female.
+pub(crate) fn body_shapes_for_genders(genders: &[String]) -> Option<Vec<String>> {
+    let has_unisex = genders.iter().any(|g| g == "unisex");
+    let has_male = has_unisex || genders.iter().any(|g| g == "male");
+    let has_female = has_unisex || genders.iter().any(|g| g == "female");
+    let mut out = Vec::new();
+    if has_male {
+        out.push("BaseMale".to_string());
+    }
+    if has_female {
+        out.push("BaseFemale".to_string());
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+pub(crate) fn emote_play_mode_clause(modes: &[String]) -> Option<bool> {
+    if modes.is_empty() || modes.len() == 2 {
+        return None;
+    }
+    Some(modes.iter().any(|m| m == "loop"))
+}
+
 fn sanitize(s: &str) -> String {
     let trimmed = s.trim();
     if trimmed.is_empty() || !trimmed.bytes().all(|b| b.is_ascii_digit()) {
@@ -745,6 +767,42 @@ mod tests {
             ApiError::from(InvalidParameterError::new("first", "abc")).message(),
             "The value of the first parameter is invalid: abc"
         );
+    }
+
+    #[test]
+    fn gender_filters_preserve_shape_order_and_ignore_unknown_values() {
+        for (genders, expected) in [
+            (vec![], None),
+            (vec!["unknown"], None),
+            (vec!["male"], Some(vec!["BaseMale"])),
+            (vec!["female"], Some(vec!["BaseFemale"])),
+            (vec!["unisex"], Some(vec!["BaseMale", "BaseFemale"])),
+            (
+                vec!["female", "unknown", "male", "male"],
+                Some(vec!["BaseMale", "BaseFemale"]),
+            ),
+        ] {
+            let genders = genders.into_iter().map(String::from).collect::<Vec<_>>();
+            let expected =
+                expected.map(|shapes| shapes.into_iter().map(String::from).collect::<Vec<_>>());
+            assert_eq!(body_shapes_for_genders(&genders), expected);
+        }
+    }
+
+    #[test]
+    fn emote_modes_preserve_empty_and_two_entry_no_filter_behavior() {
+        for (modes, expected) in [
+            (vec![], None),
+            (vec!["loop"], Some(true)),
+            (vec!["simple"], Some(false)),
+            (vec!["unknown"], Some(false)),
+            (vec!["loop", "simple"], None),
+            (vec!["loop", "loop"], None),
+            (vec!["simple", "unknown", "loop"], Some(true)),
+        ] {
+            let modes = modes.into_iter().map(String::from).collect::<Vec<_>>();
+            assert_eq!(emote_play_mode_clause(&modes), expected);
+        }
     }
 
     #[test]

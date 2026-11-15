@@ -104,10 +104,11 @@ def validate_workflow(workflow):
     jobs = re.findall(r"^  rust:\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S)
     require(len(jobs) == 1, "online provenance Rust job missing/conditional")
     # The only condition allowed keeps it running whatever happens to the jobs it needs, skipping it only when the
-    # plan compared the change and found none of push.paths (library/** among them) touched.
+    # plan compared the change and found none of push.paths (library/** among them) touched, or no input of the
+    # Rust tests (RUST_INPUTS in tooling/dev-ci.py; the ENet source and this check are on that list).
     conditions = re.findall(r"^    (?:if|continue-on-error):.*$", jobs[0], re.M)
     needs = re.search(r"^    needs:", jobs[0], re.M)
-    require(conditions == (["    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}"] if needs else []),
+    require(conditions == (["    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && needs.changes.outputs.rust != 'false' }}"] if needs else []),
             "online provenance Rust job missing/conditional")
     matrix = re.findall(r"^        os:(.*?)(?=^ {0,8}\S|\Z)", jobs[0], re.M | re.S)
     platforms = re.findall(r"\[[^\]]*\]", matrix[0]) if len(matrix) == 1 else []

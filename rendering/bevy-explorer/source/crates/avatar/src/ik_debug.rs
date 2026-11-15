@@ -73,37 +73,42 @@ const HEAD: &[Range] = &[
     ),
 ];
 
-pub(super) fn register(app: &mut App) {
-    app.add_console_command::<IkCommand, _>(ik_command);
-    for (title, query, ranges) in [("Feet IK", "/ik feet", FEET), ("Head IK", "/ik head", HEAD)] {
-        let enabled = format!("{query} enabled {{value}}");
-        let commands: Vec<_> = ranges
-            .iter()
-            .map(|r| format!("{query} {} {{value}}", r.field))
-            .collect();
-        let mut inputs = vec![DebugInput {
-            label: "Enabled",
-            field: "enabled",
-            command: &enabled,
-            kind: DebugInputKind::Toggle,
-        }];
-        inputs.extend(ranges.iter().zip(&commands).map(|(r, command)| DebugInput {
-            label: r.label,
-            field: r.field,
-            command,
-            kind: DebugInputKind::Number {
-                min: r.min,
-                max: r.max,
-                step: r.step,
-            },
-        }));
-        app.add_preview_debug_inputs(DebugSection {
-            title,
-            query,
-            fields: &[],
-            actions: &[],
-            inputs: &inputs,
-        });
+pub(super) struct IkDebugPlugin;
+
+impl Plugin for IkDebugPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_console_command::<IkCommand, _>(ik_command);
+        for (title, query, ranges) in [("Feet IK", "/ik feet", FEET), ("Head IK", "/ik head", HEAD)]
+        {
+            let enabled = format!("{query} enabled {{value}}");
+            let commands: Vec<_> = ranges
+                .iter()
+                .map(|r| format!("{query} {} {{value}}", r.field))
+                .collect();
+            let mut inputs = vec![DebugInput {
+                label: "Enabled",
+                field: "enabled",
+                command: &enabled,
+                kind: DebugInputKind::Toggle,
+            }];
+            inputs.extend(ranges.iter().zip(&commands).map(|(r, command)| DebugInput {
+                label: r.label,
+                field: r.field,
+                command,
+                kind: DebugInputKind::Number {
+                    min: r.min,
+                    max: r.max,
+                    step: r.step,
+                },
+            }));
+            app.add_preview_debug_inputs(DebugSection {
+                title,
+                query,
+                fields: &[],
+                actions: &[],
+                inputs: &inputs,
+            });
+        }
     }
 }
 

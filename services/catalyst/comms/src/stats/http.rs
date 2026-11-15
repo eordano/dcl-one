@@ -159,12 +159,28 @@ pub fn socket_alias(router: Router, state: State) -> Router {
 }
 /// Install the complete public hosts outside shared path normalization and middleware.
 pub fn mount_services(shared: Router, state: State, stats: Router, connector: Router) -> Router {
+    // Camera Reel keeps its route spelling, including the Swagger UI directory.
+    let camera_reel = shared.clone();
     let shared = tower_http::normalize_path::NormalizePath::trim_trailing_slash(shared);
     merge_root(
         Router::new()
             .fallback_service(shared)
             .nest("/archipelago-ea-stats", stats)
-            .nest("/archipelago-ea-ws-connector", connector),
+            .nest("/archipelago-ea-ws-connector", connector)
+            .layer(middleware::from_fn(move |request: Request, next: Next| {
+                let camera_reel = camera_reel.clone();
+                async move {
+                    let path = request.uri().path();
+                    if path == "/camera-reel-service" || path.starts_with("/camera-reel-service/") {
+                        // Dispatch without an outer route match: wildcard captures would leak
+                        // into the inner Path extractor and alter its metrics route label.
+                        use tower::ServiceExt;
+                        camera_reel.oneshot(request).await.unwrap()
+                    } else {
+                        next.run(request).await
+                    }
+                }
+            })),
         state,
     )
 }

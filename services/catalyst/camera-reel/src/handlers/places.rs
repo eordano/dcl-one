@@ -8,9 +8,8 @@ use crate::dto::{
     GalleryImage, GalleryImageWithPlace, GetMultiplePlacesImagesBody,
     GetMultiplePlacesImagesResponse, GetPlaceImagesResponse, PlaceDataResponse,
 };
-use crate::extract::{self, Query};
 use crate::handlers::{PageQuery, next_cursor};
-use crate::http::ApiError;
+use crate::http::{ApiError, JsonBody, Query};
 
 pub const MAX_PLACES_IDS: usize = 100;
 
@@ -26,12 +25,26 @@ pub fn validate_places_ids(places_ids: &[String]) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// A failed lookup is upstream's 502 (its places API was a hop away); the
-/// database error stays in the log.
+/// Preserve the Places client's acquisition/decoding distinction without
+/// exposing database diagnostics. The transport-specific detail is local: no
+/// HTTP status is invented for a lookup that never made an HTTP request.
+fn world_place_lookup_error(error: &sqlx::Error) -> ApiError {
+    let diagnostic = match error {
+        sqlx::Error::ColumnDecode { .. }
+        | sqlx::Error::Decode(_)
+        | sqlx::Error::ColumnNotFound(_)
+        | sqlx::Error::ColumnIndexOutOfBounds { .. } => {
+            "failed to parse response: invalid place lookup result"
+        }
+        _ => "request failed: place lookup unavailable",
+    };
+    ApiError::BadGateway(format!("failed to resolve world name: {diagnostic}"))
+}
+
 async fn world_place_ids(state: &SharedState, name: &str) -> Result<Vec<String>, ApiError> {
-    state.db.world_place_ids(name).await.map_err(|e| {
-        tracing::error!("failed to resolve world name '{name}': {e}");
-        ApiError::BadGateway("failed to resolve world name".to_string())
+    state.db.world_place_ids(name).await.map_err(|error| {
+        tracing::error!(world_name = name, error = %error, "failed to resolve world name");
+        world_place_lookup_error(&error)
     })
 }
 
@@ -99,12 +112,12 @@ pub async fn get_place_images(
         .into_response())
 }
 
-/// A read behind a `POST` (the id list is the body); `writes::guard` keeps
+/// A read behind a `POST` (the id list is the body); the write-route gate keeps
 /// it open while creator writes are disabled.
 pub async fn get_multiple_places_images(
     State(state): State<SharedState>,
     Query(q): Query<PageQuery>,
-    extract::Json(body): extract::Json<GetMultiplePlacesImagesBody>,
+    JsonBody(body): JsonBody<GetMultiplePlacesImagesBody>,
 ) -> Result<Response, ApiError> {
     validate_places_ids(&body.places_ids)?;
 
@@ -168,7 +181,7 @@ async fn resolve_places_ids(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PLACES_IDS, validate_places_ids};
+    use super::{MAX_PLACES_IDS, validate_places_ids, world_place_lookup_error};
     use crate::handlers::{MAX_LIMIT, capped_limit};
     use crate::http::ApiError;
 
@@ -205,5 +218,63 @@ mod tests {
         assert_eq!(ids.len(), MAX_PLACES_IDS + 1);
         let err = validate_places_ids(&ids).unwrap_err();
         assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn lookup_errors_keep_source_classes_without_database_diagnostics() {
+        use axum::body::to_bytes;
+        use axum::http::StatusCode;
+        use axum::response::IntoResponse;
+        use serde_json::{Value, json};
+
+        let private_detail = "private database connection or column detail";
+        let cases = [
+            (
+                sqlx::Error::PoolClosed,
+                "request failed: place lookup unavailable",
+            ),
+            (
+                sqlx::Error::PoolTimedOut,
+                "request failed: place lookup unavailable",
+            ),
+            (
+                sqlx::Error::Io(std::io::Error::other(private_detail)),
+                "request failed: place lookup unavailable",
+            ),
+            (
+                sqlx::Error::Protocol(private_detail.to_owned()),
+                "request failed: place lookup unavailable",
+            ),
+            (
+                sqlx::Error::ColumnDecode {
+                    index: private_detail.to_owned(),
+                    source: std::io::Error::other(private_detail).into(),
+                },
+                "failed to parse response: invalid place lookup result",
+            ),
+            (
+                sqlx::Error::Decode(std::io::Error::other(private_detail).into()),
+                "failed to parse response: invalid place lookup result",
+            ),
+            (
+                sqlx::Error::ColumnNotFound(private_detail.to_owned()),
+                "failed to parse response: invalid place lookup result",
+            ),
+            (
+                sqlx::Error::ColumnIndexOutOfBounds { index: 3, len: 1 },
+                "failed to parse response: invalid place lookup result",
+            ),
+        ];
+        for (error, diagnostic) in cases {
+            let response = world_place_lookup_error(&error).into_response();
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            assert_eq!(response.headers()["content-type"], "application/json");
+            let bytes = to_bytes(response.into_body(), 8192).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&bytes).unwrap(),
+                json!({"message": format!("failed to resolve world name: {diagnostic}")}),
+            );
+            assert!(!String::from_utf8_lossy(&bytes).contains(private_detail));
+        }
     }
 }

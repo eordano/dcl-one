@@ -36,8 +36,10 @@ bevy_dui = { workspace = true }
 alloy-core = { workspace = true }
 
 [dev-dependencies]
-# the embedded shaders, for the GPU shader test
-assets = { workspace = true, features = ["test-support"] }
+# the embedded ghost body, for the idle-bones test
+assets = { workspace = true }
+# the headless renderer, for the GPU shader tests
+pipeline_test = { workspace = true }
 # present only to enable the naga_oil `override_any` feature in a per-crate test build, as the
 # root crate does for the app (see [workspace.dependencies]); not referenced from Rust
 naga_oil = { workspace = true }

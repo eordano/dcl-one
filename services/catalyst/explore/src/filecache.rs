@@ -420,7 +420,7 @@ impl<K: Clone + Hash + Eq> ByteLru<K> {
 /// the caller's key, `rel` its file under the cache.
 pub struct Supply<K> {
     store: Arc<FileCache>,
-    locks: Mutex<HashMap<K, Arc<tokio::sync::Mutex<()>>>>,
+    locks: crate::keyed_locks::KeyedLocks<K>,
     bytes: Mutex<ByteLru<K>>,
     misses: Mutex<HashMap<K, Instant>>,
 }
@@ -429,7 +429,7 @@ impl<K: Clone + Hash + Eq> Supply<K> {
     pub fn new(store: Arc<FileCache>, mem_budget: usize) -> Self {
         Self {
             store,
-            locks: Mutex::new(HashMap::new()),
+            locks: crate::keyed_locks::KeyedLocks::default(),
             bytes: Mutex::new(ByteLru::new(mem_budget)),
             misses: Mutex::new(HashMap::new()),
         }
@@ -454,7 +454,7 @@ impl<K: Clone + Hash + Eq> Supply<K> {
         if self.is_known_miss(key) {
             return Ok(Served::Miss);
         }
-        let lock = self.lock_for(key);
+        let lock = self.locks.claim(key);
         let result = {
             let _guard = lock.lock().await;
             if let Some(bytes) = self.cached(key, rel) {
@@ -478,7 +478,6 @@ impl<K: Clone + Hash + Eq> Supply<K> {
                 }
             }
         };
-        self.release(key, lock);
         result
     }
 
@@ -539,30 +538,9 @@ impl<K: Clone + Hash + Eq> Supply<K> {
         }
     }
 
-    fn lock_for(&self, key: &K) -> Arc<tokio::sync::Mutex<()>> {
-        self.locks
-            .lock()
-            .unwrap()
-            .entry(key.clone())
-            .or_default()
-            .clone()
-    }
-
-    fn release(&self, key: &K, lock: Arc<tokio::sync::Mutex<()>>) {
-        let mut map = self.locks.lock().unwrap();
-        drop(lock);
-        if map
-            .get(key)
-            .map(|entry| Arc::strong_count(entry) == 1)
-            .unwrap_or(false)
-        {
-            map.remove(key);
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn locks_len(&self) -> usize {
-        self.locks.lock().unwrap().len()
+        self.locks.len()
     }
 }
 
@@ -719,6 +697,79 @@ pub(crate) mod tests {
 
     fn no_verify(_: &[u8]) -> Result<()> {
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn verification_failure_releases_key() {
+        let dir = tempdir("verify-release");
+        let supply = Supply::<String>::new(cache(&dir, u64::MAX), MEM);
+        let key = "k".to_string();
+        let result = supply
+            .get(
+                &key,
+                "0/k",
+                || async { Ok(Some(vec![1])) },
+                |_| anyhow::bail!("rejected body"),
+            )
+            .await;
+        assert!(result.err().unwrap().to_string().contains("rejected body"));
+        assert_eq!(supply.locks_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn landing_failure_releases_key() {
+        let dir = tempdir("land-release");
+        let store = cache(&dir, u64::MAX);
+        // A file where the target's parent directory belongs makes landing fail.
+        std::fs::write(store.path("blocked").unwrap(), b"file").unwrap();
+        let supply = Supply::<String>::new(store, MEM);
+        let result = supply
+            .get(
+                &"k".to_string(),
+                "blocked/k",
+                || async { Ok(Some(vec![1])) },
+                no_verify,
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(supply.locks_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_key() {
+        let dir = tempdir("cancel-release");
+        let supply = Supply::<String>::new(cache(&dir, u64::MAX), MEM);
+        let key = "k".to_string();
+        let entered = tokio::sync::Notify::new();
+        let mut get = Box::pin(supply.get(
+            &key,
+            "0/k",
+            || async {
+                entered.notify_one();
+                std::future::pending().await
+            },
+            no_verify,
+        ));
+        tokio::select! {
+            _ = &mut get => panic!("fetch finished"),
+            _ = entered.notified() => {}
+        }
+        // Keep the same mutex observable across cancellation.
+        let lock = supply.locks.claim(&key);
+        drop(get);
+        // Cancellation releases the mutex even when registry cleanup is broken.
+        let mut acquired = Box::pin(lock.lock());
+        assert!(futures::poll!(&mut acquired).is_ready());
+        drop(acquired);
+        drop(lock);
+        assert_eq!(supply.locks_len(), 0);
+        assert!(matches!(
+            supply
+                .get(&key, "0/k", || async { Ok(None) }, no_verify)
+                .await
+                .unwrap(),
+            Served::Miss
+        ));
     }
 
     #[tokio::test]

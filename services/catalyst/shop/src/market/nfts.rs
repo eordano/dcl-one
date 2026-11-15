@@ -16,7 +16,10 @@ use serde_json::{Value, json};
 
 use super::orders::{Order, order_from_graph};
 use super::readers::{self, GraphPage, Ttl, seconds_to_ms};
-use super::wire::{ApiError, ChainId, Network, NftCategory, Params, fix_urn};
+use super::wire::{
+    ApiError, ChainId, Network, NftCategory, Params, body_shapes_for_genders,
+    emote_play_mode_clause, fix_urn,
+};
 use super::{MarketplaceState, SharedState};
 
 pub const MAX_ORDER_TIMESTAMP: i64 = 253_378_408_747_000;
@@ -354,30 +357,6 @@ pub fn parse_filters(pairs: &[(String, String)]) -> Result<NftFilters, ApiError>
             p.get_string("includeSocialEmotes", None).as_deref() != Some("false"),
         ),
     })
-}
-
-fn body_shapes_for_genders(genders: &[String]) -> Option<Vec<String>> {
-    if genders.is_empty() {
-        return None;
-    }
-    let has_unisex = genders.iter().any(|g| g == "unisex");
-    let has_male = has_unisex || genders.iter().any(|g| g == "male");
-    let has_female = has_unisex || genders.iter().any(|g| g == "female");
-    let mut out = Vec::new();
-    if has_male {
-        out.push("BaseMale".to_string());
-    }
-    if has_female {
-        out.push("BaseFemale".to_string());
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-fn emote_play_mode_clause(modes: &[String]) -> Option<bool> {
-    if modes.is_empty() || modes.len() == 2 {
-        return None;
-    }
-    Some(modes.iter().any(|m| m == "loop"))
 }
 
 fn is_land_routed(f: &NftFilters) -> bool {
