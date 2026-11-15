@@ -275,7 +275,7 @@ repository root.
   dependency after every checkout, since a checkout makes every file new.
   `tooling/bevy-mtimes.py` records the Bevy, fork, engine and protocol files' blob ids and times with
   the cache and gives
-  unchanged files their times back; every job that caches the explorer's target runs it.
+  unchanged files, and directories that hold the same names, their times back; every job that caches the explorer's target runs it.
 - Never share a `target/` directory with a checkout that builds a different bevy.
 - The lockfile is edited by hand, never with `cargo update`: see the dependencies section of
   [contributing](contributing.md).
