@@ -248,3 +248,4 @@ fn parse_grass(value: &str) -> Option<ParcelGrassSetting> {
 }
 // lab probe: default branch
 // lab probe: wasm-pr-cache, shallow
+// lab probe: wasm-pr-cache, root again
