@@ -200,7 +200,8 @@ class WorkflowTest(unittest.TestCase):
         # The package job and the publish job read only that answer.
         self.assertIn("      - name: Upload the stamped package for publication\n"
                       "        if: needs.build-deploy-web.outputs.publish == 'true'\n", job)
-        self.assertIn("\n  publish-web:\n    if: needs.build-deploy-web.outputs.publish == 'true'\n", workflow)
+        self.assertIn("\n  publish-web:\n    # lab: the publication broker serves only the upstream organisation.\n"
+                      "    if: needs.build-deploy-web.outputs.publish == 'true' && github.repository == 'decentraland/dcl-one'\n", workflow)
         notice = job[job.index('      - name: Say how to get a preview\n'):
                      job.index('      - name: Upload the stamped package for publication\n')]
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository && "

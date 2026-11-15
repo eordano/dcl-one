@@ -981,7 +981,8 @@ jobs:
     needs:
       - build-deploy-web
   publish-web:
-    if: needs.build-deploy-web.outputs.publish == 'true'
+    # lab: the publication broker serves only the upstream organisation.
+    if: needs.build-deploy-web.outputs.publish == 'true' && github.repository == 'decentraland/dcl-one'
     name: Publish the web package
     runs-on: ubuntu-26.04
     outputs:
