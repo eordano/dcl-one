@@ -964,3 +964,8 @@ mod sync_status_tests {
         assert!(sync.is_type_ready("scene"));
     }
 }
+
+/// Marker of the compiler cache trial.
+pub fn lab6_marker() -> u32 {
+    1
+}
