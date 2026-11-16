@@ -2,8 +2,15 @@ use std::fmt::Debug;
 
 use bevy::{
     color::palettes,
+    picking::{
+        backend::ray::{RayId, RayMap},
+        pointer::{PointerId, PointerLocation},
+        PickSet,
+    },
     prelude::*,
+    render::camera::{NormalizedRenderTarget, RenderTarget},
     text::{FontSmoothing, LineHeight},
+    window::PrimaryWindow,
 };
 use common::structs::PrimaryCamera;
 use dcl_component::proto_components::sdk::components::pb_tween::Mode;
@@ -26,6 +33,12 @@ impl Plugin for TweenDebugPlugin {
         app.add_systems(Startup, setup);
 
         if app.is_plugin_added::<MeshPickingPlugin>() {
+            app.add_systems(
+                PreUpdate,
+                primary_camera_rays
+                    .in_set(PickSet::ProcessInput)
+                    .after(RayMap::repopulate),
+            );
             app.add_systems(
                 PostUpdate,
                 update_plate_position.after(TransformSystem::TransformPropagate),
@@ -65,6 +78,46 @@ fn setup(mut commands: Commands) {
         },
         GlobalZIndex(1_000_000),
     ));
+}
+
+/// Gives the mesh picking backend the primary camera's pointer rays while the camera draws to the
+/// scene target (below render scale 1): bevy makes rays only for cameras that draw to the
+/// pointer's window. The scene target keeps the window's logical size, so the pointer's position
+/// on the window is its position in the camera's viewport.
+fn primary_camera_rays(
+    mut ray_map: ResMut<RayMap>,
+    primary_camera: Query<(Entity, &Camera, &GlobalTransform), With<PrimaryCamera>>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    pointers: Query<(&PointerId, &PointerLocation)>,
+) {
+    let (Ok((camera_entity, camera, camera_transform)), Ok(window)) =
+        (primary_camera.single(), primary_window.single())
+    else {
+        return;
+    };
+    if !camera.is_active || !matches!(camera.target, RenderTarget::Image(_)) {
+        return;
+    }
+    for (&pointer_id, pointer_location) in &pointers {
+        let Some(location) = pointer_location.location() else {
+            continue;
+        };
+        let on_window = matches!(
+            &location.target,
+            NormalizedRenderTarget::Window(target) if target.entity() == window
+        );
+        let in_viewport = camera
+            .logical_viewport_rect()
+            .is_some_and(|rect| rect.contains(location.position));
+        if !on_window || !in_viewport {
+            continue;
+        }
+        if let Ok(ray) = camera.viewport_to_world(camera_transform, location.position) {
+            ray_map
+                .map
+                .insert(RayId::new(camera_entity, pointer_id), ray);
+        }
+    }
 }
 
 fn update_plate_position(
@@ -413,5 +466,109 @@ fn axis_gizmos(mut gizmos: Gizmos, tweens: Query<(&Tween, &GlobalTransform)>) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::{
+        asset::RenderAssetUsages,
+        math::FloatOrd,
+        picking::pointer::Location,
+        render::{
+            camera::{camera_system, ImageRenderTarget, ManualTextureViews},
+            render_resource::{Extent3d, TextureDimension, TextureFormat},
+        },
+        window::{
+            WindowCreated, WindowRef, WindowResized, WindowResolution, WindowScaleFactorChanged,
+        },
+    };
+
+    use super::*;
+
+    /// An 800x600 primary window with the mouse at its centre, and the primary camera drawing to
+    /// `target`. Returns the app after two updates and the camera.
+    fn rig(target: impl FnOnce(&mut App) -> RenderTarget) -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_resource::<ManualTextureViews>()
+            .init_resource::<RayMap>()
+            .add_event::<WindowResized>()
+            .add_event::<WindowCreated>()
+            .add_event::<WindowScaleFactorChanged>()
+            .add_systems(Update, (camera_system, primary_camera_rays).chain());
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(800.0, 600.0).with_scale_factor_override(1.0),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        let target = target(&mut app);
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera {
+                    target,
+                    ..default()
+                },
+                Projection::default(),
+                GlobalTransform::default(),
+                PrimaryCamera::default(),
+            ))
+            .id();
+        let on_window = RenderTarget::Window(WindowRef::Primary)
+            .normalize(Some(window))
+            .unwrap();
+        assert!(matches!(on_window, NormalizedRenderTarget::Window(_)));
+        app.world_mut().spawn((
+            PointerId::Mouse,
+            PointerLocation::new(Location {
+                target: on_window,
+                position: Vec2::new(400.0, 300.0),
+            }),
+        ));
+        app.update();
+        app.update();
+        (app, camera)
+    }
+
+    #[test]
+    fn a_camera_drawing_to_an_image_gets_the_window_pointers_ray() {
+        // half the window's pixels at half its scale factor: the window's logical size
+        let (app, camera) = rig(|app| {
+            let image = Image::new_fill(
+                Extent3d {
+                    width: 400,
+                    height: 300,
+                    depth_or_array_layers: 1,
+                },
+                TextureDimension::D2,
+                &[0; 4],
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::all(),
+            );
+            RenderTarget::Image(ImageRenderTarget {
+                handle: app.world_mut().resource_mut::<Assets<Image>>().add(image),
+                scale_factor: FloatOrd(0.5),
+            })
+        });
+        let ray = app
+            .world()
+            .resource::<RayMap>()
+            .map
+            .get(&RayId::new(camera, PointerId::Mouse))
+            .expect("a ray for the primary camera");
+        assert!(ray.direction.dot(Vec3::NEG_Z) > 0.999, "{ray:?}");
+    }
+
+    #[test]
+    fn a_camera_drawing_to_the_window_is_left_to_bevy() {
+        let (app, _) = rig(|_| RenderTarget::Window(WindowRef::Primary));
+        assert!(app.world().resource::<RayMap>().map.is_empty());
     }
 }

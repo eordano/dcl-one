@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000
+Subject: fix(bevy_render): reuse a GpuImage texture view only with its texture
+Date: 2026-11-16T08:11:47+00:00
+
+---
+diff --git a/crates/bevy_render/src/texture/gpu_image.rs b/crates/bevy_render/src/texture/gpu_image.rs
+index a5be749bfada918951ef87e9d67a9441e260db1e..16f430a4599810f5fa23516e46e1a1780b7bcc9b 100644
+--- a/crates/bevy_render/src/texture/gpu_image.rs
++++ b/crates/bevy_render/src/texture/gpu_image.rs
+@@ -111,9 +111,11 @@ impl RenderAsset for GpuImage {
+             }
+         };
+ 
++        // a view is only reusable over the texture it was made from: a texture without
++        // `COPY_DST` is re-created above even when its descriptor is unchanged
+         let texture_view = if let Some(prev) = previous_gpu_asset.as_ref()
+-            && prev.texture_descriptor == image.texture_descriptor
+-            && prev.texture_view_descriptor == prev.texture_view_descriptor
++            && prev.texture.id() == texture.id()
++            && prev.texture_view_descriptor == image.texture_view_descriptor
+         {
+             prev.texture_view.clone()
+         } else {

@@ -1,11 +1,11 @@
 mod js_emit_event_handler;
 
-use crate::core::browser_process::ContextMenuHandlerBuilder;
+use crate::core::browser_process::{ContextMenuHandlerBuilder, DownloadHandlerBuilder};
 use crate::core::prelude::IntoString;
 use cef::rc::{Rc, RcImpl};
 use cef::{
-    Browser, Client, ContextMenuHandler, DisplayHandler, Frame, ImplClient, ImplProcessMessage,
-    ListValue, ProcessId, ProcessMessage, RenderHandler, WrapClient, sys,
+    Browser, Client, ContextMenuHandler, DisplayHandler, DownloadHandler, Frame, ImplClient,
+    ImplProcessMessage, ListValue, ProcessId, ProcessMessage, RenderHandler, WrapClient, sys,
 };
 use std::os::raw::c_int;
 
@@ -24,6 +24,7 @@ pub struct ClientHandlerBuilder {
     object: *mut RcImpl<sys::cef_client_t, Self>,
     render_handler: RenderHandler,
     context_menu_handler: ContextMenuHandler,
+    download_handler: DownloadHandler,
     message_handlers: Vec<std::rc::Rc<dyn ProcessMessageHandler>>,
     display_handler: Option<DisplayHandler>,
 }
@@ -34,6 +35,7 @@ impl ClientHandlerBuilder {
             object: std::ptr::null_mut(),
             render_handler,
             context_menu_handler: ContextMenuHandlerBuilder::build(),
+            download_handler: DownloadHandlerBuilder::build(),
             message_handlers: Vec::new(),
             display_handler: None,
         }
@@ -81,6 +83,7 @@ impl Clone for ClientHandlerBuilder {
             object,
             render_handler: self.render_handler.clone(),
             context_menu_handler: self.context_menu_handler.clone(),
+            download_handler: self.download_handler.clone(),
             message_handlers: self.message_handlers.clone(),
             display_handler: self.display_handler.clone(),
         }
@@ -94,6 +97,10 @@ impl ImplClient for ClientHandlerBuilder {
 
     fn display_handler(&self) -> Option<DisplayHandler> {
         self.display_handler.clone()
+    }
+
+    fn download_handler(&self) -> Option<DownloadHandler> {
+        Some(self.download_handler.clone())
     }
 
     fn on_process_message_received(

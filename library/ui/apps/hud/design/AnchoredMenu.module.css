@@ -1,0 +1,7 @@
+/* Portaled to the body, so it re-applies the HUD scale its opener is drawn at. */
+.anchored {
+  position: fixed;
+  z-index: calc(var(--z-popup) + 1);
+  transform: scale(var(--ui-scale, 1));
+  transform-origin: top left;
+}

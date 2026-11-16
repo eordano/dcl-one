@@ -168,3 +168,7 @@
   overflow: hidden;
   pointer-events: none;
 }
+.bodyFlush {
+  padding: 0;
+  overflow: hidden;
+}

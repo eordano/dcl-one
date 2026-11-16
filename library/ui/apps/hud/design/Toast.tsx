@@ -11,6 +11,8 @@ export interface ToastOptions {
   tone?: 'default' | 'error'
   /** ms before it goes away (default 5000). */
   duration?: number
+  /** A toast with the same key replaces the one showing, instead of stacking under it. */
+  key?: string
 }
 
 interface ToastItem extends ToastOptions {
@@ -25,7 +27,8 @@ const emit = (): void => listeners.forEach((l) => l())
 
 export function showToast(content: ReactNode, options: ToastOptions = {}): void {
   const id = ++nextId
-  items = [...items, { id, content, ...options }]
+  const kept = options.key == null ? items : items.filter((t) => t.key !== options.key)
+  items = [...kept, { id, content, ...options }]
   emit()
   setTimeout(() => {
     items = items.filter((t) => t.id !== id)

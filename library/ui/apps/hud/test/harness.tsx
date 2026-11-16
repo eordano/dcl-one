@@ -232,7 +232,7 @@ export function fakeSession(): EngineSession {
     places: { open: false, toggle: vi.fn() },
     events: { open: false, toggle: vi.fn(), data: { store: emptyEventsStore(), loadCalendar: vi.fn(), loadDay: vi.fn(), setAttending: vi.fn(), clear: vi.fn() }, memberOf: [] },
     shop: { open: false, toggle: vi.fn() },
-    gallery: { list: [], current: 0, max: 0, loaded: false, open: false, toggle: vi.fn(), metas: {}, loadPhoto: vi.fn(), remove: vi.fn() },
+    gallery: { open: false, toggle: vi.fn(), fetchPage: vi.fn(async () => ({ ok: true, photos: [], total: 0, max: 0 })), metas: {}, loadPhoto: vi.fn(), setPublic: vi.fn(async () => ({ ok: true })), remove: vi.fn(async () => ({ ok: true })) },
     photoMode: { snapshot: null, active: false, capture: null, set: vi.fn(), take: vi.fn() },
     permissions: { pending: [], visit: [], triggered: [], unseenDenied: 0, markSeen: vi.fn(), rules: null, loadRules: vi.fn(), setRule: vi.fn(), clearRule: vi.fn(), resetDefaults: vi.fn(), resolve: vi.fn() },
     worldPassword: { pending: null, resolve: vi.fn() },
@@ -251,6 +251,7 @@ export function fakeSession(): EngineSession {
       act: vi.fn()
     },
     nav: vi.fn(),
+    openExternalUrl: vi.fn(async () => true),
     setEngineViewport: vi.fn(),
     setInteractableArea: vi.fn(),
     logout: vi.fn(),

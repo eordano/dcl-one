@@ -32,7 +32,7 @@ interface Entry {
   profile: Profile | undefined
   /** `profile` is the engine's copy (a `userProfile` reply): complete, and versioned. */
   full: boolean
-  /** The passport's extras (badges, photos, equipped items) were fetched, so a re-read keeps them. */
+  /** The passport's extras (badges, equipped items) were fetched, so a re-read keeps them. */
   extras: boolean
   /** When the engine last answered that it holds nothing for this address. */
   missingAt: number | undefined
@@ -62,7 +62,7 @@ const IDLE_TTL = 120_000
 const MISSING_TTL = 60_000
 const SWEEP_EVERY = 30_000
 
-const EXTRAS = ['badges', 'photos', 'equippedWearables', 'equippedEmotes'] as const
+const EXTRAS = ['badges', 'equippedWearables', 'equippedEmotes'] as const
 
 const entries = new Map<string, Entry>()
 const listeners = new Map<string, Set<() => void>>()
@@ -207,7 +207,7 @@ export function receiveProfile(address: string, profile: Profile | null): void {
     // that service stops sending faces — either way the row keeps the one it has.
     if (next.name === '' || next.name.toLowerCase() === key) next.name = prev.name
     if (next.picture == null) next.picture = prev.picture
-    // A plain identity reply carries no badges/photos/equipped items; a passport's extras survive
+    // A plain identity reply carries no badges/equipped items; a passport's extras survive
     // the re-reads that follow. Everything else is the engine's word, including a cleared field.
     for (const k of EXTRAS) if (next[k] === undefined && prev[k] !== undefined) Object.assign(next, { [k]: prev[k] })
   }
@@ -225,7 +225,7 @@ export function updateProfile(address: string, fn: (prev: Profile | undefined) =
   notify(key)
 }
 
-/** The passport wants the whole thing: badges, photos, equipped items. Always re-read on open, as
+/** The passport wants the whole thing: badges, equipped items. Always re-read on open, as
  *  the plain identity fetch never brings those. */
 export function requestPassport(address: string): void {
   const key = profileKey(address)

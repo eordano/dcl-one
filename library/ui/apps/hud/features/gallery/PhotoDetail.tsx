@@ -7,17 +7,16 @@
 // so the engine's Cancel action closes the lightbox first (key or gamepad), leaving the
 // next press to close the gallery.
 
-import { useEffect, useRef, useState } from 'react'
-import { serviceUrl } from '@hud-host'
+import { useEffect, useRef } from 'react'
 import { Avatar, Button } from '../../design'
 import { useWindowKeyDown } from '../../lib/useWindowKeyDown'
 import { registerCancelLayer } from '@explorer-core/lib/cancelLayers'
 import { photoTime } from '../session/useEngineSession'
+import { useOptionalSession } from '../session/SessionContext'
 import type { GalleryPhoto, GalleryPhotoMeta } from '@explorer-core/engine/protocol'
 import type { ChatUser } from '../chat/ProfileCardPresentation'
+import { copyReelLink, downloadReel, shareReelToX } from './reelActions'
 import styles from './GalleryPage.module.css'
-
-const REELS_BASE = serviceUrl('reels')
 
 function formatDate(dateTime: string): string {
   const ms = photoTime(dateTime)
@@ -54,18 +53,18 @@ export function PhotoDetail({
   photos: GalleryPhoto[]
   index: number
   meta: GalleryPhotoMeta | null | undefined
-  /** The gallery is the local player's own, so delete is allowed. */
+  /** The photos are the local player's own, so delete is allowed. */
   isSelf: boolean
   onIndex: (i: number) => void
   onLoadMeta: (id: string) => void
   onClose: () => void
   onTeleport: (x: number, y: number) => void
-  onDelete?: (id: string) => void
+  /** Delete the photo (the caller asks to confirm). */
+  onDelete?: (photo: GalleryPhoto) => void
   onViewPerson?: (user: ChatUser) => void
 }): React.JSX.Element {
   const photo = photos[index]
-  const [copied, setCopied] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  const openExternalUrl = useOptionalSession()?.openExternalUrl
   const hasPrev = index > 0
   const hasNext = index < photos.length - 1
 
@@ -73,12 +72,6 @@ export function PhotoDetail({
   useEffect(() => {
     if (meta === undefined) onLoadMeta(photo.id)
   }, [photo.id, meta, onLoadMeta])
-
-  // Reset transient state when switching photos.
-  useEffect(() => {
-    setCopied(false)
-    setConfirmDelete(false)
-  }, [photo.id])
 
   // The engine's Cancel action closes the lightbox before the session closes the gallery —
   // registered as a cancel layer for the lightbox's lifetime (ref: onClose is an inline
@@ -95,18 +88,6 @@ export function PhotoDetail({
       onIndex(index + 1)
     }
   })
-
-  const copyLink = (): void => {
-    navigator.clipboard
-      ?.writeText(`${REELS_BASE}/${photo.id}`)
-      .then(() => setCopied(true))
-      .catch(() => console.warn('[gallery] clipboard write failed'))
-  }
-  const shareToX = (): void => {
-    const text = encodeURIComponent('Check out my photo from Decentraland 👋')
-    const url = encodeURIComponent(`${REELS_BASE}/${photo.id}`)
-    window.open(`https://x.com/intent/tweet?text=${text}&url=${url}`, '_blank', 'noopener')
-  }
 
   const date = formatDate(photo.dateTime)
   const place = meta?.sceneName
@@ -148,23 +129,18 @@ export function PhotoDetail({
               <Glyph d={ICON.jump} /> Jump In
             </Button>
           )}
-          <a className={styles.actionLink} href={photo.url} target="_blank" rel="noopener noreferrer" download>
+          <Button size="sm" variant="ghost" onClick={() => void downloadReel(photo.url)}>
             <Glyph d={ICON.download} /> Download
-          </a>
-          <Button size="sm" variant="ghost" onClick={copyLink}>
-            <Glyph d={ICON.link} /> {copied ? 'Copied!' : 'Copy link'}
           </Button>
-          <Button size="sm" variant="ghost" onClick={shareToX}>
+          <Button size="sm" variant="ghost" onClick={() => copyReelLink(photo.id)}>
+            <Glyph d={ICON.link} /> Copy link
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => shareReelToX(photo.id, openExternalUrl)}>
             <Glyph d={ICON.share} /> Share
           </Button>
           {isSelf && onDelete && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className={styles.deleteBtn}
-              onClick={() => (confirmDelete ? onDelete(photo.id) : setConfirmDelete(true))}
-            >
-              <Glyph d={ICON.trash} /> {confirmDelete ? 'Confirm?' : 'Delete'}
+            <Button size="sm" variant="ghost" className={styles.deleteBtn} onClick={() => onDelete(photo)}>
+              <Glyph d={ICON.trash} /> Delete
             </Button>
           )}
         </div>

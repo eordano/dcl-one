@@ -3280,6 +3280,7 @@ dependencies = [
  "bevy",
  "cef",
  "cef-dll-sys",
+ "directories",
  "libc",
  "objc",
  "raw-window-handle",
@@ -4523,6 +4524,7 @@ dependencies = [
  "naga_oil",
  "nft",
  "once_cell",
+ "opener",
  "parking_lot",
  "particle_system",
  "perf_output",
@@ -4561,7 +4563,6 @@ dependencies = [
  "web-time",
  "wgpu",
  "windows 0.58.0",
- "winit",
  "world_ui",
  "zip 2.4.2",
 ]

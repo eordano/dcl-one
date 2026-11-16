@@ -1,6 +1,10 @@
+use bevy::{
+    ecs::system::{lifetimeless::SRes, SystemParamItem},
+    prelude::*,
+};
 use common::structs::AppConfig;
 
-use super::{AppSetting, EnumAppSetting};
+use super::{sync_prepasses, AppSetting, EnumAppSetting};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum AvatarOutlineSetting {
@@ -23,7 +27,7 @@ impl EnumAppSetting for AvatarOutlineSetting {
 }
 
 impl AppSetting for AvatarOutlineSetting {
-    type Param = ();
+    type Param = SRes<AppConfig>;
 
     fn title() -> String {
         "Avatar Outline".to_owned()
@@ -46,6 +50,17 @@ impl AppSetting for AvatarOutlineSetting {
             Self::On
         } else {
             Self::Off
+        }
+    }
+
+    fn apply_to_camera(
+        &self,
+        config: &SystemParamItem<Self::Param>,
+        mut commands: Commands,
+        camera_entity: Entity,
+    ) {
+        if let Ok(mut cmds) = commands.get_entity(camera_entity) {
+            sync_prepasses(&mut cmds, &config.graphics);
         }
     }
 }

@@ -130,12 +130,15 @@ describe('when startup diagnostics explain a failed browser launch', () => {
     assert.equal(diagnostic.phase, 'endpoint')
   })
 
-  it('should retain the last filesystem error when the unchanged polling budget expires', async (t) => {
+  it('should retain the last filesystem error when the start limit expires', async (t) => {
     const log = t.mock.method(console, 'error', () => {})
     const { file } = await script(
       'const dir=process.argv.find(x=>x.startsWith("--user-data-dir=")).slice(16);require("node:fs").mkdirSync(dir+"/DevToolsActivePort");setInterval(()=>{},1000)'
     )
-    await assert.rejects(openSession(file), /did not start/)
+    const started = performance.now()
+    await assert.rejects(openSession(file, { startTimeoutMs: 500 }), /did not start/)
+    const waited = performance.now() - started
+    assert.ok(waited >= 500 && waited < 5000, `waited ${waited} ms`)
     const diagnostic = report(log.mock.calls)
     assert.equal(diagnostic.port.lastFsError, 'EISDIR')
     assert.equal(diagnostic.port.validObserved, false)

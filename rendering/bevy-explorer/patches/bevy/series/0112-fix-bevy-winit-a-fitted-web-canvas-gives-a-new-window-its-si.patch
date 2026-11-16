@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000
+Subject: fix(bevy_winit): a fitted web canvas gives a new window its size
+Date: 2026-11-16T08:11:51+00:00
+
+---
+diff --git a/crates/bevy_winit/src/system.rs b/crates/bevy_winit/src/system.rs
+index 11658913c3905f652b0d72c1aca7c4139d5582c5..6cec20eb66cf9df0aed0690ae3abb2e6ff058b89 100644
+--- a/crates/bevy_winit/src/system.rs
++++ b/crates/bevy_winit/src/system.rs
+@@ -83,6 +83,20 @@ pub fn create_windows<F: QueryFilter + 'static>(
+             .resolution
+             .set_scale_factor_and_apply_to_physical_size(winit_window.scale_factor() as f32);
+ 
++        // A canvas fitted by its page has its size already: winit reports it as soon as the
++        // window exists, before this entity is registered, so that resize event is dropped.
++        // Adopted here, before the cache, so the window's requested size is never written back
++        // to the canvas as a fixed CSS size, which would stop it following the page.
++        #[cfg(target_arch = "wasm32")]
++        if window.fit_canvas_to_parent {
++            let size = winit_window.inner_size();
++            if size.width > 0 && size.height > 0 {
++                window
++                    .resolution
++                    .set_physical_resolution(size.width, size.height);
++            }
++        }
++
+         commands.entity(entity).insert((
+             CachedWindow {
+                 window: window.clone(),

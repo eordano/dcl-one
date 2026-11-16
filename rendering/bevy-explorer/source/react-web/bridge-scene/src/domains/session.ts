@@ -21,6 +21,21 @@ const THIRDWEB_HEADERS = { Origin: 'https://decentraland.org' }
 
 const SIGN_INS = new Set(['loginPrevious', 'loginNew', 'loginIdentity'])
 
+/** Only `https:`: the page asks for web pages, never a file or another app's scheme. */
+async function openHttps(url: string): Promise<boolean> {
+  if (!/^https:\/\//i.test(url)) {
+    console.error('[session] refused to open', url)
+    return false
+  }
+  try {
+    await openExternalUrl({ url })
+    return true
+  } catch (e) {
+    console.error('[session] open', url, e)
+    return false
+  }
+}
+
 export function registerSession(ctx: Ctx): void {
   // Player-spawned signal: one-shot per page, not per scene. The page gates its world-entry
   // fetches on it and never retries, so a page that arrives late is re-told on `hello`.
@@ -79,6 +94,11 @@ export function registerSession(ctx: Ctx): void {
     } else if (msg.action === 'support') {
       await openExternalUrl({ url: bugReportUrl() })
     }
+  })
+
+  ctx.on('openExternalUrl', async (msg) => {
+    const ok = await openHttps(msg.url)
+    ctx.send({ kind: 'externalUrlOpened', requestId: msg.requestId, ok })
   })
 
   // Scene-asset loading stream → React loading screen.

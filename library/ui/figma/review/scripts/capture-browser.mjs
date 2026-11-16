@@ -5,6 +5,7 @@ import { constants } from 'node:fs'
 import { access, readFile, mkdtemp } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { performance } from 'node:perf_hooks'
 import { StringDecoder } from 'node:string_decoder'
 import { setTimeout as delay } from 'node:timers/promises'
 import { browserArgs } from './browser-args.mjs'
@@ -96,7 +97,10 @@ function startupOutput(redactStartup) {
   }
 }
 
-async function openSession(executable, { signal } = {}) {
+// A loaded CI runner needs 7 to 9 seconds before Chrome writes its first log line.
+const START_TIMEOUT_MS = 30_000
+
+async function openSession(executable, { signal, startTimeoutMs = START_TIMEOUT_MS } = {}) {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'dcl-visual-'))
   const redactStartup = startupRedactor()
   const output = startupOutput(redactStartup)
@@ -131,7 +135,8 @@ async function openSession(executable, { signal } = {}) {
   }
   try {
     let port
-    for (let i = 0; i < 100; i++) {
+    const deadline = performance.now() + startTimeoutMs
+    while (performance.now() < deadline) {
       signal?.throwIfAborted()
       if (startupError) throw startupError
       if (browser.exitCode !== null || browser.signalCode !== null)

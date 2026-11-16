@@ -172,6 +172,18 @@ class NativeCacheKeyTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r'bevy-target-cache\.py" key --lane \w+\n', ci)), 3)
         self.assertLessEqual(set(cache.VENDORED), set(target_cache.VENDORED))
 
+    def test_the_scenes_cache_names_the_release_of_the_runner_image(self):
+        # The key of rust-cache names the system and the architecture only. A cache from another
+        # release holds bindings to that release's FFmpeg, and Cargo does not rebuild them.
+        before, step = (ROOT / '.github/workflows/bevy-explorer-scenes.yml').read_text().split(
+            '- uses: Swatinem/rust-cache@')
+        self.assertIn('          key: bevy-explorer-native-${{ steps.image.outputs.release }}',
+                      step.split('\n      - ', 1)[0].splitlines())
+        image = before.rsplit('\n      - ', 1)[-1]
+        self.assertIn('id: image\n', image)
+        self.assertIn('. /etc/os-release\n', image)
+        self.assertIn('echo "release=$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"\n', image)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -179,6 +179,10 @@ fails the check. For a targeted run, `--filter TEXT` selects matching tests and
 | Keys are published while a slot is in use, since its release can choose between newcomers | `keys_are_read_while_a_slot_is_in_use` |
 | A departed hash ranks last while any request of it is alive, including a retry after its queue drained | `a_departed_hash_ranks_last_for_a_retry_after_its_queue_drained` |
 | The gate keeps granting after a poisoned lock, and a release skips a queue entry without its ticket instead of panicking in a destructor | `a_poisoned_gate_keeps_granting_and_releasing`, `a_queue_entry_without_its_ticket_is_skipped_inside_a_release` |
+| A content hash's definitive client error is answered from memory for the session; other failures, url-keyed reads and loopback keep the retry window; preview asks again | `a_content_hash_that_answers_a_client_error_is_remembered_for_the_session`, `transient_and_url_keyed_failures_keep_the_retry_window`, `a_loopback_404_is_answered_from_memory_only_within_the_retry_window`, `a_session_failure_is_answered_by_read_without_a_request`, `a_preview_client_ignores_a_session_failure`, `a_preview_client_does_not_keep_a_content_failure_for_the_session`, `a_preview_client_asks_again_for_a_missing_file_at_once` |
+| The failure memory keeps answering after a poisoned lock | `a_poisoned_failure_memory_keeps_answering` |
+| Content reads are keyed by hash and url reads by url, so only content can be remembered for the session | `content_reads_are_keyed_by_hash_and_url_reads_by_url` |
+| A session failure answers only content reads; any other read of the url keeps the retry window, and a success clears the entry | `a_session_failure_answers_only_content_reads`, `a_successful_download_clears_a_failure_of_its_url` |
 
 Give each test its own gate and counters so it can run alongside other tests. Trace destructor
 paths for nested locks or file I/O under a lock. When changing diagnostics, check the units

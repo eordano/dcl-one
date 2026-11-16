@@ -314,6 +314,18 @@ artifacts
 compose
 check "pipes are stripped from a suite name" tests.md '| [Test Suite (Linux)]('
 
+# 9. The early report: the tests ended and the web and image jobs still run. The caller gives an
+# empty run file and artifact list, so the build section, which it does not use, makes no lookup.
+jobs "$(job Changes success 40)" "$(job 'Test Suite (ubuntu-24.04)' success 500)" \
+  "$(job 'Test Suite (macos-15)' failure 300)" "$(job 'Headless Smoke' success 480)" \
+  "$(job 'Web engine, HUD and bridge scene' '')" "$(job 'APIs + Sites / build (amd64, ubuntu-26.04)' '')"
+artifacts
+echo '{}' > "$WORK/run.json"
+compose
+check "the early tests section has the verdict" tests.md 'Tests-Failed!-ff0000'
+check "the early tests section has the row of each ended job" tests.md '| ✅ Passed | 8m 20s |'
+check_absent "the build section of an early report has no download" build.md 'artifacts/'
+
 echo
 if [ "$FAILURES" -gt 0 ]; then
   echo "$FAILURES failed, $PASSES passed"

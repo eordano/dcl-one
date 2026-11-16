@@ -43,6 +43,8 @@
   --black-30: rgba(0, 0, 0, 0.3);
   --black-50: rgba(0, 0, 0, 0.5);
   --black-90: rgba(0, 0, 0, 0.9); /* the Shop's dialog scrim */
+  --black-60: rgba(0, 0, 0, 0.6); /* the camera-reel options button */
+  --black-70: rgba(0, 0, 0, 0.7); /* ...pressed */
   --black-10: rgba(0, 0, 0, 0.1); /* the Shop toast's shadow */
   --cart-badge-ring: #2b0044; /* the Shop cart badge's ring */
   --shop-modal: #4c147c; /* the New Shop's dialogs (Buy Item, Purchase successful…) */

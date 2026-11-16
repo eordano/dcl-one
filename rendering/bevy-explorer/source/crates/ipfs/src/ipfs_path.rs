@@ -813,8 +813,10 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        content_file_path, is_http_url, resolve_content_uri, ContentPathExt, IpfsPath, IpfsType,
+        content_file_path, is_http_url, resolve_content_uri, CacheKey, ContentPathExt, IpfsPath,
+        IpfsType,
     };
+    use crate::{ContentMap, IpfsContext, IpfsEntity};
 
     #[test]
     fn content_paths_are_forced_relative() {
@@ -1085,5 +1087,63 @@ mod tests {
             ext: "png".to_owned(),
         });
         assert_eq!(url.scene_hash(), None);
+    }
+
+    #[test]
+    fn content_reads_are_keyed_by_hash_and_url_reads_by_url() {
+        let mut context = IpfsContext::default();
+        context.entities.insert(
+            "scene".to_owned(),
+            IpfsEntity {
+                collection: ContentMap::new_single("a.png".to_owned(), "filehash".to_owned()),
+                metadata: None,
+            },
+        );
+
+        // a content file found in the scene's content map is named by its own hash
+        let found = IpfsPath::new(IpfsType::new_content_file(
+            "scene".to_owned(),
+            "a.png".to_owned(),
+        ));
+        assert!(matches!(
+            found.cache_key(&context),
+            Some(CacheKey::Content(hash)) if hash == "filehash"
+        ));
+
+        // a file that is not in the map has no hash of its own to name it by
+        let missing = IpfsPath::new(IpfsType::new_content_file(
+            "scene".to_owned(),
+            "b.png".to_owned(),
+        ));
+        assert!(missing.cache_key(&context).is_none());
+
+        // a url inside the content map's miss path is named by a digest of the url
+        let remote = IpfsPath::new(IpfsType::new_content_file(
+            "scene".to_owned(),
+            "https://example.com/b.png".to_owned(),
+        ));
+        assert!(matches!(remote.cache_key(&context), Some(CacheKey::Url(_))));
+
+        let entity = IpfsPath::new(IpfsType::Entity {
+            hash: "entityhash".to_owned(),
+            ext: "json".to_owned(),
+        });
+        assert!(matches!(
+            entity.cache_key(&context),
+            Some(CacheKey::Content(hash)) if hash == "entityhash"
+        ));
+
+        let scene_content = IpfsPath::new(IpfsType::SceneContent {
+            scene_hash: "scene".to_owned(),
+            content_hash: "contenthash".to_owned(),
+            ext: "png".to_owned(),
+        });
+        assert!(matches!(
+            scene_content.cache_key(&context),
+            Some(CacheKey::Content(hash)) if hash == "contenthash"
+        ));
+
+        let by_url = IpfsPath::new_from_url("https://example.com/a.png", "png");
+        assert!(matches!(by_url.cache_key(&context), Some(CacheKey::Url(_))));
     }
 }

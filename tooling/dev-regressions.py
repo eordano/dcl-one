@@ -421,6 +421,8 @@ def external_shard(environ):
     # shard of a run executes them. An empty value reads as unset, as in tooling/catalyst-test.sh.
     shard = environ.get("CATALYST_TEST_SHARD") or "1/1"
     chosen = environ.get(EXTERNAL_SHARD) or "1"
+    # The same pattern and limit as the CATALYST_TEST_SHARD line of tooling/catalyst-test.sh, which
+    # this guard pins as text: change both together.
     require(re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard) is not None,
             "CATALYST_TEST_SHARD must be i/n with i from 1 to n")
     index, total = map(int, shard.split("/"))

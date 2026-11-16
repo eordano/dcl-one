@@ -28,7 +28,7 @@ pub mod prelude {
     pub use crate::CefOffscreenPlugin;
     pub use crate::components::*;
     pub use crate::core::browser_process::{
-        Browsers, EditCommand, RenderPaintElementType, RenderTexture,
+        Browsers, EditCommand, RenderPaintElementType, RenderTexture, downloads_dir,
     };
     #[cfg(target_os = "macos")]
     pub use crate::core::debug::DebugLibraryLoader;

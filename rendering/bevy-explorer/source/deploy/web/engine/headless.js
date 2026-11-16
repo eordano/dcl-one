@@ -4,6 +4,7 @@
 // its page side (the glue instance, the page functions its workers call) its own global too.
 
 import { createSandboxHost } from "./sandbox_host.js";
+import { installContentCachePageFunctions } from "./content_cache.js";
 
 const RESTART_WAIT_MS = 5000;
 
@@ -81,6 +82,7 @@ export async function startHeadless(compiledModule, options) {
   });
   window.terminate_sandbox = sandboxes.terminate;
   window.spawn_and_init_sandbox = sandboxes.spawn;
+  installContentCachePageFunctions(window);
 
   // Livekit rooms: this frame's own copy of the client page's library (EngineHost.tsx loads it),
   // so the rooms and their connections belong to this document and close when the frame goes.

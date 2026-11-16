@@ -185,10 +185,9 @@ export function mountPlayShell(options: PlayShellOptions = {}): void {
   })
 
   // The service worker gives app.html its isolation header and strips the host's COEP from this
-  // page (deploy/web/service_worker.js), and the engine's IPFS cache depends on it. A first visit or
-  // a hard reload bypasses it, and an earlier version's worker isolates this page, so reload ONCE
-  // when the current one is active; the flag stops a broken worker from reload-looping. Until then
-  // the app is not mounted.
+  // page (deploy/web/service_worker.js). A first visit or a hard reload bypasses it, and an earlier
+  // version's worker isolates this page, so reload ONCE when the current one is active; the flag
+  // stops a broken worker from reload-looping. Until then the app is not mounted.
   const FLAG = 'coi_sw_reloaded'
   if (outOfScope) {
     // leaving for the in-scope url

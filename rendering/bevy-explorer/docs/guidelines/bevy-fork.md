@@ -79,6 +79,10 @@ across workers:
   are reused across re-uploads.
 - Render assets are not removed when the main-world asset changes:
   `Assets::get_mut_bypass_change_detection`, `Mesh::take_gpu_copy`.
+- `Material2dPlugin` prepares its materials after `GpuImage`, as `MaterialPlugin` does, so a
+  2D material changed in the same frame as its image binds the new texture.
+- A re-prepared `GpuImage` reuses the previous texture view only when it reuses the texture;
+  a texture without `COPY_DST` is re-created even at an unchanged size.
 - `immediate_upload` on `Image`, `Mesh` and font atlases, and as a glTF loader setting, to
   bypass the byte budget.
 - **Fallback materials**: `ExtendedMaterial` renders its base while the extension's assets
@@ -218,6 +222,10 @@ across workers:
 - `ComputedCameraValues` fields, `RenderMaterialInstance` fields public; `Projection` is
   `PartialEq`.
 - Web screenshots blit through the sRGB swapchain view (upstream #22090).
+- A web window with `fit_canvas_to_parent` takes its canvas's size when it is created
+  (`bevy_winit` `create_windows`): winit's first resize arrives before the window is registered
+  and is dropped, and an app-side resize would be written back as a fixed CSS size, so the canvas
+  would stop following the page.
 - Fixes with no API surface: unicode asset paths, skin buffer growth, missing cascades panic,
   bad vertices for a frame on second mesh load, sparse index warning, `embedded_asset!` paths
   from a Windows build host (`file!()` backslashes on a non-Windows target such as wasm).

@@ -227,7 +227,7 @@ class InventoryTests(unittest.TestCase):
         setting = guard.EXTERNAL_SHARD
         self.assertEqual(guard.external_shard({}), (True, "1/1"))
         self.assertEqual(guard.external_shard({"CATALYST_TEST_SHARD": "", setting: ""}), (True, "1/1"))
-        # A run without shards executes them whatever the workflow sets for its three shards.
+        # A run that sets neither variable executes them.
         for total in range(1, 6):
             for chosen in range(1, total + 1):
                 owners = [guard.external_shard({"CATALYST_TEST_SHARD": f"{index}/{total}", setting: str(chosen)})

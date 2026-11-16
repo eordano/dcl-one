@@ -18,6 +18,7 @@ import {
   type DmHistoryEntry,
   type Emote,
   type Envelope,
+  type GalleryPhoto,
   type Outfit,
   type OutfitsMetadata,
   type PageToScene,
@@ -96,7 +97,6 @@ function richProfile(address: string, name: string, isGuest: boolean): Profile {
     ],
     mutuals: 30,
     badges: mockBadges(),
-    photos: Array.from({ length: 6 }, (_, i) => `https://picsum.photos/seed/photo${i}/300/300`),
     equippedWearables: equippedNow(),
     equippedEmotes: mockEquippedEmotes(),
     info: {
@@ -398,6 +398,18 @@ const DEFAULTS: MockOptions = {
 
 let running: (() => void) | null = null
 
+let mockPublicReels: ((address: string) => GalleryPhoto[]) | null = null
+
+export async function mockPublicReelPage(
+  address: string,
+  offset: number,
+  limit: number
+): Promise<{ ok: boolean; photos: GalleryPhoto[]; total: number; max: number }> {
+  const all = mockPublicReels?.(address) ?? []
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  return { ok: true, photos: all.slice(offset, offset + limit), total: all.length, max: 500 }
+}
+
 // Idempotent: StrictMode runs the HUD's useMemo twice, and a second bridge would answer every message again.
 export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
   if (running) return running
@@ -418,16 +430,26 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
     { id: 'n10', type: 'community_voice_chat_started', read: false, timestamp: new Date(mockNow - 600_000).toISOString(), metadata: { communityId: 'c1', communityName: 'Decentraland Foundation', thumbnailUrl: 'https://picsum.photos/seed/dcl/80/80' } },
     { id: 'n6', type: 'credits_reminder_claim_credits', read: false, timestamp: new Date(mockNow - 5400_000).toISOString(), metadata: {} }
   ]
-  // Mock camera-reel gallery — ~3-day spacing spans two months (exercises month grouping).
-  // dateTime is a unix-seconds string, like the real compact endpoint. Mutable (delete splices).
+  // 230 photos a day apart, so the grid pages across several month headers. dateTime is a
+  // unix-seconds string, like the real compact endpoint.
   const DAY = 86_400_000
-  const mockGallery = Array.from({ length: 14 }, (_, i) => ({
+  const mockGallery = Array.from({ length: 230 }, (_, i) => ({
     id: `g${i}`,
     url: `https://picsum.photos/seed/reel${i}/1200/800`,
     thumbnailUrl: `https://picsum.photos/seed/reel${i}/400/300`,
-    isPublic: i % 2 === 0,
-    dateTime: String(Math.floor((mockNow - i * 3 * DAY) / 1000))
+    isPublic: i % 3 !== 0,
+    dateTime: String(Math.floor((mockNow - i * DAY) / 1000))
   }))
+  mockPublicReels = (address) =>
+    address.toLowerCase() === o.userId.toLowerCase()
+      ? mockGallery.filter((p) => p.isPublic)
+      : Array.from({ length: 40 }, (_, i) => ({
+          id: `${address.slice(2, 8)}-${i}`,
+          url: `https://picsum.photos/seed/${address}${i}/1200/800`,
+          thumbnailUrl: `https://picsum.photos/seed/${address}${i}/400/300`,
+          isPublic: true,
+          dateTime: String(Math.floor((mockNow - i * 2 * DAY) / 1000))
+        }))
   let mockPhotoMode: PhotoModeSnapshot = {
     active: false,
     hudHidden: false,
@@ -902,6 +924,10 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
       return
     }
     if (msg.kind === 'expectLook' || msg.kind === 'preloadLook' || msg.kind === 'openLegal') return
+    if (msg.kind === 'openExternalUrl') {
+      reply({ kind: 'externalUrlOpened', requestId: msg.requestId, ok: true })
+      return
+    }
 
     if (msg.kind === 'sendChat') {
       // Echo the local player's message back (the engine would broadcast it); a DM is stored first.
@@ -1513,7 +1539,8 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
       return
     }
     if (msg.kind === 'getGallery') {
-      reply({ kind: 'gallery', photos: mockGallery, current: mockGallery.length, max: 500 })
+      const page = mockGallery.slice(msg.offset, msg.offset + msg.limit)
+      setTimeout(() => reply({ kind: 'gallery', requestId: msg.requestId, ok: true, photos: page, received: page.length, current: mockGallery.length, max: 500 }), o.latency)
       return
     }
     if (msg.kind === 'getGalleryPhoto') {
@@ -1535,7 +1562,13 @@ export function startMockBridge(opts: Partial<MockOptions> = {}): () => void {
     if (msg.kind === 'deleteGalleryPhoto') {
       const i = mockGallery.findIndex((p) => p.id === msg.id)
       if (i >= 0) mockGallery.splice(i, 1)
-      reply({ kind: 'gallery', photos: mockGallery, current: mockGallery.length, max: 500 })
+      reply({ kind: 'galleryWrite', requestId: msg.requestId, ok: i >= 0, current: mockGallery.length, max: 500 })
+      return
+    }
+    if (msg.kind === 'setGalleryPhotoPublic') {
+      const photo = mockGallery.find((p) => p.id === msg.id)
+      if (photo != null) photo.isPublic = msg.isPublic
+      reply({ kind: 'galleryWrite', requestId: msg.requestId, ok: photo != null })
       return
     }
     if (msg.kind === 'getProfile') {

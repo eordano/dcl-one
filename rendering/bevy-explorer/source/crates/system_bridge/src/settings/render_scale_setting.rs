@@ -40,7 +40,7 @@ impl AppSetting for RenderScaleSetting {
     }
 
     fn description(&self) -> String {
-        "Render Resolution\n\nShare of the screen's pixels the world is drawn at, stretched to fill the window. Lower values reduce GPU load, most on high-density screens, and make the 3D view and in-world UI softer.".to_owned()
+        "Render Resolution\n\nShare of the window's pixels the world is drawn at, upscaled with FSR to fill the window. Lower values reduce GPU load, most on high-density screens, and make the 3D view softer; the interface stays sharp.".to_owned()
     }
 
     fn save(&self, config: &mut AppConfig) {

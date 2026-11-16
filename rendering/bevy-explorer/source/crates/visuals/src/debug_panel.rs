@@ -1,20 +1,22 @@
 use bevy::{
-    core_pipeline::prepass::{DeferredPrepass, DepthPrepass},
+    core_pipeline::prepass::{DeferredPrepass, DepthPrepass, NormalPrepass},
     pbr::{CascadeShadowConfig, DirectionalLightShadowMap, RenderMeshInstances},
     prelude::*,
     render::{
         batching::gpu_preprocessing::GpuPreprocessingSupport,
         experimental::occlusion_culling::OcclusionCulling, view::NoIndirectDrawing, RenderApp,
     },
+    window::PrimaryWindow,
 };
 use bevy_console::ConsoleCommand;
-use common::structs::{AppConfig, PrimaryCamera, SceneLoadDistance, TimeOfDay};
+use common::structs::{AppConfig, PrimaryCamera, SceneLoadDistance, SessionGraphics, TimeOfDay};
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 use serde_json::json;
 
 use crate::{
     shell_texturing::{Ground, ParcelGrass},
     trees::Tree,
+    upscale::{Compositor, SceneTarget},
     CloudCover, ShadowBiasOverride, SUN_SHADOW_BIAS,
 };
 
@@ -59,6 +61,30 @@ impl Plugin for VisualsDebugPanelPlugin {
         .add_console_command::<LandscapeCommand, _>(landscape_command)
         .add_console_command::<SkyState, _>(sky_state)
         .add_console_command::<RenderView, _>(render_view)
+        .add_console_command::<RenderScaleState, _>(render_scale_state)
+        .add_debug_section(DebugSection {
+            title: "Render scale",
+            query: "/render_scale_state",
+            fields: &[
+                ("Scene resolution (width / height)", "scene"),
+                ("Window resolution (width / height)", "window"),
+                ("FSR compositor", "compositor"),
+                ("Depth prepass", "depth_prepass"),
+                ("Normal prepass", "normal_prepass"),
+            ],
+            actions: &[(
+                "Back to the player's setting",
+                "/session_graphics render_scale",
+            )],
+            inputs: &[slider(
+                "Render scale (this session)",
+                "scale",
+                "/session_graphics render_scale {value}",
+                SessionGraphics::MIN_RENDER_SCALE as f64,
+                1.0,
+                0.05,
+            )],
+        })
         .add_console_command::<SunShadows, _>(sun_shadows)
         .add_console_command::<SunShadowMap, _>(sun_shadow_map)
         .add_preview_debug_inputs(DebugSection {
@@ -307,6 +333,37 @@ fn sky_state(mut cmd: ConsoleCommand<SkyState>, time: Res<TimeOfDay>, clouds: Re
         cmd.reply_ok(json!({"hour":time.time / 3600., "cover":(clouds.cover - 0.2) / 0.5, "density":clouds.density_cap,
             "shadow":clouds.shadow, "scale":clouds.scale, "steps":clouds.steps, "lacunarity":clouds.lacunarity, "sharpness":clouds.sharpness}).to_string());
     }
+}
+
+/// Read the render scale in effect, the resolution the world is drawn at, and whether the FSR
+/// compositor and the prepasses run.
+#[derive(clap::Parser, ConsoleCommand)]
+#[command(name = "/render_scale_state")]
+struct RenderScaleState;
+
+fn render_scale_state(
+    mut cmd: ConsoleCommand<RenderScaleState>,
+    scene_target: Res<SceneTarget>,
+    images: Res<Assets<Image>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    compositor: Query<&Camera, With<Compositor>>,
+    camera: Query<(Has<DepthPrepass>, Has<NormalPrepass>), With<PrimaryCamera>>,
+) {
+    let Some(Ok(_)) = cmd.take() else { return };
+    let window = window.single().ok().map(|w| w.physical_size().to_array());
+    let compositor = compositor.single().is_ok_and(|c| c.is_active);
+    // at scale 1 the world draws to the window itself
+    let scene = if compositor {
+        images.get(&scene_target.image).map(|i| i.size().to_array())
+    } else {
+        window
+    };
+    let (depth, normal) = camera.single().ok().unzip();
+    cmd.reply_ok(
+        json!({"scale": scene_target.scale, "scene": scene, "window": window,
+            "compositor": compositor, "depth_prepass": depth, "normal_prepass": normal})
+        .to_string(),
+    );
 }
 
 /// Read the sun's effective shadow quality, cascades and biases.

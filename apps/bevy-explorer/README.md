@@ -137,7 +137,9 @@ base context with write permission, and checks out only the action. It resolves 
 commit) and whether the run's *Changes* job selected an explorer job (`explorer-run-selected.sh`:
 *Test Suite*, *Headless Smoke*, *Clippy* or the web build not skipped). A run that selected none,
 such as a backend-only change, leaves the pull request without a comment. When the run is
-requested, both sections go to pending; when it completes, they are
+requested, both sections go to pending; when its test jobs end while the run goes on
+(`explorer-tests-ended.sh`, a wait with a limit in a job without write permission), the tests
+section is written from the jobs; when the run completes, both sections are
 composed from its jobs and artifacts (`explorer-ci-sections.sh`). A completed run that ran no test
 job reads the newer runs of this workflow for the head commit of an open pull request: while one
 has not ended, the tests section links it as pending; when one has ended, the run writes no tests

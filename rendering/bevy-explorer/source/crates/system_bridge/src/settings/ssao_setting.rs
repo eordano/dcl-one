@@ -3,9 +3,9 @@ use bevy::{
     pbr::ScreenSpaceAmbientOcclusion,
     prelude::*,
 };
-use common::structs::{AppConfig, PrimaryCameraRes, SsaoSetting};
+use common::structs::{AppConfig, SsaoSetting};
 
-use super::{AppSetting, EnumAppSetting};
+use super::{sync_prepasses, AppSetting, EnumAppSetting};
 
 impl EnumAppSetting for SsaoSetting {
     #[cfg(not(target_arch = "wasm32"))]
@@ -29,7 +29,7 @@ impl EnumAppSetting for SsaoSetting {
 }
 
 impl AppSetting for SsaoSetting {
-    type Param = SRes<PrimaryCameraRes>;
+    type Param = SRes<AppConfig>;
 
     fn title() -> String {
         "SSAO".to_owned()
@@ -58,7 +58,7 @@ impl AppSetting for SsaoSetting {
 
     fn apply_to_camera(
         &self,
-        _: &SystemParamItem<Self::Param>,
+        config: &SystemParamItem<Self::Param>,
         mut commands: Commands,
         camera_entity: Entity,
     ) {
@@ -77,5 +77,7 @@ impl AppSetting for SsaoSetting {
                 constant_object_thickness: 0.25,
             }),
         };
+        // SSAO reads both prepasses; without it they follow the avatar outline again
+        sync_prepasses(&mut cmds, &config.graphics);
     }
 }

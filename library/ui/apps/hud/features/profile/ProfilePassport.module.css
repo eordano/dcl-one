@@ -1,6 +1,8 @@
 /* The dimmed, DPI-scaled scrim is drawn by the popup layer now (openPassport → PopupHost `.dim`);
    the panel is centered inside it on the reference canvas. */
 .panel {
+  /* The Photos tab's viewer covers the panel. */
+  position: relative;
   width: min(1180px, 96%);
   height: min(760px, 92%);
   display: flex;
@@ -419,18 +421,6 @@
 }
 .link:hover {
   background: rgba(255, 255, 255, 0.14);
-}
-
-.photoGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 0.6rem;
-}
-.photoGrid img {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  border-radius: 10px;
 }
 
 .empty {

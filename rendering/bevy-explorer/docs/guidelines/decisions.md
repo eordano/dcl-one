@@ -23,6 +23,12 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **Emissive strength.** Unity never parses `KHR_materials_emissive_strength`; bevy honours
   it, spec-correctly. Content authored against Unity can glow (the Nekko cat at 65x). Dropping
   the extension is not the fix; the long-term answer is still open.
+- **Render scale compositor.** At scale 1 the world camera draws to the window and carries the
+  UI, at no extra cost. Below it, the world renders to an image that a 2D camera composites onto
+  the window with FSR EASU; bevy's CAS at 0.92 stands in for RCAS; the UI rides the compositor
+  at full resolution; `/screenshot` captures the window. The primary camera always keeps the
+  depth prepass (the jump marker reads it); the normal prepass, and both on texture cameras, only
+  while the avatar outline is on or the camera has SSAO (native only).
 - **Sun shadows keep bevy's default bias.** Unity's `DepthBias` (1.75 or 1.56 texels, times
   URP's soft kernel radius 2.5) is a depth bias, not a normal bias, and carried over as bevy's
   normal bias it offset each lookup about half a metre on Low at 60 m, dropping thin and contact
@@ -442,6 +448,13 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **`UnapprovedPathMode::Allow`** in the asset server: bevy's check only admits paths under
   the executable's assets directory and the IPFS cache lives elsewhere. Containment is done
   in `ipfs_path.rs` instead. See the security page.
+- **Engine content downloads carry no `X-IPFS` header on web.** The engine reads
+  `ipfs-path-cache-v2` itself before it queues a download (`crates/ipfs/src/lib.rs`, the variants
+  client), so the worker passes the request to the network untouched; a lookup there could only
+  repeat that miss. The worker still answers requests that carry the header from that cache, and
+  only the engine writes it. A hit missed in between (the same hash finishing under another url,
+  another tab), or one that appears before a retry (the engine reads the cache only before the
+  first attempt), costs one more download of the same bytes.
 - **Web-only engine switches are page params**, not `LaunchOptions` fields.
 - **`CommsApi.consumeMessages` resolves to a bare array** of `{ sender, data }`, not the
   protocol's `{ messages }`, because unity-explorer, the client scenes are tested on, returns
@@ -470,6 +483,14 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
 - **Collectible cache retention must be generic** across wearables and emotes, and an emote's
   ownership is its membership of the avatar's animation graph. A pruning PR that special-cases
   emotes (#1323) is parked for that reason.
+- **A missing content file stays missing until restart.** When a server answers 400, 404, 405,
+  410, 414 or 451 to a read of a content hash, later reads of that url by content hash are
+  answered from memory for the rest of the session. Any other read of the same url (by url, or
+  from a loopback content server, which is never keyed by hash) is answered from memory for 10 s
+  after the failure and then asked for again; other failures are answered from memory for 10 s;
+  preview mode asks again on every read. A later failure of another kind does not shorten a
+  session entry, and a successful download of the url clears its entry. At most 4096 urls are
+  held.
 - **Camera layers are identified by entity**, not by an explicit layer number; the cleanup in
   #1320 waits on the protocol change.
 - **`-logFile` with one dash is accepted** (rewritten to `--log-file` before clap, `main.rs`):

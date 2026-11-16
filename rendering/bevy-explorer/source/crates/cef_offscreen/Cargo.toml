@@ -10,6 +10,7 @@ description = "CEF offscreen-rendered webview for bevy: OSR into Images, cef:// 
 bevy = { workspace = true }
 cef = { workspace = true }
 cef-dll-sys = { workspace = true }
+directories = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 async-channel = "2"

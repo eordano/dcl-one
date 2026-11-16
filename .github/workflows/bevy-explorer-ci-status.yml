@@ -5,7 +5,9 @@
 # with .github/actions/bevy-explorer-ci-status, which keeps the one comment per pull request.
 #
 # `requested`: once *Changes* has selected an explorer job, both sections go to pending, so the
-# previous run's links never linger as current. `completed`: both sections are filled from the
+# previous run's links never linger as current. A job without write permission then waits for the
+# test jobs, and the tests section is written when they end, because the web and image jobs often
+# keep the run going for minutes more. `completed`: both sections are filled from the
 # run's jobs and artifacts (the trusted Actions API; the run's own code reaches the comment only as
 # job and artifact names, rendered inside table cells). A run of a commit the pull request
 # has moved past says nothing, so a delayed report cannot restore an older preview.
@@ -98,7 +100,94 @@ jobs:
           body: |-
             [![Tests](https://img.shields.io/badge/Tests-Pending!-yellow?logo=rust&logoColor=white&style=for-the-badge)](${{ env.RUN_URL }})
 
-            A new [run](${{ env.RUN_URL }}) is testing the explorer; its results land here when it ends.
+            A new [run](${{ env.RUN_URL }}) is testing the explorer; its results land here when the tests end.
+  tests-ended:
+    name: Tests ended
+    needs: [resolve, pending]
+    if: github.event.action == 'requested' && needs.resolve.outputs.pr != '' && needs.resolve.outputs.selected == 'true'
+    runs-on: ${{ vars.RUNNER_LINUX_X86 || 'ubuntu-26.04' }}
+    # The wait budget of the step below, and the checkout.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      ended: ${{ steps.ended.outputs.ended }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/actions/bevy-explorer-ci-status
+          sparse-checkout-cone-mode: false
+      - name: Wait until the test jobs end
+        id: ended
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          # A run whose tests take longer gets its tests section from the completed run, as before.
+          WAIT_SECONDS: '2400'
+        run: |
+          ended=$(bash .github/actions/bevy-explorer-ci-status/explorer-tests-ended.sh)
+          echo "ended=$ended"
+          echo "ended=$ended" >> "$GITHUB_OUTPUT"
+  tests:
+    name: Tests
+    needs: [resolve, tests-ended]
+    if: needs.tests-ended.outputs.ended == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ needs.resolve.outputs.pr }}
+      HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/actions/bevy-explorer-ci-status
+          sparse-checkout-cone-mode: false
+      - name: Compose the tests section from the run's jobs
+        env:
+          RUN_FILE: run.json
+          JOBS_FILE: jobs.json
+          ARTIFACTS_FILE: artifacts.json
+          OUT_DIR: sections
+        run: |
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > jobs.json
+          # Only the tests section is used: the build section waits for the completed run.
+          echo '{}' > "$RUN_FILE"
+          echo '{"artifacts":[]}' > "$ARTIFACTS_FILE"
+          mkdir -p sections
+          bash .github/actions/bevy-explorer-ci-status/explorer-ci-sections.sh
+          cat sections/tests.md
+      - name: Check that the run still matches the PR head
+        id: current
+        run: |
+          live=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+          if [ "$live" = "$HEAD_SHA" ]; then
+            echo "write=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::The run for ${HEAD_SHA:0:7} is older than #$PR_NUMBER's head ${live:0:7}."
+            echo "write=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Update the tests section
+        if: steps.current.outputs.write == 'true'
+        uses: ./.github/actions/bevy-explorer-ci-status
+        with:
+          pr-number: ${{ needs.resolve.outputs.pr }}
+          section: tests
+          github-token: ${{ github.token }}
+          body-file: sections/tests.md
   report:
     name: Report
     needs: resolve

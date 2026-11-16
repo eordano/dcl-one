@@ -696,6 +696,14 @@ fn on_page_envelope(
                     write_prefs(&state.prefs);
                 }
             }
+            // The page names no path: only the folder the download handler saves to is opened.
+            Some("openDownloads") => {
+                if let Some(dir) = cef_offscreen::prelude::downloads_dir() {
+                    if let Err(e) = opener::open(&dir) {
+                        warn!("[react-hud-cef] could not open {}: {e}", dir.display());
+                    }
+                }
+            }
             _ => {}
         }
         return;

@@ -65,6 +65,7 @@ export function MainMenuShell({
   onNavigate,
   onClose,
   transparentBody = false,
+  flushBody = false,
   children
 }: {
   /** page id of the active React page, e.g. 'settings'. */
@@ -77,6 +78,8 @@ export function MainMenuShell({
   onClose: () => void
   /** Body becomes a pass-through hole for an engine-rendered view (map/avatar). */
   transparentBody?: boolean
+  /** Body without the side gutters, for a page that lays out its own (the Gallery's reel grid). */
+  flushBody?: boolean
   children: React.ReactNode
 }): React.JSX.Element {
   // Animate the entrance only on a fresh open (no other shell mounted), not on page switches.
@@ -144,7 +147,7 @@ export function MainMenuShell({
         </button>
       </header>
       <div className={styles.accent} />
-      <div className={`${styles.body} ${transparentBody ? styles.bodyTransparent : ''}`.trim()}>{children}</div>
+      <div className={`${styles.body} ${transparentBody ? styles.bodyTransparent : ''} ${flushBody ? styles.bodyFlush : ''}`.trim()}>{children}</div>
     </div>
   )
 }

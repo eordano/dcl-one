@@ -18,10 +18,11 @@ use bevy_dui::{DuiRegistry, DuiTemplate};
 use collectibles::{urn::CollectibleUrn, Emote};
 use common::{
     sets::SetupSets,
-    structs::{AvatarDynamicState, EmoteCommand, EmoteMask},
+    structs::{AppConfig, AvatarDynamicState, EmoteCommand, EmoteMask, GraphicsSettings},
     util::TryPushChildrenEx,
 };
 use platform::default_camera_components;
+use system_bridge::settings::sync_prepasses;
 use ui_core::ui_actions::{DragData, Dragged, On};
 
 use crate::{AvatarSelection, AvatarShape};
@@ -46,6 +47,7 @@ pub struct PhotoBooth<'w, 's> {
     selections: Query<'w, 's, &'static mut AvatarSelection, With<BoothAvatar>>,
     frame: Res<'w, FrameCount>,
     live_booths: ResMut<'w, LiveBooths>,
+    config: Res<'w, AppConfig>,
 }
 
 #[derive(Component, Clone)]
@@ -88,6 +90,7 @@ impl PhotoBooth<'_, '_> {
             avatar,
             size,
             render_layers.clone(),
+            &self.config.graphics,
         );
 
         let avatar = Arc::new(avatar);
@@ -192,6 +195,7 @@ fn add_booth_camera(
     entity: Entity,
     size: Extent3d,
     render_layers: RenderLayers,
+    graphics: &GraphicsSettings,
 ) -> (Handle<Image>, Entity) {
     let mut avatar_texture = Image {
         texture_descriptor: TextureDescriptor {
@@ -222,24 +226,26 @@ fn add_booth_camera(
 
     let mut camera = None;
     commands.entity(entity).try_with_children(|c| {
-        camera = Some(
-            c.spawn((
-                Camera3d::default(),
-                Transform::from_translation(Vec3::Z * -1.0 + Vec3::Y * 1.8)
-                    .looking_at(Vec3::Y * 1.8, Vec3::Y),
-                Camera {
-                    // render before the "main pass" camera
-                    order: -1,
-                    target: RenderTarget::Image(avatar_texture.clone().into()),
-                    is_active: true,
-                    clear_color: ClearColorConfig::Custom(Color::NONE),
-                    ..default()
-                },
-                render_layers.clone(),
-                default_camera_components(),
-            ))
-            .id(),
-        );
+        let mut cmds = c.spawn((
+            Camera3d::default(),
+            Transform::from_translation(Vec3::Z * -1.0 + Vec3::Y * 1.8)
+                .looking_at(Vec3::Y * 1.8, Vec3::Y),
+            Camera {
+                // render before the "main pass" camera
+                order: -1,
+                target: RenderTarget::Image(avatar_texture.clone().into()),
+                is_active: true,
+                clear_color: ClearColorConfig::Custom(Color::NONE),
+                ..default()
+            },
+            render_layers.clone(),
+            default_camera_components(),
+        ));
+        // the avatar outline reads the depth and normal prepasses, which the settings only add
+        // to cameras they track; each booth open spawns its own camera, so it takes the setting
+        // here
+        sync_prepasses(&mut cmds, graphics);
+        camera = Some(cmds.id());
 
         c.spawn((
             Transform::from_xyz(1.0, 2.0, -1.0).looking_at(Vec3::new(0.0, 1.8, 0.0), Vec3::Z),

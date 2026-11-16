@@ -22,5 +22,5 @@ export declare class NavigationInterrupted extends Error {}
 export declare function findBrowser(candidates: (string | undefined)[]): Promise<string>
 export declare function openSession(
   executable: string,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; startTimeoutMs?: number }
 ): Promise<CaptureSession>

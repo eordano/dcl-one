@@ -20,6 +20,10 @@
 # waits for this one): while one has not ended, the tests section says so and links it; when one
 # has ended, that run wrote the tests section and this run writes none.
 #
+# The early report of the tests (the test jobs ended and the run goes on) uses only tests.md: its
+# caller gives an empty RUN_FILE (`{}`) and an ARTIFACTS_FILE without artifacts, so the build
+# section it also writes makes no lookup.
+#
 # Usage: REPO=o/r PR_NUMBER=10 RUN_ID=1 RUN_URL=... HEAD_SHA=... RUN_FILE=run.json \
 #          JOBS_FILE=jobs.json ARTIFACTS_FILE=artifacts.json bash explorer-ci-sections.sh
 set -euo pipefail

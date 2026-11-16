@@ -86,13 +86,20 @@ jobs:
         run: python ../../../apps/bevy-explorer/prepare-native-cache.py
       - name: Rebuild the patched sources
         uses: ./.github/actions/bevy-explorer-sources
+      - name: Name the release of the runner image for the cache key
+        id: image
+        run: |
+          . /etc/os-release
+          echo "release=$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
           # A graphical assertion must not force the next run to rebuild every dependency.
           cache-on-failure: true
           workspaces: rendering/bevy-explorer/source -> target
-          key: bevy-explorer-native
+          # The bindings to the image's libraries (FFmpeg, ALSA, udev) are built for one release, and
+          # Cargo keeps them while the header paths and file times stay: another release starts cold.
+          key: bevy-explorer-native-${{ steps.image.outputs.release }}
       - name: Restore the rebuilt Bevy tree's cached file times
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" restore target
       - name: Install protoc

@@ -1,0 +1,21 @@
+.folder {
+  display: block;
+  margin: 2px auto 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--chat-link);
+  font: inherit;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  /* the toast host lets clicks through to the world */
+  pointer-events: auto;
+}
+.folder:disabled {
+  cursor: default;
+}
+.folder:focus-visible {
+  outline: 2px solid var(--chat-link);
+  outline-offset: 2px;
+}

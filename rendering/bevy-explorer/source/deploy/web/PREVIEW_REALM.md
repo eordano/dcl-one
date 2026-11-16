@@ -41,7 +41,7 @@ manifest, so the engine never sees a manifest pointing at bytes that are not the
 
 The scheme of sdk-commands' preview server (`b64HashingFunction`,
 `b64ContentVersionedHashingFunction`), which is what makes the engine treat the scene as local
-(no disk cache, no `X-IPFS` cache, hot reload):
+(no disk cache, no web content cache, hot reload):
 
 - entity id: `'b64-' + base64("<projectRoot>-<machineId>")`
 - content hash: `'b64-' + base64("<projectRoot>/<file>\0<version>-<machineId>")`, `<version>`

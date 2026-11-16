@@ -116,10 +116,13 @@ python3 tooling/image-smoke.py
   Unrelated cache families are excluded from image retention.
 - The Rust test and release-proof jobs cache dependency artifacts only
   (`Swatinem/rust-cache`): first attempts on main save, pull requests read, and the
-  workspace crates rebuild on each run. The Explorer's native jobs key their pruned
-  `target` trees on the compiler, the tool environment and the Cargo inputs
-  (`tooling/bevy-target-cache.py`), fall back to the newest cache of the same compiler
-  and save from main's first attempts. The smoke job keeps its full `target` snapshot.
+  workspace crates rebuild on each run. The Explorer's native jobs key their
+  `target` trees on the compiler, the tool environment, the Cargo inputs and the
+  workspace tree (`tooling/bevy-target-cache.py`). The trees hold the workspace crates,
+  so a job compiles only what a change reaches. The jobs fall back to the newest cache
+  of the same dependencies, then of the same compiler. First attempts on main save an
+  entry for each change of the workspace; a pull request saves one entry only when main
+  has none for its dependencies. The smoke job keeps its full `target` snapshot.
   Cache pressure is logged by the sweep; quota and idle eviction still apply between sweeps.
 - Imports use `--no-check-sigs`. GitHub cache scopes are shared across workflows;
   exact keys limit fallback but do not authenticate the writer. Publishing refs

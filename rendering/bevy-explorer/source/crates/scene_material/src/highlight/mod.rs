@@ -124,7 +124,8 @@ mod test {
     /// The highlight pipelines compile on this machine's adapter, and the node draws with them, in
     /// a renderer with no window: a plain cube in the scene material, a skinned cube and a
     /// morph-target cube, each highlighted, in front of a camera with the depth and normal
-    /// prepasses the app's cameras carry. Needs a GPU, so `#[ignore]`d and skipped by CI:
+    /// prepasses the player's camera carries while the avatar outline is on. Needs a GPU, so
+    /// `#[ignore]`d and skipped by CI:
     ///
     /// ```text
     /// cargo test -p scene_material highlight_pipelines_compile -- --ignored --nocapture
@@ -132,7 +133,14 @@ mod test {
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn highlight_pipelines_compile_with_prepasses() {
-        highlight_pipelines_compile(true);
+        highlight_pipelines_compile(true, true);
+    }
+
+    /// As above, for the depth prepass alone, as the player's camera carries it by default.
+    #[test]
+    #[ignore = "needs a GPU; run with --ignored"]
+    fn highlight_pipelines_compile_with_depth_prepass() {
+        highlight_pipelines_compile(true, false);
     }
 
     /// As above, for a camera with no prepass: the mask pipelines follow the view's bind group
@@ -140,10 +148,10 @@ mod test {
     #[test]
     #[ignore = "needs a GPU; run with --ignored"]
     fn highlight_pipelines_compile_without_prepasses() {
-        highlight_pipelines_compile(false);
+        highlight_pipelines_compile(false, false);
     }
 
-    fn highlight_pipelines_compile(prepasses: bool) {
+    fn highlight_pipelines_compile(depth: bool, normal: bool) {
         let mut app = headless_app();
         app.add_plugins((MaterialPlugin::<SceneMaterial>::default(), HighlightPlugin));
         app.finish();
@@ -212,10 +220,11 @@ mod test {
                 Transform::from_xyz(0.0, 0.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
             ))
             .id();
-        if prepasses {
-            world
-                .entity_mut(camera)
-                .insert((DepthPrepass, NormalPrepass));
+        if depth {
+            world.entity_mut(camera).insert(DepthPrepass);
+        }
+        if normal {
+            world.entity_mut(camera).insert(NormalPrepass);
         }
         world.spawn((
             Mesh3d(cube),

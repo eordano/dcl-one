@@ -205,12 +205,6 @@ pub fn session_graphics(
             }
             Some(None) => false,
         },
-        #[cfg(not(target_arch = "wasm32"))]
-        "render_scale" => {
-            input.reply_failed("render_scale only applies to the web canvas");
-            return;
-        }
-        #[cfg(target_arch = "wasm32")]
         "render_scale" => match value.map(str::parse::<f32>) {
             None => {
                 session.render_scale = None;

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000
+Subject: fix(bevy_sprite): prepare 2D materials after the images they bind
+Date: 2026-11-16T08:11:43+00:00
+
+---
+diff --git a/crates/bevy_sprite/src/mesh2d/material.rs b/crates/bevy_sprite/src/mesh2d/material.rs
+index fce580f22c6d50f8291e63b3e2610a81cc14a732..7799567f5ab94ba5e2d8e011df58cae99c4750cb 100644
+--- a/crates/bevy_sprite/src/mesh2d/material.rs
++++ b/crates/bevy_sprite/src/mesh2d/material.rs
+@@ -24,6 +24,7 @@ use bevy_reflect::{prelude::ReflectDefault, Reflect};
+ use bevy_render::camera::extract_cameras;
+ use bevy_render::render_phase::{DrawFunctionId, InputUniformIndex};
+ use bevy_render::render_resource::CachedRenderPipelineId;
++use bevy_render::texture::GpuImage;
+ use bevy_render::view::RenderVisibleEntities;
+ use bevy_render::{
+     mesh::{MeshVertexBufferLayoutRef, RenderMesh},
+@@ -270,7 +271,9 @@ where
+         app.init_asset::<M>()
+             .init_resource::<EntitiesNeedingSpecialization<M>>()
+             .register_type::<MeshMaterial2d<M>>()
+-            .add_plugins(RenderAssetPlugin::<PreparedMaterial2d<M>>::default())
++            // prepared after the images it binds, so a material changed in the same frame as
++            // its image binds the new texture rather than the previous one (as `MaterialPlugin`)
++            .add_plugins(RenderAssetPlugin::<PreparedMaterial2d<M>, GpuImage>::default())
+             .add_systems(
+                 PostUpdate,
+                 check_entities_needing_specialization::<M>.after(AssetEvents),

@@ -206,10 +206,9 @@ export default defineConfig(({ command, mode }) => ({
     bridgeScenePreview(),
     coiHeadersExceptAuth(),
     serveStatic('/engine/', '../deploy/web/engine'),
-    // The IPFS-cache service worker, at the ROOT so its scope covers the page (like prod). The
-    // engine tags cacheable asset fetches with an X-IPFS header for it; without a SW to strip
-    // that header the requests need a CORS preflight, which the peer catalysts reject — no
-    // scenes, no avatars. (serveStatic handles a single file fine: rel resolves to the root.)
+    // The service worker, at the ROOT so its scope covers the page (like prod): page isolation
+    // headers and the editor's preview realm. (serveStatic handles a single file fine: rel
+    // resolves to the root.)
     serveStatic('/service_worker.js', '../deploy/web/service_worker.js'),
     // importScripts'd by the service worker (the editor's preview realm), so it sits beside it.
     serveStatic('/preview_realm.js', '../deploy/web/preview_realm.js'),

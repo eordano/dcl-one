@@ -8,7 +8,6 @@ use bevy::log::warn;
 use bevy::{
     core_pipeline::{
         bloom::Bloom,
-        prepass::{DepthPrepass, NormalPrepass},
         tonemapping::{DebandDither, Tonemapping},
     },
     ecs::bundle::Bundle,
@@ -281,8 +280,6 @@ pub fn default_camera_components() -> impl Bundle {
             ..Bloom::OLD_SCHOOL
         },
         ShadowFilteringMethod::Gaussian,
-        DepthPrepass,
-        NormalPrepass,
     )
 }
 

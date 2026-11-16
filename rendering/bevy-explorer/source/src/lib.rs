@@ -30,6 +30,7 @@ use ban_block::BanBlockPlugin;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy::{
     app::{PluginGroupBuilder, Propagate, TaskPoolThreadAssignmentPolicy},
+    core_pipeline::prepass::DepthPrepass,
     log::LogPlugin,
     prelude::*,
     render::view::RenderLayers,
@@ -841,6 +842,9 @@ fn setup(
                 ..Default::default()
             },
             default_camera_components(),
+            // the jump marker projects onto the depth prepass; the graphics settings add the
+            // normal prepass while the avatar outline is on
+            DepthPrepass,
             Projection::from(PerspectiveProjection {
                 far: 100000.0,
                 ..Default::default()

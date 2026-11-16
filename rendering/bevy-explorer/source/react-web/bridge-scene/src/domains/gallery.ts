@@ -1,8 +1,9 @@
 // Gallery (camera reel): the local player's in-world photos + per-photo metadata.
 //   from: camera-reel-service via BevyApi.kernelFetch (signed) —
-//     GET  /api/users/:address/images?compact=true   the grid (compact list + storage)
-//     GET  /api/images/:id/metadata                  one photo's place + people (detail view)
-//     DELETE /api/images/:id                          remove a photo (own only)
+//     GET    /api/users/:address/images?limit&offset&compact=true   one page of the grid + storage
+//     GET    /api/images/:id/metadata                               one photo's place + people
+//     PATCH  /api/images/:id/visibility {is_public}                 make a photo public/private
+//     DELETE /api/images/:id                                        remove a photo (own only)
 import { getPlayer } from '@dcl/sdk/players'
 import { serviceBase, signed } from '../http'
 import type { GalleryPhoto, GalleryPhotoMeta } from '@explorer-core/engine/protocol'
@@ -30,35 +31,46 @@ const num = (v: string | number | undefined): number | undefined => {
   return Number.isFinite(n) ? n : undefined
 }
 
-async function fetchGallery(ctx: Ctx, address: string): Promise<void> {
-  const r = await signed<CompactResponse>(
-    `${await base()}/users/${address}/images?limit=100&offset=0&compact=true`
-  ).catch(() => undefined)
-  const images = r?.images ?? []
-  const photos: GalleryPhoto[] = images
-    .filter((i) => typeof i.url === 'string')
-    .map((i) => ({
-      id: i.id,
-      url: i.url as string,
-      thumbnailUrl: i.thumbnailUrl,
-      dateTime: i.dateTime ?? '',
-      isPublic: i.isPublic
-    }))
-  ctx.send({ kind: 'gallery', photos, current: r?.currentImages ?? photos.length, max: r?.maxImages ?? 0 })
-}
-
 export function registerGallery(ctx: Ctx): void {
-  ctx.on('getGallery', async () => {
+  ctx.on('getGallery', async (msg) => {
     const player = getPlayer()
     if (player == null) {
-      ctx.send({ kind: 'gallery', photos: [], current: 0, max: 0 })
+      ctx.send({ kind: 'gallery', requestId: msg.requestId, ok: false, photos: [], received: 0, current: 0, max: 0 })
       return
     }
-    await fetchGallery(ctx, player.userId)
+    // Every failure, the service base included, still answers this request: the page waits on its
+    // requestId, and a bare throw would reach it only as a requestFailed it can't match.
+    const r = await base()
+      .then((b) => signed<CompactResponse>(`${b}/users/${player.userId}/images?limit=${msg.limit}&offset=${msg.offset}&compact=true`))
+      .catch((e: unknown) => {
+        console.error('[gallery] page fetch failed', e)
+        return null
+      })
+    const images = r?.images ?? []
+    const photos: GalleryPhoto[] = images
+      .filter((i) => typeof i.url === 'string')
+      .map((i) => ({
+        id: i.id,
+        url: i.url as string,
+        thumbnailUrl: i.thumbnailUrl,
+        dateTime: i.dateTime ?? '',
+        isPublic: i.isPublic
+      }))
+    ctx.send({
+      kind: 'gallery',
+      requestId: msg.requestId,
+      ok: r !== null,
+      photos,
+      received: images.length,
+      current: r?.currentImages ?? photos.length,
+      max: r?.maxImages ?? 0
+    })
   })
 
   ctx.on('getGalleryPhoto', async (msg) => {
-    const r = await signed<MetadataResponse>(`${await base()}/images/${msg.id}/metadata`).catch(() => undefined)
+    const r = await base()
+      .then((b) => signed<MetadataResponse>(`${b}/images/${encodeURIComponent(msg.id)}/metadata`))
+      .catch(() => undefined)
     const m = r?.metadata
     if (m == null) {
       ctx.send({ kind: 'galleryPhoto', id: msg.id, meta: null })
@@ -79,10 +91,23 @@ export function registerGallery(ctx: Ctx): void {
   })
 
   ctx.on('deleteGalleryPhoto', async (msg) => {
-    await signed(`${await base()}/images/${msg.id}`, 'DELETE').catch((e: unknown) => {
+    try {
+      const r = await signed<{ currentImages?: number; maxImages?: number }>(`${await base()}/images/${encodeURIComponent(msg.id)}`, 'DELETE')
+      ctx.send({ kind: 'galleryWrite', requestId: msg.requestId, ok: true, current: r?.currentImages, max: r?.maxImages })
+    } catch (e) {
       console.error('[gallery] delete failed', e)
-    })
-    const player = getPlayer()
-    if (player != null) await fetchGallery(ctx, player.userId) // re-emit the updated gallery
+      ctx.send({ kind: 'galleryWrite', requestId: msg.requestId, ok: false })
+    }
+  })
+
+  ctx.on('setGalleryPhotoPublic', async (msg) => {
+    try {
+      // The service reads `is_public` (snake case), not the camelCase of its responses.
+      await signed(`${await base()}/images/${encodeURIComponent(msg.id)}/visibility`, 'PATCH', { is_public: msg.isPublic })
+      ctx.send({ kind: 'galleryWrite', requestId: msg.requestId, ok: true })
+    } catch (e) {
+      console.error('[gallery] visibility update failed', e)
+      ctx.send({ kind: 'galleryWrite', requestId: msg.requestId, ok: false })
+    }
   })
 }

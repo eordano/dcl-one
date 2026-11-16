@@ -1,13 +1,10 @@
-// COOP/COEP escape hatch AND the engine's IPFS cache. The hosting site (decentraland.zone/
+// COOP/COEP escape hatch. The hosting site (decentraland.zone/
 // bevy-web) serves `COEP: require-corp`, which blocks plain <img> loads from catalysts (they
 // send no CORP header). The shared service worker at the PACKAGE ROOT (deploy/web/
 // service_worker.js) rewrites same-origin navigations to `COEP: credentialless`, which allows
 // credential-less no-CORP images while keeping crossOriginIsolated for the engine.
 //
-// The SW is REQUIRED in dev too (vite serves it at /service_worker.js): the engine tags
-// cacheable asset fetches with an X-IPFS header for the SW to strip + cache. Uncontrolled,
-// that custom header forces a CORS preflight the peer catalysts reject — scene content and
-// avatar wearables all fail to download.
+// vite serves the same worker at /service_worker.js in dev.
 import { PAGE_DIR } from '@hud-host'
 
 // One-shot reload guard. Deliberately NOT the engine's `sw_reloaded` — the engine boot shares this

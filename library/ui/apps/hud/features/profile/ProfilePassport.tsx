@@ -18,6 +18,7 @@ import type { Badge, Emote, Profile, ProfileEdit, Wearable } from '@explorer-cor
 import { PROFILE_FIELDS } from '@explorer-core/features/profile/profileFields'
 import { ProfileEditForm } from './ProfileEditForm'
 import type { Relationship } from '../chat/ProfileCardPresentation'
+import { PassportPhotos, type PassportPhotoActions } from '../gallery/PassportPhotos'
 import { inviteSubmenuItem } from '../communities/InviteToCommunity'
 import styles from './ProfilePassport.module.css'
 
@@ -323,7 +324,8 @@ export function ProfilePassport({
   onReport,
   inviteItems = [],
   onClose,
-  onDirtyChange
+  onDirtyChange,
+  photoActions
 }: {
   profile: Profile
   /** Relationship of the local user to this profile — drives the header friendship button. */
@@ -351,6 +353,8 @@ export function ProfilePassport({
   onClose: () => void
   /** Announce unsaved edits, so the popup layer can refuse to close on a stray backdrop click. */
   onDirtyChange?: (dirty: boolean) => void
+  /** The Photos tab's writes and viewer (signed through the session); without them it only lists. */
+  photoActions?: PassportPhotoActions
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('overview')
   // The Badges tab's selection: a badge id and, for tiered badges, a tier id. Both fall back —
@@ -678,19 +682,7 @@ export function ProfilePassport({
               </section>
             )}
 
-            {tab === 'photos' && (
-              <section className={styles.card}>
-                {profile.photos && profile.photos.length > 0 ? (
-                  <div className={styles.photoGrid}>
-                    {profile.photos.map((src, i) => (
-                      <a key={i} href={src} target="_blank" rel="noreferrer"><img src={src} alt="" /></a>
-                    ))}
-                  </div>
-                ) : (
-                  <div className={styles.empty}>No photos shared yet.</div>
-                )}
-              </section>
-            )}
+            {tab === 'photos' && <PassportPhotos key={profile.address.toLowerCase()} address={profile.address} isSelf={isSelf} actions={photoActions} />}
 
             {/* Keyed on the lowercased address: the passport opens with the address it was given, then
                 switches to the stored profile's lowercase one, which is the same creator. */}

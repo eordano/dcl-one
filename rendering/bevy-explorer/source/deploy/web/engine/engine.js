@@ -3,6 +3,7 @@
 
 import init, { engine_init, engine_start, engine_spawn_worker, engine_console_command, engine_home_scene, engine_terms_accepted, engine_crash_event, engine_set_pulse_certificate_hash, engine_set_perf_stream, engine_perf_take, gpu_cache_hash, report_pointer_lock, media_host_main, audio_host_main, livekit_host_main, engine_prepare_render, engine_set_viewport_active } from "./pkg/webgpu_build.js";
 import { createSandboxHost } from "./sandbox_host.js";
+import { installContentCachePageFunctions, requestPersistentStorage } from "./content_cache.js";
 
 // Re-export for main.js
 export { engine_home_scene, engine_terms_accepted, engine_crash_event, engine_set_pulse_certificate_hash, engine_set_perf_stream, engine_perf_take, gpu_cache_hash };
@@ -272,6 +273,13 @@ export async function initEngine() {
   window.__openExternalUrl = (url) => {
     if (!window.open(url, "_blank")) console.warn("[Main JS] window.open blocked:", url);
   };
+
+  // The content cache's upkeep (content_cache.js): the engine's workers ask, the service worker trims.
+  installContentCachePageFunctions(window);
+  requestPersistentStorage().then(
+    (granted) => console.log(`[Main JS] persistent storage ${granted ? "granted" : "not granted"}`),
+    (e) => console.warn("[Main JS] persistent storage request failed", e),
+  );
 
   // Setup HLS video source callback
   window.setVideoSource = (video, src) => {

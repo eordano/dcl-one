@@ -94,6 +94,24 @@ class DevelopmentWorkflowTest(unittest.TestCase):
         self.assertIn('cache-on-failure: true', cache)
         self.assertLess(rust.index('Put the Nix Rust toolchain on PATH'), rust.index('Swatinem/rust-cache@'))
         self.assertLess(rust.index('Swatinem/rust-cache@'), rust.index('bash tooling/dev-test.sh rust'))
+        # The compiler cache: optional, pinned, and on only when the dependency cache hit its exact key
+        # and the server started, so it holds what that entry does not and a failure of the cache does
+        # not fail the tests. The wrapper is set in the test script only, because the dependency cache
+        # key hashes the job environment.
+        self.assertIn('        id: deps\n        uses: Swatinem/rust-cache@', rust)
+        tool = re.search(r'(?ms)^      - name: Install the optional compiler cache\n(.*?)(?=^      - |\Z)', rust).group(1)
+        self.assertIn('continue-on-error: true', tool)
+        self.assertRegex(tool, r'uses: Mozilla-Actions/sccache-action@[0-9a-f]{40} # v')
+        self.assertNotRegex(rust, r'(?m)^ +RUSTC_WRAPPER: ')
+        tests = re.search(r'(?ms)^      - name: Run backend tests with PostgreSQL and isolated NATS\n(.*?)(?=^      - |\Z)', rust).group(1)
+        self.assertIn("USE_COMPILER_CACHE: ${{ steps.deps.outputs.cache-hit == 'true' && steps.compiler-cache.outcome == 'success' }}", tests)
+        self.assertIn('if [ "$USE_COMPILER_CACHE" = true ] && sccache --start-server; then\n            export RUSTC_WRAPPER=sccache\n', tests)
+        self.assertEqual(tests.count('RUSTC_WRAPPER=sccache'), 1)
+        self.assertLess(tests.index('export RUSTC_WRAPPER=sccache'), tests.index('bash tooling/dev-test.sh rust'))
+        self.assertIn('nix develop .#ci --command bash tooling/dev-test.sh rust || status=$?', tests)
+        self.assertIn('exit "$status"', tests)
+        self.assertLess(rust.index('Swatinem/rust-cache@'), rust.index('Mozilla-Actions/sccache-action@'))
+        self.assertLess(rust.index('Mozilla-Actions/sccache-action@'), rust.index('bash tooling/dev-test.sh rust'))
         keys = re.findall(r'^          key: (foundation-dev-v2-[^\n]+)', smoke, re.M)
         self.assertEqual(len(keys), 1)
         self.assertTrue(keys[0].startswith('foundation-dev-v2-smoke-'))

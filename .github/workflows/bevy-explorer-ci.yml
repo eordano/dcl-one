@@ -458,11 +458,19 @@ jobs:
             rendering/bevy-explorer/source/target/sccache-stats.json
           if-no-files-found: ignore
           retention-days: 7
+      # Main saves an entry for each change of the workspace. A pull request saves one only when
+      # the restored entry was not built for its dependencies: its later pushes restore that one.
       - name: Prune the native build cache
-        if: github.ref == 'refs/heads/main' && github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true'
+        if: >-
+          github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true' &&
+          (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' &&
+          !startsWith(steps.target-cache.outputs.cache-matched-key, steps.target-cache-key.outputs.dependencies)))
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-target-cache.py" prune target
       - name: Save the native build cache
-        if: github.ref == 'refs/heads/main' && github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true'
+        if: >-
+          github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true' &&
+          (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' &&
+          !startsWith(steps.target-cache.outputs.cache-matched-key, steps.target-cache-key.outputs.dependencies)))
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -604,11 +612,19 @@ jobs:
           path: rendering/bevy-explorer/source/deploy/headless/dist/*.tgz
           if-no-files-found: error
           retention-days: 14
+      # Main saves an entry for each change of the workspace. A pull request saves one only when
+      # the restored entry was not built for its dependencies: its later pushes restore that one.
       - name: Prune the native build cache
-        if: github.ref == 'refs/heads/main' && github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true'
+        if: >-
+          github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true' &&
+          (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' &&
+          !startsWith(steps.target-cache.outputs.cache-matched-key, steps.target-cache-key.outputs.dependencies)))
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-target-cache.py" prune target
       - name: Save the native build cache
-        if: github.ref == 'refs/heads/main' && github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true'
+        if: >-
+          github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true' &&
+          (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' &&
+          !startsWith(steps.target-cache.outputs.cache-matched-key, steps.target-cache-key.outputs.dependencies)))
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -711,11 +727,19 @@ jobs:
         shell: bash
       - name: Record the rebuilt Bevy tree's file times for the cache
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-mtimes.py" record target
+      # Main saves an entry for each change of the workspace. A pull request saves one only when
+      # the restored entry was not built for its dependencies: its later pushes restore that one.
       - name: Prune the native build cache
-        if: github.ref == 'refs/heads/main' && github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true'
+        if: >-
+          github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true' &&
+          (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' &&
+          !startsWith(steps.target-cache.outputs.cache-matched-key, steps.target-cache-key.outputs.dependencies)))
         run: python3 "$GITHUB_WORKSPACE/tooling/bevy-target-cache.py" prune target
       - name: Save the native build cache
-        if: github.ref == 'refs/heads/main' && github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true'
+        if: >-
+          github.run_attempt == '1' && steps.target-cache.outputs.cache-hit != 'true' &&
+          (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' &&
+          !startsWith(steps.target-cache.outputs.cache-matched-key, steps.target-cache-key.outputs.dependencies)))
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

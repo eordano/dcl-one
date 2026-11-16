@@ -909,21 +909,23 @@
           "deviation": "evidence-removed"
         },
         "library/ui/figma/review/scripts/capture-browser.d.mts": {
-          "sha256": "7c4987cd1e15d89a19498e40fbcc6818ff74def3fd5531c3f62022695ff79024",
+          "sha256": "b72ded8f482da4a137ddcf77c080c74a4d2da8627c6fc99be2e3d3e6e8790ed7",
           "fds": null,
           "deviation": [
             "capture-removed",
-            "navigation-settle"
+            "navigation-settle",
+            "start-time-limit"
           ]
         },
         "library/ui/figma/review/scripts/capture-browser.mjs": {
-          "sha256": "b5f086bec0b58006cf822c536d8dbe405110a30132f061d8fa33f74eea1f8d1f",
+          "sha256": "3e5e558d08242f14f56825e49b3382a17445a3eab91d2810ce99fe864e1731e5",
           "fds": null,
           "deviation": [
             "bot-review-279-b",
             "evidence-removed",
             "navigation-settle",
             "request-scope-hardening",
+            "start-time-limit",
             "startup-diagnostics"
           ]
         },
@@ -2242,12 +2244,13 @@
           }
         },
         "library/ui/figma/review/test/capture-browser.test.ts": {
-          "sha256": "58ac63387e0f9a016fbbe777eaea7af91358abc2c846f0046c544a4b555cf317",
+          "sha256": "cd75de8981153e2a80b03f569774163948c3c32f5c5910e80dc0053ef9feafef",
           "fds": null,
           "deviation": [
             "dcl-one-only",
             "bot-review-279-b",
-            "startup-diagnostics"
+            "startup-diagnostics",
+            "start-time-limit"
           ]
         },
         "library/ui/figma/review/test/capture-teardown.test.ts": {
@@ -4456,6 +4459,7 @@
         "seal-removed": "port:9c6dfbe6 installs foundations through the installation subset of promotion/promote.ts. The seal is removed together with promotion manifests, promotion verification and release publication. The shared command generates only from the verified cache, preserves maintained files, stages a complete target, detects concurrent changes and rolls back failed publication. Dev2 extends this same command with components.",
         "single-component-module-pin": "The public component table pins components/generation.json once: output origins name the source and transform and do not repeat the generator module list, and the policy checks every module in that record against the source lock and the index. A table that still carries a per-output module map is refused.",
         "skill-kit-followups": "Consumer skill and kit follow-ups: the skill's plugin script reads boolean and text component properties, skips text layers of nested instances, collects only visible text (a TEXT property only when a visible layer shows it), drops a name two visible texts disagree on and reports it and refuses a node without a main component; design text goes in single quotes, never double quotes; the mapping-only scope and the preflight's expected exit 1 are stated. The kit refuses every conflict (foreign or unreadable skill, newer or unordered version, symlinked .claude or .claude/skills) before it writes, orders versions by semver, hashes paths with / and CRLF as LF with framed entries, and check names install --force for a newer install. resolve --batch reads a relative path from the directory the package's figma script was run in. Figma BOOLEAN properties travel apart from variants as booleanProperties (batch, MCP, --boolean): one the mapping does not read is an unmapped-figma-property warning, one it reads as a variant does not fit, an unread variant still refuses a name match, and usageFor and propTranslation report the booleans given. check reports an install hashed by an earlier kit as stale, not as edited; an unreadable manifest or one from another library's kit is refused without --force.",
+        "start-time-limit": "openSession waits for the DevTools port file up to a time limit of 30 seconds, which a caller sets with startTimeoutMs, in place of 100 polls of 100 ms. On a loaded CI runner Chrome was alive after 10 seconds and had not written the file, and the Sites header geometry suite failed. This replaces the polling budget that startup-diagnostics names; the launch flags, the abort behavior and the failure messages are unchanged.",
         "startup-diagnostics": "Local capture startup diagnostics retain bounded sanitized stderr, executable basename and available version, pre-cleanup process status and port-file observations. The existing polling budget, launch flags, abort behavior and primary failure are unchanged. After collection, the drained stderr stream is unreferenced so inherited helper writers cannot pin the caller event loop; the pipe remains open for browser writes.",
         "verified-install": "Verified installation binds lock bytes before cache verification and compares them after every verification and source initialization. Tests reject invalid cache reads through a bypass App, preserve ignored target files and retain both errors and the previous tree when rollback fails."
       }
