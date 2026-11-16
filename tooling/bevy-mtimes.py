@@ -43,8 +43,7 @@ TREES = (TREE, FORKS, PATCHES, 'rendering/bevy-explorer/vendor', 'library/vendor
          'rendering/bevy-explorer/source', 'library/protocol/proto')
 # Written by tooling/patched-sources.py: the repository does not track them.
 MATERIALISED = (TREE, FORKS)
-# tooling/bevy-target-cache.py prunes the .fingerprint entries of workspace crates, <crate>-<hash>;
-# `bevy` is no workspace crate, so the manifest survives its pruning.
+# tooling/bevy-target-cache.py keeps every .fingerprint directory, so the manifest stays in the cache.
 MANIFEST = 'bevy-mtimes.json'
 
 

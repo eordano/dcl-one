@@ -3,7 +3,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 import time
@@ -264,14 +263,18 @@ class BevyMtimesTest(unittest.TestCase):
         self.assertEqual(self.mtime(source), 1_700_000_000 * SECOND)
 
     def test_the_manifest_survives_the_native_cache_pruning(self):
-        # tooling/bevy-target-cache.py prunes the .fingerprint entries of workspace crates, <crate>-<hash>.
+        # tooling/bevy-target-cache.py keeps every .fingerprint directory of a profile.
         spec = importlib.util.spec_from_file_location('bevy_target_cache', Path(__file__).parents[1] / 'bevy-target-cache.py')
         cache = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cache)
-        if shutil.which('cargo') is None:
-            self.skipTest('cargo reads the workspace members')
-        names, _ = cache.workspace()
-        self.assertFalse(cache.owned(mtimes.MANIFEST, names))
+        manifest = self.target / 'release/.fingerprint' / mtimes.MANIFEST
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text('{}')
+        (self.target / 'release/deps').mkdir(parents=True, exist_ok=True)
+        (self.target / 'release/decentra-bevy').write_text('binary')
+        cache.prune_target(self.target, [])
+        self.assertTrue(manifest.is_file())
+        self.assertFalse((self.target / 'release/decentra-bevy').exists())
 
 
 if __name__ == '__main__':

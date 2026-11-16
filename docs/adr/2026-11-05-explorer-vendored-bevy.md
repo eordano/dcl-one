@@ -27,7 +27,7 @@ it in place from now on. This repository is the source of truth; the fork branch
   loadable, so its crates' tests can run in it.
 - **Where:** beside `source/`, outside the Explorer's Cargo workspace. It is no workspace member,
   needs no `exclude`, and the Explorer's Clippy, Rustfmt and Taplo gates do not reach it.
-  The native cache keeps its artifacts: `tooling/bevy-target-cache.py` prunes workspace crates only.
+  The native cache keeps its artifacts: `tooling/bevy-target-cache.py` removes only final binaries and reports.
 - **Cargo:** `[patch.crates-io]` maps the 18 Bevy crates that ecosystem crates name by version to
   paths in the tree, and `[patch."https://github.com/robtfm/bevy"]` maps `bevy` for `bevy_dui`,
   `bevy_ecss` and `boimp`, which name the fork by git. `Cargo.lock` changes only by the 47 Bevy
