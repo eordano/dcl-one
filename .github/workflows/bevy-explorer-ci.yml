@@ -198,7 +198,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ (needs.changes.outputs.native-matrix == 'true' && github.actor != 'dependabot[bot]') && fromJSON('["windows-2025",
+        os: ${{ (github.repository == 'decentraland/dcl-one' && needs.changes.outputs.native-matrix == 'true' && github.actor != 'dependabot[bot]') && fromJSON('["windows-2025",
           "ubuntu-24.04", "macos-15"]') || fromJSON('["ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os == 'windows-2025' && (vars.RUNNER_WINDOWS_16CORE || 'windows-2025')
       || matrix.os == 'ubuntu-24.04' && (vars.RUNNER_LINUX_X86_UBUNTU_24_04_16CORE || 'ubuntu-24.04')
@@ -776,7 +776,7 @@ jobs:
         working-directory: rendering/bevy-explorer/source
         shell: bash
   build-deploy-web:
-    if: needs.changes.outputs.web == 'true'
+    if: needs.changes.outputs.web == 'true' && github.repository == 'decentraland/dcl-one'
     name: Web engine, HUD and bridge scene
     runs-on: ${{ vars.RUNNER_LINUX_X86_UBUNTU_24_04_16CORE || 'ubuntu-24.04' }}
     env:
@@ -1145,7 +1145,7 @@ jobs:
   headless-packages:
     name: Headless packages
     needs: [source, changes]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.headless == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.headless == 'true' && github.repository == 'decentraland/dcl-one'
     permissions:
       contents: read
       actions: read
@@ -1188,7 +1188,7 @@ jobs:
     # It runs on the runner of the web job and with its environment, because Cargo reuses a
     # target only for the same paths, toolchain and variables.
     if: >-
-      needs.changes.outputs.web == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      needs.changes.outputs.web == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'decentraland/dcl-one'
     name: Web target cache for pull requests
     runs-on: ${{ vars.RUNNER_LINUX_X86_UBUNTU_24_04_16CORE || 'ubuntu-24.04' }}
     env:
